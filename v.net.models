@@ -1,0 +1,3902 @@
+#!/bin/sh
+
+# TODO:
+#
+# - BUG:
+#	- model_complete() messes up "to_id" and "to_lbl" field contents when run in
+#    cost-based mode!
+#   - This is a SYSTEMATIC error:
+#     - the indices and labels are reserved per 1:m from:to tree:
+#       E.G. INSTEAD OF:
+#      	1 from Karphi to Tell abu Hawam
+#		2 from Karphi to Lefkandi
+#		3 from Karphi to Knossos
+#		WE GET:
+#      	1 from Karphi to Knossos
+#		2 from Karphi to Lefkandi
+#		3 from Karphi to Tell abu Hawam
+#   - all other fields (incl. "from_x/y"!) seem to be correct
+#   --> actually, cost attribution in "model_complete" needs a complete REWRITE,
+#       to make it both FASTER and SIMPLER. Currently, it uses r.patch with multiple
+#       target points and iterative map patching, which is too complex and requires
+#       a second cost attribution run, once the path shapes have been computed (since
+#       they do not carry over link attributes)!
+#       Rewrite plan:
+#		*	Use r.path and v.edit to construct each link, one at a time, and only once,
+#        	adding full attribution at the same time.
+#       NOTE that path length in m/km must be measured along the least-cost path's true
+# 		shape, not as straight-line distance!
+#
+# - BUG:
+#	- model_delaunay() does not work properly with cost-based links!
+#	--> it produces too few links (22 instead of 31 for 14 nodes), and
+#		the links that survive also seem wrong: three nodes are left
+#		unconnected, but only two are dropped from the output.
+#	--> It looks like the least-cost paths are not correctly associated
+#		with the correspoding delaunay links.
+#
+##############
+#
+# - link shapes:
+#	- even with 20% noise added, and resolution = 250/4, links still show some
+#     discretization defects when zooming in closely: These might be the reason
+#     whys things like v.clean with "remove duplicates" don't work properly!
+#  --> maybe NOT resampling the cost data would actually work better!
+#
+# - model XTENT:
+#   - check that all C values are >=1 (if < 1, then larger a will produce smaller values!)
+#     --> this can easily be done in check_input (xtent-specific test) with an SQL WHERE
+#         that counts all rows with C > 1!
+#   - allow XTENT to run without GIS_OPT_SIZE provided: in this case, all C=1
+#
+# - model XTENT:
+#   - 	Actually, Renfrew and Level suggest computing C as: size_{i}/max(size)
+#		(so if e.g. the largest size for any C is “3”, then the associated site would have size 3/3=1, 
+#		and the smallest 1/3: see Scarry/Payne 1986)!
+#
+# - model NN:
+#   - if GIS_OPT_SIZE is given, then test that all values are integers (use awk's round())! 
+#
+# - option "initial":
+#	- implement tight checks in check_params() and check_input
+#   - run in cost-based mode if attribute 'cost' exists in initial map
+#   - add 'cost' and compute its values, if it does not exist, but "costmap=" is provided
+#
+# - option "costerr=":
+#   - we use r.random.surface with minimal parametrization for this.
+#     When run by itself, r.random.surface takes many more parameters
+#     to create spatially autocorrelated surfaces. We could either
+#     expose more of these parameters or allow loading user-prepared
+#     error surfaces.
+#
+# - Improve XTENT by providing a choice of averaging functions:
+#   - mean [DONE]
+#   - median [DONE]
+#   - outliers removal
+#
+# - OUTSOURCE network statistics computations into an external
+#   module: v.net.stats
+#   - don't have to bother with duplicate code for unreduced and reduced
+#     networks
+#  - don't have to waste time producing stats that nobody asked for
+#  - this module can call v.net.stats to provide stats when they
+#    are actually needed
+#  - stats for unreduced network have already been isolated into "stats_unreduced()"
+#
+# - Implement two more models: "gabriel" (Gabriel Graph) and
+#   "relnh" (relative neighborhood graph).
+#   - both are defined for Euclidean space and pairwise node distance
+#     measurements
+#   - euclidean versions can be implemented using v.distance (this
+#     also works with lat/lon data!) and/or v.buffer/v.overlay (more tricky
+#     with lat/lon data?).
+#   - cost-based versions can be implemented by generating least-cost
+#     catchment areas around nodes and checking them for contains/overlaps:
+#     overlap of catchment areas can be computed by adding all cost cells
+#     and checking whether the maximum value in the result map exceeds
+#     that of either input map.
+#
+# - Think of a way to introduce LINK CONSTRAINTS into the models:
+#   let the user specify which nodes absolutely have to be
+#   connected, no matter the cost, because these links are known
+#   to have existed!
+#
+# - It is relatively easy to detect disconnected network components
+#   (we just have to find nodes that do not appear in and from/to
+#   field of any link). Can we do anything with that?
+#
+# - TOPOLOGY: links should never run closely to existing nodes.
+#   They should run exactly through them. Maybe this could be
+#   achieved by tuning the cost model?
+#
+# - TOPOLOGY/STATS:
+#   When we run cost-based, then we inevitably get converging
+#   links and segments that run exactly along the same path
+#   (overlapping). Topologically speaking, these should be
+#   merged into single, non-overlapping segments. HOWEVER, this
+#   has severe consequences for the network statistics: The total
+#   network length would change fundamentally, and the individual
+#   links lengths must be computes as ROUTES from node A to B
+#   (this would also require that all junction points would be
+#   modelled as new nodes). Actually, path lengths would still
+#   be valid, as long as they were computed by 'complete_model()',
+#   BEFORE any path shapes are changed!
+#
+# - add MST as a final tier reduction model: MST can be
+#   computed for a completely connected network or for any
+#   reduced network.
+#	Problems:
+#   - MST can only work per tree. However, GRASS' v.net.spanningtree
+#   will compute one MST per component.
+#   - MST will only be deterministic and find the globally optimal
+#     solutions if _all edges have different weights_!
+#   --> MST would benefit from LINK WEIGHTS. If we have "size=", then
+#       we can add larger weight to links that connect larger sites!
+#
+# - model 'attsim': Add min/max node/link strength statistics to
+#   reduced model's statistics output.
+#
+# - model attsim: Add an option that takes as many strings
+#   as 'attributes' takes field names.
+#   Option name: "tokens="
+#   The strings are interpreted as follows:
+#   - CHARACTER/TEXT: value is interpreted as a field separator that
+#     may or may not appear within the field's content.
+#	  All other field values are then also separated into tokens
+#     using the same separator, and an m x n tokens matching
+#     is computed.
+#     Whitespace sorrounding field separators is ignored/removed.
+#     A flag allows case-nonsensitive comparison: "(-i)gnore case".
+#	- INTEGER/DOUBLE PRECISION: value is interpreted as a +/- range for matching
+#   -- > TEST WHITESPACES in TEXT FIELD CONTENTS
+#
+# - Dependencies: This script actually requires "GNU AWK", because
+#   it uses GNU AWK's built-in 'asort'. So check_setup() should probably
+#   test specifically for GNU AWK!
+#
+# - 'C' must not be set smaller than '1', because then its weight
+#   will decrease as 'a' increases!
+#
+# - This script uses awk to do some math. However, awk uses fixed/auto
+#   decimal precision (same as C):
+#   https://unix.stackexchange.com/questions/57006/awk-high-precision-arithmetic
+#   --> Could this be a potential problem? [NOT REALLY. Behavior is same as CLib's 'printf'.]
+#
+# - use v.support to add to output maps' histories:
+#   - module call parameters
+#   - essential stats
+#   - running time
+#
+# - SPEED UP attribute uploading of cost surface path lengths:
+#   currently, we compute all directional surfaces once more
+#   in the upload phase! There must be a way to store them
+#   during the "complete network" phase.
+#   The upload phase is even more time-intense then the first
+#   run of r.cost, because during the first run, we use r.path
+#   to create multiple paths from one point; but in the second
+#   run, we create many (redundant) pairwise paths!
+#   --> Note that r.cost is only called within model_complete(),
+#   so all caching can occur locally within that function!
+#   --> The solution is not straight forward, as r.path with
+#   multiple targets in the first phase does not create a reusable
+#   data structure, plus we iteratively build the links map
+#   during the first run, discarding all attributes after each
+#   step and rebuilding them afterwards! So we will probably have
+#   to create a separate caching table (using db.* modules), where
+#	we store all possible from/to path costs for later use! 
+#
+# - In preprocess() there are calls to r.random.surface and r.mapcalc
+#   that have no --quiet. It is useful for these modules to output
+#   progress, because they can take a very long time to run.
+#   However, if v.net.models is called with --quiet, then so should
+#   these modules!
+#
+# - implement also an unmodified (original) version of XTENT (e.g. -u(nmodified XTENT) flag) 
+#
+# - implement -c(onnect) flag:
+#   - all nodes that are left unconnected after a model run:
+#     - run v.distanc to get distance to closest surviving link and
+#       coordinates of that closest point on link
+#     - if the result of v.distance is < distance limit: CONNNECT
+#     	- write "from_id" into "to_id" of new link: such nodes can then
+#     	  be identified by selecting "from_id = to_id"
+#		- write new link's label as "from_label <-> to_label"
+#     - CAVEAT: If we use a cost threshold, then we need to first
+#       find the closest euclidean distance, create the LCP to the
+#		connection point and connect only if that distance is also within
+#		the cost limit; there is no guarantee that another, shorter LCP
+#		does not exist; the only alternative would be an exhaustive
+#		search of all LCPs to all vertices (cost surface cell-spaced)
+#		on all candidate links, which would take forever!
+#
+# - Could upload further useful attributes:	
+# is_bridge = (v.net.bridge)
+# is_node = (v.net.bridge)
+# is_mst = (v.net.mst)
+#
+# - Need a model choice "attr" which connects points if they
+#   share:
+#   - exact values in the same field
+#   - values within a tolerance in the same numeric field
+#	- a substring in the same text field
+#   - ... for one or more user-selected attributes
+#   - interface:
+#     - two multiple options that must both have
+#       the same number of comma-separated items:
+#       - list of attribute fields
+#       - list of operators for WHERE comparison
+#       - for text fields: set whether equal or unequal (case sensitive?)
+#       - for numeric fields: equal, unequal or range(?)
+#   --> This essentially mimics typical SNA models and can
+#   serve to provide a ground for comparisons
+#   --> In connection with this, it would also be useful
+#   to model linkage trength as another attribute field
+#   of the output links: e.g. if 4 attribute values are
+#   shared, then that particular link should have strength
+#   4. At each node, we sum the strengths of all attached
+#   links and write the result into an additional node attribtue
+#   field; in addition, we store the mean strength of all
+#   attached links
+#	[DONE BUT MUCH SIMPLER]:
+#   - only option to provide is a list of attribute table fields.
+#   - everything else can be done in pre or post processing:
+#     - result represents OR similarity
+#     - filter result for strength=num_atts to achieve AND similarity
+#     - pre process attribute values to achieve things like similarity
+#       by substring, value range, etc.
+#
+# - Network PRUNING to delete redundant links:
+#   We define a redundant link to be one that runs in parallel to another.
+#   We define "parallel" to mean that the average distance between two
+#   links is below a user-definable threshold.
+#   Avg. line distance can be approximated by the average distance
+#   between the closest pairs of vertices along both lines;
+#   	This should work well, without having to densify vertices,
+#		for both least-cost paths (many vertices, separated by the
+#		same cell size distance); This will NOT work well if only
+#		a small part of the links run in parallel! However, this
+#		my not be a problem in practice, since links of very
+#		different lengths probably represent local vs. global
+#		connections, that are not redundant due to different scopes!
+#  We compare all links pairwise, and if they are parallel, we
+#  define the shorter one to be redundant and delete it.
+#  We use v.to.points and then v.distance on the result, pairwise.
+#  ATTENTION: Links are not quite redundant if the overlap.
+#  We could also PRESERVE this information as LINK WEIGHT: if two
+#  connections overlap along a link segment, then the affected segment
+#  (or link, to simplify processing) could be assigned increased
+#  weight (either +1 or +size of additional, connected site).
+#
+# - If SIZE attribute is given:
+#   SORT input points by size (largest first), as this will give a
+#   more "natural", hierarchical order in the "from" and "to" fields:
+#		v.sort.points is currently a GRASS 7 add-on!
+#
+# - CAVEAT with option "-s" smoothing:
+#      -> This does not work very well, as long as we have overlapping paths.
+#      The reason is that we will get slightly different smooting results
+#      for each path, and this leads to divergence where there is non without
+#      smoothing! This will be a non-issue once cleaning of overlapping path
+#      segments is implemented, PROVIDED that cleaning of overlapping paths
+#      PRECEDES the smoothing operation!
+#
+# - v.db.addtable (and perhaps some others) produce useless warnings
+#   (Values in column <cat> will be overwritten) for temp maps.
+#   These should be piped into a temporary file which can be destroyed
+#   on program exit.
+#   We need to do this, because otherwise output of global network
+#   stats in shell script format will be pretty pointless...
+#   -> Run this script with --quiet to find all the module calls that
+#   still produce chatter!
+#
+# - Add XTENT-compatible options:
+#   - for each sites: compute I for all sites with which it is
+#     linked.
+#     - if largest I <= 0: no links at all
+#     - otherwise: link with site that has largest I
+#   
+#   -> Every connectivity model comes with its specific purpose:
+#      which processes/factors does it capture best/worst?
+#      Real networks are probably compositions of subnetworks, each
+#      best explained by a different model! There is no single model
+#      that works best for all cases/aspects!
+#  
+# - Add mandatory option: "key" field (unique)
+#   Must not be the same as GRASS primary key ('cat') for input layer!
+#   Must be unique.
+#   Must NOT contain whitespace in key values.
+#   Can be type integer, double or character
+#   v.db.select arch_sites_all col="IDX" where="IDX>=905" -v | grep "IDX|" -c
+#   [DONE]
+#
+# - Add non-mandatory option: "label" field
+#   default: = 'key field
+#	must not contain newlines (no multi-line labels allowed)
+#   [DONE]
+#
+# - Backbone-centered cost reduction:
+#   theoretically, we could compute the backbone of the network using an MST in a
+#   first iteration. In a second (or nth) iteration, we could then set a buffer
+#	around the backbone in the cost raster with extremely low cost. This would
+#   attract paths to merge with the backbone.
+#   
+# - Add a hook-in for external model providers:
+#   - add model type "external"
+#   - add an option to configure the path to an external model prg:
+#   	- this external prg will be called after a complete model was built
+#		- the external prg will then return the link IDs (cats) of those
+#		- links that remain after reduction
+#   - define an interface so that the coordinates of nodes and the properties
+#     of the links (from/to, cost, length, etc.) can be passed to the
+#     external program
+#
+# - Explore using r.cost -b and resolver raster as an alternative to noise!
+#   Markus Metz:
+#	Ah, das habe ich mir damals ausgedacht, um bei multiple directions den besten Weg (der Weg durch
+#	die Mitte, wie im manual von r.cost) zu finden.
+#	Ein etwas weniger abstraktes Beispiel, ich werde das auch in der GRASS ml posten und im manual
+#	ergänzen, aber gerne erst mit Deinem feedback:
+#	
+#	replace all names in <> with real input data, removing the <>
+# 	r.cost with multiple directions r.cost -b outdir=<initial directions> ...
+#
+# 	r.path to extract least cost paths r.path input=<initial directions> format=bitmask raster_path=<initial paths> ...
+#
+# 	distance from NULL cells to initial paths r.grow.distance -n input=<initial paths> dist=<distance to initial paths>
+#
+#	invert distance because the solver for r.cost picks the path with the lowest solver value r.mapcalc
+#	"<negative distance to initial paths> = -<distance to initial paths>"
+#
+#	now run r.cost + r.path again, the -b flag is no longer needed but might help to verify final
+#	results do not use the -b flag if a single unambiguous path is required r.cost -b outdir=<solved
+#	directions> solver=<negative distance to initial paths> ...
+#
+#	r.path to extract least cost paths r.path input=<final directions> format=[bitmask|degree}
+#	raster_path=<final paths> ...
+#
+# - Compare methods in Robinson 1998!
+# 
+# - Uses essentially the same weighted cost model as XTENT! This is plausible and
+#   has been shown to produce realistic results with the Mexican data!
+#
+# - This program does a lot of work to produce topologically correct results;
+#   because topology is an extremely important source of information for
+#   physical networks. Once a topologically sound network has been reconstructed,
+#   it can act as a background variable to explore the spatial distributions of
+#   independent objects of interest.
+#
+# - Steiner points:
+#   - representing network links as topographically plausible LCP will likely
+#     produce topographic *crossing points*
+#     [WHAT DO WE DO WITH CROSSING POINTS AT SEA?]
+#   - if the minimum number of links to connect all given nodes (sites) in
+#     a network is sought, then the problem is an MST
+#   - if we are allowed to add crossing points to the network that are not
+#     in the original set of nodes (representing known sites), then the
+#     optimization problem is a Steiner Tree
+#   - both MST and ST are minimum weight algorithms; weights can be either
+#     simple connection lengths (incl. cost distance lengths) or something
+#     more complex (e.g. based on flow capacities/speeds/bandwidths, ...).
+#   - GRASS has v.net.steiner, with the following features:
+#     - optimize to reach all given sites (default) or a limited number of them
+#     - include as many intersection points as required (default) or a limited number
+#     - ST is an NP hard problem, so the algorithm is not guaranteed to find
+#       the globally best (optimal) solution
+#     - v.net.steiner is not memory efficient and might fail for very large
+#       networks
+#
+# - ANISOTROPY: 
+#   The basic problem is that full anisotropy cannot be included in the
+#   cost model, since we assume that the way A->B is exactly as expensive
+#   as B->A (otherwise, we would need to model a separate connection for
+#   each tour!). Therefore, an anisotropic cost map would violate a basic
+#   assumption of our model.
+#   However, we can include a limited form of 'global' anisotropy, if
+#   it meets the following constraint: Travel in one direction must be
+#   exactly as expensive as travel in the exact opposite direction; all
+#   other directions may differ. This makes sure that movement along a
+#   network link will always cost the same, not matter whether the
+#   movement is towards one or the other terminus of the link.
+#   E.g. it should be relatively easy to switch to a limited anisotropic
+#   cost model for the sea area only:
+#   - make SN movement on SEA cells more expensive
+#   - make EW movement on SEA cells less expensive
+#   - no effect on any LAND cell
+#   Here EW movement will always be cheaper, independently of whether we
+#   are moving A->B or B->A.
+#   --> r.cost and r.walk both have a "solver" option. EXPLORE!
+#   https://github.com/OSGeo/grass/commit/2f86241cb733cf6c42a5f075aec9cb63be5bddc8
+#
+# - Quality of least cost paths suffers greatly from "steps" and spurious
+#   "forks" in the paths. These stem from quantization effects (rounding effects)
+#   which in turn are caused by the character of the cost surface: There are many
+#   areas which are composed of only very few different cell categories and the
+#   path finding algorithm will get "jumpy" around the borders of those cells.
+#   This can also be an effect of cost surfaces based on integer elevation data.
+#   The solution is to:
+#   1. Increase the resolution of the cost surface
+#   2. Add random noise to the new "high-res" cost surface
+#
+#   Like this:
+#
+#   # Increase raster resolution:
+#   g.region nsres=RES/4 ewres=RES/4
+#   # Produce random surface
+#   r.random.surface output=${TMP_RAST_RAND} dist="0" high="200" --quiet --overwrite
+#   # Compress to normalized range +/-100% with e.g. PERC=0.2 for a +/-20% error margin: 
+#   r.mapcalc expression="rand2=((100.0-(rand))/(100.0/0.2))" --overwrite
+#   # Add error as percentage to new cost raster:
+#   r.mapcalc expr="cost2=(cost*(1+(rand2)))" --overwrite
+#   # Or as one expression:
+#   r.mapcalc expr="${TMP_RAST_COST_ERR}=(${GIS_OPT_COSTMAP}*(1.0+(100.0-${TMP_RAST_RAND})/(100.0/${PERC})))" --overwrite
+#
+#   As an added bonus, this will also add more vertices to the paths,
+#   so that line smoothing algorithms have an easier job!
+#   NEXT: We need to find a smoothing algorithm in v.generalize
+#   that never overshoots the start/end vertices of the paths!
+#
+#   THEN we have to restore the original region on exit!
+#
+# - If a node's resources are not sufficient to link it directly to any other node,
+#   then check if it can be linked to the closest existing link, instead.
+#
+# - Merge overlapping paths and add crossing points to model: [HARD]
+#   - Crossing points are ONLY of interest if links represent LPCs; these are real
+#     features of physical topography and they exemplify the added value of a realistic
+#     approach to network modelling!
+#   - Difficult to implement, but it would be a great improvement in topological quality.
+#   - Problem: Often paths from A and B converge at some point and then follow identical
+#     routes to C.
+#   - In other cases, paths simply cross somewhere without converging; but these
+#     crossing points might indicate attractive locations for nodes that are not
+#     currently in the model. In fact, crossings may play a key role in dynamic
+#	  network evolution: A crossing produced in one iteration of a network
+#     reconstruction model may be considered a new node in the next run, to which
+#     other nodes connect! In particular, because a crossing may in turn be
+#     connected to many attractive nodes, making it a high-gain node (see
+#     notes on "dynamic networks"
+#   - In both of the above cases, the treatment would be as follows:
+#     - visit each path and check if it overlaps with another(*) path
+#       - if so: cut the shorter of the two paths down to the non-overlapping
+#         area
+#       - the new intersection node is the one of the two end nodes of the
+#         clipped path that did not previously exist
+#       - the clipped path no longer runs from A to B; it now runs from A or B
+#         to the intersection node (i.e. from the node that is still identical
+#         with one of the path's two extreme nodes to the new intersection nodes).
+#         The corresponding attribute field should be updated accordingly.
+#         Even more elegant would be to add a "via" field to the attribute table
+#         and leave "from" and "to" untouched!
+#      - TRICKY: It is possible that a path has multiple intersections, both with
+#        one or several other paths!
+#
+#     (*) v.overlay can be used for clipping, but only if one of the two
+#         layers is a polygon layer! Work-around: Add minimal buffer along
+#         major axis of path to make it an area (this actually works!):
+#         v.buffer input=<path> output=<buffers> distance="0.000001" --quiet --overwrite
+#         -> a v.clean run at the end of the module should make sure that any minimal
+#            gaps resulting from this are closed.
+#   - Further:
+#     - Add another, optional output map "crossings": intersection points of paths
+#     - There will be some crossing points, e.g. on the open sea, that are not
+#       of further interest. User can filter those out in a post-processing step
+#       (e.g. by using a raster map with NULL cells in locations where no physical
+#       crossing points could have existed).
+# 
+# - dynamic networks:
+#   - in addition to "size", add an attribute "gain" to every node.
+#     this represents the relative or absolute attractiveness of
+#     connecting to the node, whereas "size" represents the resources
+#     to build new links present in the node.
+#     The relation between cost (of link), size (of node) and total
+#     gain of connecting to nodes in the neighborhood determines whether
+#     a link will be constructed or not.
+#   - dynamic network evolution works via several elements:
+#     - link crossings may add new nodes after one iteration
+#     - both gain and resources are transfered to newly connected
+#       nodes and thus may lead to new links in the next iteration
+#     - links between nodes with high-gain become attractive by
+#       themselves to a certain degree, so that new nodes may
+#       appear in close proximity, connected only to attractive
+#       links, not directly to other nodes
+#     - resources grow in each node, depending on the possible
+#       network flow and population growth (which again depends
+#       on available connectivity and flow!)
+#     [Note: The initial locations of nodes at iteration 0 may
+#     be determined by natural connectivity factors (e.g. on
+#     river networks)
+# 
+# - hierarchical networks:
+#   - networks are composed of subnetworks that each have
+#     their own, individual cost-gain balance (roads, railroads,
+#     phone lines, ...)
+#   - some networks may have a politically set cost-gain that
+#     is not justified by their actual gain and resources
+#     (e.g. motorways in remote areas)
+#   - in other words: the decision processes leading to
+#     link construction are hierarchical, local/global,
+#     follow different intents and are technology-dependent!
+#   
+# - uncertainty
+#   - instead of linear links, we could transition to polygonal
+#     "movement corridors" bei producing n iterations of random noise
+#     and combining the cells visited by r.path into corridors
+#     before vectorizing them into areas
+#
+# - indirect paths
+#   - even if there is enough gain to justify the cost of building
+#     a direkt link, it might be an acceptable choice to use an existing
+#	  indirect link via one or more connected nodes!
+#	  (this is something that needs to be taken into account after the
+#     first iteration of the network, i.e. when there are already existing
+#     links/priors)
+#
+# - implement '-s' flag: [DONE]
+#   For more appealing cartographic results, it is also possible to smooth the paths using
+#   v.generalize, with several algorithms, e.g.:
+#   v.generalize --o input=path output=smooth type=line alpha=1 beta=2 method=snakes threshold=0
+#   
+#   NOTE that this will (slightly) change the original line lengths and no longer represent the
+#   original least-cost paths, so this should definitely be optional!
+#
+#   CAVEAT: Smoothing can produce parallel line segments where previously merging paths
+#           would overlap perfectly! This is not an easy problem to fix automatically with 100%
+#           error-free results. This module uses line snapping with a threshold of half the
+#           current region's cell dimensions diagonal. 
+#
+# - two WHILE LOOPS in model_complete may loop forever:
+#   - make sure input vector layer has an attribute table. If not: abort.
+#   - get the key name of selected layer from v.info and do not assume that
+#     it is cat!
+#   - abort the loops if cat counter > highest cat value. Get highest cat using v.category and AWK:
+#     TOPCAT=(v.category input="${GIS_OPT_INPUT}" layer=<LAYER> option="report" -g | awk 'NR==1{ printf "%i", $5}')
+#   - abort if an empty cat value is read.
+# - run a topology test in "preprocess" to make sure that we do not
+#   have nodes with identical coordinates!
+# - allow specification of an "id" field for more legible neighbor IDs
+#     in added attribute table fields and messages
+# - allow specification of "name" field for more legible labels in
+#     added attribute table fields and messages
+# - add useful attribute to links:
+#   - from/to link IDs (names)
+#   - cost
+# - Add nNN as additional connectivity model.
+#   - This would be much more useful if we could connect with
+#     n% (percentage) of NNs!!!
+# - WILL THIS WORK CORRECTLY WITH LAT/LON DATA? 
+#   YES because v.to.db computes metrics using geodesic length if necessary
+# - Test extreme case with only two points as input.
+# - Implementing k NN should also be easy if we used v.db.select on the field
+#   that holds the link length and then make a second pass with v.distance!
+# - Anything to do with ${FLD_COORD_X}, ${FLD_COORD_Y}, ${FLD_COORD_Z} can
+#   probably be deleted.
+# - Add three parameters:
+#   - max_dist
+#   - max_cost
+#   - weight_coeff
+# - Add flag for distance and cost threshold normalization
+# - Add another, optional output map "nodes":
+#   - only those points that were part of the network reconstruction
+#	- with original attributes preserved plus new ones:
+#     - new linkage ID (to replace volatile GRASS 'cat')     
+#     - number of links
+#     - shortest/least expensive link (and linkage ID of linked neighbor)
+#     - longest/most expensive link (and linkage ID of linked neighbor)
+#     - is border node (=on convex hull of link vertices)?
+#   - add flag "-c" to output only connected points (use v.overlay to filter)
+#   - if using least-cost paths: run v.clean to snap points exactly to output links!
+# - Add another input layer: PRIORS
+#   - a lines layer that connects a subset of nodes
+#   - test whether any of these a priori links exist between two node
+#     in the (sub)set of nodes to process
+#   - if so: force these links to become part of the result (if they
+#     are not already), i.e. always make sure that the affected nodes
+#     are still linked after any reduction of nodes
+#   - optionally, we could also force constraints (e.g. max. dist.)
+#     to be lifted when fitting priors
+# - Add another layer: MARKERS
+#  - this is a points layer that contains "proxomity" markers
+#  - e.g. milestones, way stations, deposits, etc. that can be
+#    assumed to have been located on or close to a link
+#  - at end of program run, use v.distance to compute the distances
+#    between these markers and the closest link
+#  - then produce some stats: worst fit, best fit, average fit, (in m and km) 
+#    number of acceptable fits, etc.
+#  - if there are intersection points, then the distances to those
+#    would also be interesting output!
+#  - CAVEAT: The more links a network has, the better the fit to the
+#    markers will (potentially) be. So this can really only be used
+#    to compare fits of networks that have the same number of links
+#    In more detail:
+#    The likelihood that any edge passes closely by a marker is
+#    is a function of edge density within the study area.
+#    We can simplify this to state that it is a function of total
+#    network length (the sum of lengths of all links). Clearly, this
+#    total length is only a reliable metric if there are no overöapping
+#    edges; so this is another example where correct topology is important!
+#    Therefore, instead of a simple count of markers within predefined
+#    buffers, we need a FIT statistic like this:
+#
+#      Network Fit = %(markers in buffer) / (network density)
+#
+#    i.e. the fit will be higher if more markers are in the buffer
+#    and the density is lower.
+#    This statistic should then be normalized [0;1], so that n networks
+#    can be tested directly against each other.
+#    NOTE: Even with these properties, the fit statistic will be only
+#    useful for comparing networks that have the same number of nodes
+#    in the same locations (i.e. within the same study region)!
+#    It provides a relative goodness of fit measure (in relation to that
+#    of alternative networks), not an absolute one!
+#  - ACTUALLY, this (and perhaps other testing funcs) should be
+#    outsourced into a separate, new module 'v.net.fit'
+# - Model places that are connected to roads (not to other places)???:
+#   - densify existing links
+#   - connect each "by-road" node to closest new vertex
+#   ---> Ist it worth? Or should we only model placces that connect with other
+#        places? And treat such "by-road" places as testing markers only?
+
+############################################################################
+#
+# MODULE:     	v.net.models
+# AUTHOR(S): 	Benjamin Ducke <benducke AT fastmail.fm>
+# PURPOSE:		Model-based reconstruction of a network from points (nodes).
+#				This script takes points as input and reconstructs a network
+#             	by adding lines (links) between all or a subset of them. Links 
+#				are added according to the chosen connectivity model.
+#				Connection costs between nodes are computed as euclidean (default)
+#				or Manhatten distances. For more realism, connection costs and
+#				actual link shapes can be modeled as least-cost paths
+#				between nodes (requires an isotropic rast cost surface as
+#				additional input).
+#
+# COMPATIBILITY:
+#				This script has been written to run under GRASS 7 (and possibly
+#				any later version that retains the GRASS 7 syntax for the
+#				modules used here).
+#
+# COPYRIGHT:    (C) 2020 by Benjamin Ducke
+#
+#               This program is free software under the GNU General Public
+#               License (>=v2). Read the file COPYING that comes with GRASS
+#               for details.
+#
+#############################################################################
+
+# REQUIRED INPUT:
+# - vector map with at least two points:
+#   - points can be filtered by using cats= or where= option
+#   - if no cost map is provided, processing is done for all (filtered) points
+#     in the input map
+# - if a cost map is provided, processing is done only for points in the
+#   current region and there must be at least two points in the current region
+# - if a cost map is provided, then it must have at least some non-NULL cells in
+#   the current region [Do not zoom into selected points to closely!] 
+#
+# NOTES:
+# To keep computational complexity manageable, this program will always
+# create a fully connected network first, at the expense of O = n(n - 1) / 2.
+# In a second step, the links are then reduced to the ones that match the
+# constraints of the chosen model.
+#
+# REQUIRED EXTERNAL PROGRAMS:
+# - grep
+# - awk
+#
+# HINTS:
+# - Noise generator for raster cost input: r.random.surface can be used for that.
+# - NULL values in input cost map will be excluded from least-cost path computations.
+#
+# CAVEATS:
+# - some required external programs
+# - the underlying cost model is isotropic, i.e. there is no
+#   (relevant) difference between travelling A->B or B->A in terms
+#   of distance and/or cost; there is also no possibility to include
+#   global directional factors, e.g. that it is much easier to cross
+#   the open sea N-S then E-W or local effects, e.g. wind and current
+#   patterns influencing movement cost depending on direction
+# - when fitting a priori links and adjusting the network constraints
+#   accordingly, user has to decide whether this should be done
+#   by relaxing distance threshold or increasing size coefficient
+#   (in case of a hierarchical network)
+# - least-cost path computations suffer from edge effect:
+#   if a lower cost past exists through a "hinterland" that is
+#   not part of the current region, then it will not be found
+# - there is no modelling of "by-the-road" sites, i.e. the models
+#   only includes links of sites to other sites, not so merely
+#   road segments
+# - currently, GRASS' r.path reference the nodes of its output vector
+#   path to the cell boundaries of the current GRASS region!
+#   This means that they can be offset from the original
+#   start/end points locations up tp 1/2 cell size in each direction!
+#   Unfortunately, all of GRASS' snapping tolls (v.edit, v.clean, v.net)
+#   will move points to snap to line nodes, never the other way around.
+#   The end nodes of the least cost paths will be adjusted to match the
+#   locations of the original input nodes as accurately as possible, but
+#   there may still be minute differences. It is recommended to use
+#   a GRASS points snapping tool, such as 'v.clean' or 'v.net' to
+#   slightly adjust the network nodes. Nodes output by this program
+#   (option 'nodes=') will automatically be adjusted accordingly.
+#                     
+
+#%Module
+#% description: Performs model-based reconstruction of network links from input points.
+#% keywords: vector, points, lines, network, reconstruction
+#%End
+
+#%Flag
+#%  key: c
+#%  description: Connect distant nodes to links if reachable
+#%End
+
+#%Flag
+#%  key: d
+#%  description: Drop unconnected nodes from output map
+#%End
+
+#%Flag
+#%  key: g
+#%  description: Output global network statistics in shell script style
+#%End
+
+#%Flag
+#%  key: m
+#%  description: Assume 'maxdist' to be meters (only if 'costmap' is provided)
+#%End
+
+#%Flag
+#%  key: r
+#%  description: Reduce input points to those in current region
+#%End
+
+#%Flag
+#%  key: s
+#%  description: Smooth paths of least-cost links
+#%End
+
+#%Option
+#% key: input
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: name
+#% description: Input vector map with network nodes (points)
+#% gisprompt: old,vector,vector
+#%End
+
+#%Option
+#% key: initial
+#% type: string
+#% required: no
+#% multiple: no
+#% key_desc: name
+#% description: Initial links as produced by previous run (lines)
+#% gisprompt: old,vector,vector
+#%End
+
+#%Option
+#% key: links
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: name
+#% description: Output vector map for reconstructed network links (lines)
+#% gisprompt: new,vector,vector
+#%End
+
+#%Option
+#% key: nodes
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: name
+#% description: Output vector map for attributed network nodes (points)
+#% gisprompt: new,vector,vector
+#%End
+
+#%Option G_OPT_DB_COLUMN
+#% key: key
+#% required: yes
+#% description: Name of primary key field in input points' attribute table
+#% gisprompt: old,dbcolumn,dbcolumn
+#%End
+
+#%option G_OPT_DB_COLUMN
+#% key: label
+#% required: no
+#% description: Name of label/name field (default: same as 'key')
+#% gisprompt: old,dbcolumn,dbcolumn
+#%end
+
+#%option G_OPT_V_FIELD
+#% key: layer
+#%end
+
+#%option G_OPT_V_CATS
+#% key: cats
+#%end
+
+#%option G_OPT_DB_WHERE
+#% key: where
+#%end
+
+#%Option
+#% key: model
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: value
+#% options: attsim,complete,delaunay,nn,xtent
+#% description: Choice of network connectivity model
+#% answer: complete
+#%End
+
+#%Option G_OPT_DB_COLUMN
+#% key: attributes
+#% required: no
+#% multiple: yes
+#% description: Attribute field(s) for similarity test(s) (model 'attsim')
+#% gisprompt: old,dbcolumn,dbcolumn
+#%End
+
+#%Option
+#% key: neighbors
+#% type: integer
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Number of nearest neighbors to connect (model 'nn')
+#%End
+
+#%Option
+#% key: maxdist
+#% type: double
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Absolute cost/distance threshold (several models)
+#%End
+
+#%Option G_OPT_DB_COLUMN
+#% key: size
+#% required: no
+#% description: Numeric attribute field with node 'size' (models 'xtent', 'nn')
+#% gisprompt: old,dbcolumn,dbcolumn
+#%End
+
+#%Option
+#% key: a
+#% type: double
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Exponential size weight 'a' (model 'xtent')
+#%End
+
+#%Option
+#% key: k
+#% type: double
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Linear distance weight 'k' (model 'xtent')
+#%End
+
+#%Option
+#% key: avg
+#% type: string
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% options: mean,median
+#% description: Distance averaging function (model 'xtent')
+#% answer: mean
+#%End
+
+#%Option
+#% key: costmap
+#% type: string
+#% required: no
+#% multiple: no
+#% key_desc: name
+#% description: Input raster map with (global and isotropic) cost surface
+#% gisprompt: old,cell,raster
+#%End
+
+#%Option
+#% key: costerr
+#% type: double
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Costmap error margin (+/-) in percent (requires 'costmap')
+#% options: 0.0-100.0
+#% answer: 0.0
+#%End
+
+#%Option
+#% key: costres
+#% type: integer
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Costmap resampling factor (requires 'costmap' and 'costerr')
+#% options: 1-10
+#% answer: 1
+#%End
+
+#%Option
+#% key: threshold
+#% type: double
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Threshold distance for detecting input point duplicates
+#% options: 0.0-100000000
+#% answer: 0.000001
+#%End
+
+# System setup: Modify if needed.
+AWK=awk
+GREP=grep
+
+# Basic module setup.
+
+MODULE_NAME="v_net_models"
+MODULE_VERSION="1.0.0"
+
+# Global state variables.
+EXIT_OK="0"
+EXIT_ERROR="-1"
+EXIT_CTRL_C="1"
+EXIT_TERMINATED="2"
+
+
+# Basic sanity checks.
+if [ -z "$GISBASE" ] ; then
+    echo "ERROR: You must be in GRASS GIS to run this program." 1>&2
+    exit ${EXIT_ERROR}
+fi
+
+if [ "$1" != "@ARGS_PARSED@" ] ; then
+    exec g.parser "$0" "$@"
+fi
+
+# Check if we are running under old GRASS 6
+GRASS_V6=`g.version -e | ${GREP} "GRASS 6"`
+
+if [ -n "$GRASS_V6" ] ; then
+	g.message -e "This script requires GRASS GIS version 7 or higher."
+	exit ${EXIT_ERROR}
+fi
+
+# Create prefix for all temporary maps
+TMP_PREFIX="tmp_${MODULE_NAME}_`echo $$`_d"
+
+# Names of temporary maps (VECTOR)
+TMP_VECT_NODES="${TMP_PREFIX}_v_nodes" # Input nodes (after WHERE and layer= options applied)
+TMP_VECT_REGION="${TMP_PREFIX}_v_region" # Polygon that represents bbox of current GRASS region
+TMP_VECT_SELECT="${TMP_PREFIX}_v_select" # Input points reduced to those in current region
+TMP_VECT_EXTRACT="${TMP_PREFIX}_v_extract" # Feature(s) extracted from input vector map
+TMP_VECT_LINKS="${TMP_PREFIX}_v_links" # Newly created network links (lines)
+TMP_VECT_LINKS_ADD="${TMP_PREFIX}_v_links_add" # Additional network links (lines) to add to links output map
+TMP_VECT_LINKS_CAT="${TMP_PREFIX}_v_links_cat" # Network links (lines) with rebuilt category IDs
+TMP_VECT_LINKS_SMOOTH="${TMP_PREFIX}_v_smoothed" # Smoothed least-cost paths
+TMP_VECT_LINKS_CLEAN="${TMP_PREFIX}_v_cleaned" # Cleaned least-cost paths
+TMP_VECT_LINKS_DROPROW_1="${TMP_PREFIX}_v_l_droprow_1" # Links with row dropped from table
+TMP_VECT_LINKS_DROPROW_2="${TMP_PREFIX}_v_l_droprow_2" # Links with row dropped from table (swapped)
+TMP_VECT_LINKS_DELAUNAY_P="${TMP_PREFIX}_v_delaunay_p" # Delaunay mesh (polygon)
+TMP_VECT_LINKS_DELAUNAY_L="${TMP_PREFIX}_v_delaunay_l" # Delaunay mesh (lines)
+TMP_VECT_NODES_DROPROW_1="${TMP_PREFIX}_v_n_droprow_1" # Nodes with row dropped from table
+TMP_VECT_NODES_DROPROW_2="${TMP_PREFIX}_v_n_droprow_2" # Nodes with row dropped from table (swapped)
+
+# Names of temporary maps (RASTER)
+TMP_RAST_COST_MIN="${TMP_PREFIX}_r_cost_min" # Minimum cost output of r.cost
+TMP_RAST_COST_DIR="${TMP_PREFIX}_r_cost_dir" # Directional surface output r.cost
+TMP_RAST_COST_RES="${TMP_PREFIX}_r_cost_res" # Directional surface output r.cost (resampled)
+TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost (random error)
+TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
+
+# Names of temporary regions
+TMP_GEN_REGION_ORG="${TMP_PREFIX}_g_region_org" # Original region settings
+
+# Reserved names of attribute table fields that will be added to NODES output map
+FLD_COORD_X="coordx" # Input node X coordinate
+FLD_COORD_Y="coordy" # Input node Y coordinate
+FLD_COORD_Z="coordz" # Input node Z coordinate
+FLD_LINKS="links" # Number of links connected to node
+FLD_LEN_SUM="len_sum" # Sum of lengths of links connected to node
+FLD_LEN_AVG="len_mean" # Mean length of links connected to node
+FLD_COST_SUM="cost_sum" # Sum of costs of links connected to node
+FLD_COST_AVG="cost_mean" # Mean cost of links connected to node
+FLD_NSTRENGTH="nstrength" # Sum of 'strength' of all links connected to node (model 'attsim')
+
+# Make sure we get to clean up!
+trap "g.message -i 'Terminated by user (CTRL+C).' ; clean_up ; exit ${EXIT_CTRL_C}" 2 # user interrupt (CTRL+C)
+trap "'Unexpected termination.' ; clean_up ; exit ${EXIT_TERMINATED}" 1 9 # external interrupt
+
+
+# FUNCTION
+# clean_up: Remove temporary maps, reset region to what it was, etc.
+clean_up () {
+	# Temporary VECTOR maps
+	type="vector"
+	# Extracted nodes from input vector map.
+	elem="${TMP_VECT_NODES}"	
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Polygonal bbox of current GRASS region.
+	elem="${TMP_VECT_REGION}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Input points reduced to within current region.
+	elem="${TMP_VECT_SELECT}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Feature(s) extracted from input vector map.
+	elem="${TMP_VECT_EXTRACT}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Lines representing newly created network links.
+	elem="${TMP_VECT_LINKS}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Additional network links (lines) to add to links output map.
+	elem="${TMP_VECT_LINKS_ADD}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi	
+	# Network links (lines) with rebuilt category IDs. 
+	elem="${TMP_VECT_LINKS_CAT}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Smoothed least-cost paths. 
+	elem="${TMP_VECT_LINKS_SMOOTH}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Cleaned least-cost paths. 
+	elem="${TMP_VECT_LINKS_CLEAN}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Links with row dropped from table
+	elem="${TMP_VECT_LINKS_DROPROW_1}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Links with row dropped from table (swapped)
+	elem="${TMP_VECT_LINKS_DROPROW_2}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Nodes with row dropped from table
+	elem="${TMP_VECT_NODES_DROPROW_1}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Nodes with row dropped from table (swapped)
+	elem="${TMP_VECT_NODES_DROPROW_2}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Delaunay mesh (polygon)
+	elem="${TMP_VECT_LINKS_DELAUNAY_P}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Delaunay mesh (lines)
+	elem="${TMP_VECT_LINKS_DELAUNAY_L}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	
+	# Temporary RASTER maps
+	type="raster"
+	# Minimum cost output of r.cost
+	elem="${TMP_RAST_COST_MIN}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Directional surface output of r.cost
+	elem="${TMP_RAST_COST_DIR}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Directional surface output of r.cost (resampled)
+	elem="${TMP_RAST_COST_RES}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Directional surface output of r.cost (random error)
+	elem="${TMP_RAST_COST_ERR}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Directional surface output of r.cost (normalized random error)
+	elem="${TMP_RAST_COST_NRM}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	
+	# Temporary REGIONS
+	type="region"
+	# Restore saved (original) region
+	elem="${TMP_GEN_REGION_ORG}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.region region="${TMP_GEN_REGION_ORG}"
+		if [ ! "$?" -eq "0" ] ; then
+			g.message -i "FAILED to restore original GRASS region. Please check and adjust manually if required (g.region)."
+		else
+			g.message -i "Restored original GRASS region."
+		fi
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+}
+
+
+# FUNCTION
+# clean_output: Remove any (partial) output data if program aborted with an error.
+clean_output () {
+	# Output VECTOR maps
+	type="vector"
+	# Result map (links).
+	elem="${GIS_OPT_LINKS}"	
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Result map (nodes).
+	elem="${GIS_OPT_NODES}"	
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+}
+
+
+# FUNCTION
+# clean_links: Remove links output map: This can be done to get rid of a transient
+#				version of the links output map (e.g. when incrementally re-writing
+#				that map, to avoid useless warnings from g.remove).
+clean_links () {
+	found=`g.list type="vector" | ${GREP} -c "${GIS_OPT_LINKS}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="vector" name="${GIS_OPT_LINKS}" -f --q
+	fi
+}
+
+
+# FUNCTION
+# check_error: Check last return status, issue an error message and abort if appropriate.
+check_error () {
+	if [ ! "$?" -eq "0" ] ; then
+		g.message -e "$1"
+		clean_up
+		clean_output
+		exit ${EXIT_ERROR}
+	fi
+}
+
+
+# FUNCTION
+# exit_error: Display an error message and exit with default error code.
+exit_error () {
+	g.message -e "$1"
+	clean_up
+	clean_output
+	exit ${EXIT_ERROR}
+}
+
+
+# FUNCTION
+# eval_ws_safe:  White-space resilient setting of variables from command output.
+#                This is useful for many GRASS commands that produce shell style
+#				  output (like 'g.region -pg') of the form:
+#                   var1=abc
+#                   var2=123
+#                   ...
+#                Pass string with a command's full output as $1.
+#                Pass name of a variable to set from output as $2.
+#                This function will then grep the _first_ occurrence
+#                of the variable name (case sensitive!) from the command output
+#                and set it to the value following "=" (equal sign).
+#				  As opposed to a simple 'eval', this function is able
+#                to correctly set variable values that contain whitespace!
+#				  This is also the safer option to use if an 'eval' statement would
+#                potentially encounter values with white space for variables other
+#			 	  than the target variable.
+#                The contents for setting the variable are returend in "EVAL_RESULT".
+eval_ws_safe () {
+	OLD_IFS="$IFS"
+	IFS=$(echo -en "\n\b")	
+	str=`echo "$1" | ${GREP} "$2="`
+	for i in $str
+	do
+		IFS="="
+		CUR=$i
+		for j in $CUR
+		do			
+			EVAL_RESULT="$j"
+		done
+	done	
+	IFS="$OLD_IFS"
+}
+
+
+# FUNCTION
+# get_primary_keys: Build array of primary key values (from field chosen via 'key=' option).
+#                   FUNCTION check_input MUST RUN FIRST to validate GIS_OPT_KEY!!!
+#					 The only argument for this function ($1) is the name of the GRASS vector
+#                   map from which to gather the keys.
+#					 The name of the primary key field is read from $GIS_OPT_KEY.
+#                   Primary keys are returned in array PRIMARY_KEYS.
+#                   This function will abort the program if it encounters any errors!
+get_primary_keys () {
+	PRIMARY_KEYS=`v.db.select map="$1" columns="${GIS_OPT_KEY}" -c --quiet`
+	check_error "Failed to retrieve primary keys (map='$1')."
+}
+
+
+# FUNCTION
+# get_grass_cats:	Build array of all GRASS internal primary key values for map in $1.
+#					Normally, these keys are in the 'cats' column, but this is customizable,
+#					so this function makes sure to get the correct column name from the
+#					map's metadata first.
+#                 	The only argument for this function ($1) is the name of the GRASS vector
+#                  	map from which to gather the keys.
+#                 	Primary keys are returned in array GRASS_CATS.
+#					Name of GRASS primary key column for map '$1' is returned in variable GRASS_PKEY. 
+#                 	This function will abort the program if it encounters any errors!
+get_grass_cats () {
+	cmd=`v.info -e map="$1"`	
+	check_error "Failed to query vector map '$1' for extended metadata."
+	eval_ws_safe "${cmd}" "attribute_primary_key"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of GRASS primary key column for vector map '$1'."
+	fi	
+	GRASS_CATS=`v.db.select map="$1" columns="${EVAL_RESULT}" -c --quiet`
+	GRASS_PKEY="${EVAL_RESULT}"
+	check_error "Failed to retrieve list of GRASS primary keys (map='$1')."
+}
+
+
+# FUNCTION
+# get_label: 	Gets the label for the input site's record with a given primary key.
+#			  	FUNCTION check_input MUST RUN FIRST to validate GIS_OPT_LABEL!!!
+#			  	Labels are used for making messages and result tables more readable
+#			  	if the primary key is a simple 'anonymous' index. Labels could be
+#			  	e.g. names of towns in the network.
+#            	By default, the label field is the same as the primary key field.
+#				The name of the label field is read from $GIS_OPT_LABEL.
+#            	This function reads two arguments:
+#				$1 -- name of GRASS vector map from which to read primary key and label
+#				$2 -- value of primary key for which to retrieve label
+#				The label value will be written into the variable LABEL.
+get_label () {
+	if [ ${GIS_OPT_LABEL} = ${GIS_OPT_KEY} ] ; then
+		LABEL="$2" # label field = key field
+	else		 
+		if [ "${LABEL_TYPE}" = "CHARACTER" ] || [ "${LABEL_TYPE}" = "TEXT" ] ; then
+				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="\"${GIS_OPT_KEY}\"='$2'" -c --quiet`
+			else
+				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="\"${GIS_OPT_KEY}\"=$2" -c --quiet`
+			fi		
+	fi
+	check_error "Failed to retrieve label for primary key value '${2}' (map='$1')."
+}
+
+
+# FUNCTION
+# get_label_no_spaces: 	Gets the label for the input site's record with a given primary key.
+#			  				This function is identical to 'get_label', except that it replaces
+#							spaces with '_' (underscore). 
+get_label_no_spaces () {
+	if [ ${GIS_OPT_LABEL} = ${GIS_OPT_KEY} ] ; then
+		LABEL="$2" # label field = key field
+	else		 
+		if [ "${LABEL_TYPE}" = "CHARACTER" ] || [ "${LABEL_TYPE}" = "TEXT" ] ; then
+				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="\"${GIS_OPT_KEY}\"='$2'" -c --quiet | ${AWK} '{ gsub (" ", "_", $0); print}'`
+			else
+				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="\"${GIS_OPT_KEY}\"=$2" -c --quiet | ${AWK} '{ gsub (" ", "_", $0); print}'`
+			fi		
+	fi
+	check_error "Failed to retrieve label for primary key value '${2}' (map='$1')."
+}
+
+
+# FUNCTION
+# get_where_clause:		Composes an SQL 'where' clause to be used in a "where=" option
+#						of a GRASS module. The clause can be used to retrieve the feature
+#						that matches the value of the primary key passed in $1.
+#						This function will take care that field names and values are
+#						properly quoted, the latter depending on the type of the primary
+#						key.
+#						The name of the primary key is read from ${GIS_OPT_KEY}.
+#						The resulting clause will be written into the variable WHERE.
+get_where_clause () {
+	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+		WHERE="\"${GIS_OPT_KEY}\"='$1'"
+	else
+		WHERE="\"${GIS_OPT_KEY}\"=$1"
+	fi
+}
+
+
+# FUNCTION
+# get_where_clause_inv:	Same as get_where_clause, but with inverted result, i.e.
+#							This function generates a 'where' clauses suitable for
+#							retrieving all features that do _not_ match the primary
+#							key value.
+get_where_clause_inv () {
+	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+		WHERE="\"${GIS_OPT_KEY}\"!='$1'"
+	else
+		WHERE="\"${GIS_OPT_KEY}\"!=$1"
+	fi
+}
+
+
+# FUNCTION
+# list_len:		Computes the length of a list of values (array).
+#				This function takes only one argument:
+#				
+#				$1 -- a list/array
+#
+#				REMEMBER to put "$1" in quotes of the list values are separated by whitespace!
+#
+#				The result will be returned as an integer in the variable LIST_LEN.
+#
+list_len () {
+	LIST_LEN=0
+	for item in $1 ; do
+		LIST_LEN=`expr ${LIST_LEN} + 1`
+	done
+}
+
+
+# FUNCTION
+# list_get:		Retrieves an item from a list of values (array).
+# 				This function takes two arguments:
+#				
+#				$1 -- a list/array
+#				$2 -- an integer that is the number of the item to get (0 or larger)
+#
+#				REMEMBER to put "$1" in quotes of the list values are separated by whitespace!
+#
+#				The requested value will be returned in variable LIST_ITEM.
+#				LIST_ITEM can be empty if the list is empty.
+#				An error will be thrown if $2 contains an invalid index value.
+#
+list_get () {
+	LIST_ITEM=
+	if [ $2 -lt 0 ] ; then
+		exit_error "list_get(): Attempted to read list/array using negative index value."
+	fi	
+	list_len "$1"
+	if [ $2 -gt $LIST_LEN ] ; then
+		exit_error "list_get(): Attempted to read list/array using out-of-bounds index value."
+	fi
+	cur_list_item=0
+	for item in $1 ; do
+		LIST_ITEM="${item}"
+		if [ ${cur_list_item} -eq $2 ] ; then
+			break
+		fi
+		cur_list_item=`expr ${cur_list_item} + 1`
+	done
+}
+
+
+# FUNCTION
+# awk_calc:		Uses AWK to calculate an expression and returns the result
+#				in 'AWK_VALUE', e.g.:
+#				awk_calc "((1+(2^3.4))/9)-2"
+awk_calc () {
+	AWK_VALUE=`${AWK} "BEGIN{ print $* }"`
+}
+
+
+# FUNCTION
+# awk_min:		Uses AWK to compare two numbers passed in $1 and $1 using "<".
+#				'AWK_VALUE' will be set to the smaller of the two.
+#				If the first number is passed as empty string, then 'AWK_VALUE'
+#				will be the second number.
+#				
+#				Note: The "0+" in the awk program forces type conversion to
+#				numeric (otherwise, awk will compare by character position).
+awk_min () {
+	if [ -z "$1" ] ; then
+		AWK_VALUE="$2"
+	else
+		AWK_VALUE="$1"
+		min=`echo "$1 $2" | ${AWK} "BEGIN{}{if (0+$2<0+$1) min=$2} END{print min}"`
+		if [ -n "${min}" ] ; then
+			AWK_VALUE="$min"
+		fi
+	fi
+}
+
+
+# FUNCTION
+# awk_max:		Uses AWK to compare two numbers passed in $1 and $1 using ">".
+#				'AWK_VALUE' will be set to the larger of the two.
+#				If the first number is passed as empty string, then 'AWK_VALUE'
+#				will be the second number.
+#				
+#				Note: The "0+" in the awk program forces type conversion to
+#				numeric (otherwise, awk will compare by character position).
+awk_max () {
+	if [ -z "$1" ] ; then
+		AWK_VALUE="$2"
+	else
+		AWK_VALUE="$1"
+		max=`echo "$1 $2" | ${AWK} "BEGIN{}{if (0+$2>0+$1) max=$2} END{print max}"`
+		if [ -n "${max}" ] ; then
+			AWK_VALUE="$max"
+		fi
+	fi
+}
+
+
+# FUNCTION awk_median:	Compute median for a list of values.
+#						Reads just one argument:
+#						
+#						$1 -- list of values (separated by line breaks!)
+#
+#						Result is returned in variable 'AWK_VALUE'.
+#						An empty value will be returned if there are no values
+#						found in $1.
+awk_median () {
+	med_list=`echo "$1" | ${AWK} '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
+	# Get number of items on list:
+	list_len "${med_list}"
+	if [ -z "${med_list}" ] || [ ${LIST_LEN} -eq 0 ] ; then
+		AWK_VALUE=""
+	else
+		if [ ${LIST_LEN} -eq 1 ] ; then
+			# special case: just one item on list
+			list_get "${med_list}" 0
+			awk_median_val="${med_list}"
+		fi
+		if [ ${LIST_LEN} -eq 2 ] ; then
+			# special case: just two items on list
+			list_get "${med_list}" 0
+			a="${LIST_ITEM}"
+			list_get "${med_list}" 1
+			b="${LIST_ITEM}"
+			awk_calc "(${a}+${b})/2"
+			awk_median_val="${AWK_VALUE}"
+		fi
+		# This is the non-special case:
+		if [ ${LIST_LEN} -gt 2 ] ; then
+			if [[ $((${LIST_LEN} % 2)) -eq 0 ]] ; then
+				# Even list length: median is the mean of the two values at the
+				# list's center.
+				posa=`expr ${LIST_LEN} / 2`
+				posb=`expr ${posa} - 1`
+				list_get "${med_list}" ${posa}
+				a="${LIST_ITEM}"
+				list_get "${med_list}" ${posb}
+				b="${LIST_ITEM}"
+				awk_calc "(${a}+${b})/2"
+				awk_median_val="${AWK_VALUE}"		
+			else
+				# Odd index: median is the value at the list's center.
+				posa=`expr ${LIST_LEN} / 2`
+				list_get "${med_list}" ${posa}
+				awk_median_val="${LIST_ITEM}"
+			fi
+		fi
+		# Result
+		AWK_VALUE="$awk_median_val"
+	fi
+}
+
+
+# FUNCTION
+# grep_is_zero:		Uses 'grep' to check whether $1 contains a numeric caracter
+#					in the range [1-9]. This is useful for checking whether an
+# 					option value is true zero ('0','0.0','0.00', etc.).
+#					This function will set 'GREP_VALUE' to an empty string if
+#					$1 represents '0', or to the same string as $1, otherwise.
+#					THIS FUNCTION ASSUMES that $1 is already a valid string
+#					representation of a number!
+grep_is_zero () {
+	GREP_VALUE=
+	GREP_VALUE=`echo "$1" | ${GREP} '[1-9]'`
+}
+
+
+# FUNCTION
+# grep_is_positive:	Uses 'grep' to check whether $1 contains a numeric caracter
+#					in the range +[1-9]. This is useful for checking whether an
+# 					option value is a positive number larger then zero.
+#					This function will set 'GREP_VALUE' to an empty string if
+#					$1 represents a number '<=0', or to the same string as $1, otherwise.
+#					THIS FUNCTION ASSUMES that $1 is already a valid string
+#					representation of a number!
+grep_is_positive () {
+	GREP_VALUE=
+	GREP_VALUE=`echo "$1" | ${GREP} -Ei '[+1-9]' | ${GREP} -Eiv '[-]'`
+}
+
+
+# FUNCTION
+# TODO:
+# Caller does this
+# set -- <grass cmd name> param1=... param1=... -flag_1 -flag_2 ...
+# This function then passes "$@" (in quotes) to an exec call and handles
+# error catching, displaying an error message passed as "$1"
+run_grass_cmd () {
+	#TODO
+	echo "TODO."
+}
+
+
+# FUNCTION
+# check_setup: Check system setup (required external programs available?).
+check_setup () {	
+	message="Failed to run required program: "	
+	# Awk
+	prg=${AWK}
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Grep
+	prg=${GREP}
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+}
+
+
+# FUNCTION
+# check_environment: Query GRASS environment for some important variables.
+check_environment () {
+	
+	# Get current region settings.
+	eval `g.region -p -g`
+	
+	#TODO: We never seem to use this!? It was probably intended to be used in the
+	#      context of adjusting node (point) locations to link (line) start/end vertices.
+	# Set default snapping distance to be half the diagonal of region's cell dimensions.
+	SNAPDIST=`echo ${nsres} ${ewres} | ${AWK} '{ printf "%.8f\n", sqrt(\$1^2 + \$2^2)/2 }'`
+	if [ -z "${SNAPDIST}" ] ; then
+		exit_error "Failed to determine default line snapping threshold from GRASS region settings."
+	fi
+}
+
+
+# FUNCTION
+# check_input: Check input data for validity. ORDER MATTERS!
+check_input () {	
+	
+	# Check 'initial' links map (if specified).
+	# TODO: We must ALSO check that:
+	#		- contains all required attribute fields
+	#		  'cost' field is optional:
+	#				* if it exists then we run in cost-based mode!
+	#				* if does not exist, but we have "costmap=", then we add 'cost' and compute its values!
+	#		- all attributes have the required types
+	#		- all attributes contain data
+	#		- all attribute data is within required ranges
+	#   	- to/from atts must match node IDs and must have the same types
+	#     	- to/from pairs must be unique
+	#   	- make sure that 'cat' exists, is INTEGER and unique for all lines
+	#		--> ALL OF THESE MUST BE IN LAYER 1!!!
+	if [ -n "${GIS_OPT_INITIAL}" ] ; then
+		eval `v.info -e map="${GIS_OPT_INITIAL}" | ${GREP} "num_dblinks="`
+		if [ -z ${num_dblinks} ] ; then
+			exit_error "Failed to get basic info for chosen layer of input vector map."
+		fi
+		if [ ${num_dblinks} -lt 1 ] ; then
+			exit_error "Table connection for layer '1' does not exist in 'initial' vector input map."
+		fi
+		eval `v.info -t map="${GIS_OPT_INITIAL}" layer="1"`
+		check_error "Failed to get topology info for 'initial' input vector map."		
+		if [ ${points} -gt 0 ] || [ ${boundaries} -gt 0 ] || [ ${centroids} -gt 0 ] || [ ${areas} -gt 0 ] || [ ${islands} -gt 0 ] ; then
+			exit_error "Vector input map 'initial' must only contain line geometries."
+		fi
+		if [ ${lines} -lt 1 ] ; then
+			exit_error "Vector input map 'initial' must contain at least one line geometry."
+		fi
+	fi
+	
+	# Check that input vector map has chosen layer.
+	# NOTE: We check this AFTER 'initial', so that the env vars set by 'v.info'
+	# ($points, $lines, ...) refer to this input map, as later code might rely
+	# on this!!!
+	eval `v.info -e map="${GIS_OPT_INPUT}" | ${GREP} "num_dblinks="`
+	check_error "Failed to get basic info for chosen layer of input vector map."
+	if [ -z ${num_dblinks} ] ; then
+		exit_error "Failed to get basic info for chosen layer of input vector map."
+	fi
+	if [ ${num_dblinks} -lt ${GIS_OPT_LAYER} ] ; then
+		exit_error "Chosen layer (${GIS_OPT_LAYER}) does not exist in input vector map."
+	fi
+	eval `v.info -t map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
+	check_error "Failed to get topology info for chosen layer of input vector map."
+	if [ ${points} -lt 1 ] ; then
+		exit_error "No points found in chosen layer of input vector map."
+	fi	
+	
+	# Check that any records are left after WHERE statement and/or "cats=" has been applied.
+	# THIS CHECK MUST BE RUN!
+	# Because it also creates the extracted temporary vector map that
+	# contains exlusively the points that represent network nodes in layer 1!	
+	if [ -n "${GIS_OPT_WHERE}" ] ; then
+		# Apply given WHERE to points _only_.
+		v.extract where="${GIS_OPT_WHERE}" input="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" type="point" output="${TMP_VECT_NODES}" --overwrite --quiet		
+		check_error "Chosen SQL WHERE statement failed on input vector map."
+		# If we get this far then the extract succeeded.
+		eval `v.info -t map="${TMP_VECT_NODES}" layer=1`
+		check_error "Failed to get info for temporary layer with input points."
+		if [ ${points} -lt 1 ] ; then
+			exit_error "No points in chosen layer of input vector map (after WHERE)."
+		fi
+	fi
+	if [ -n "${GIS_OPT_CATS}" ] ; then
+		# Apply given "cats=" to points _only_.
+		v.extract cats="${GIS_OPT_CATS}" input="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" type="point" output="${TMP_VECT_NODES}" --overwrite --quiet		
+		check_error "Chosen 'cats=' selection failed on input vector map."
+		# If we get this far then the extract succeeded.
+		eval `v.info -t map="${TMP_VECT_NODES}" layer=1`
+		check_error "Failed to get info for temporary layer with input points."
+		if [ ${points} -lt 1 ] ; then
+			exit_error "No points in chosen layer of input vector map (after 'cats=')."
+		fi
+	fi
+	if [ -z "${GIS_OPT_WHERE}" ] && [ -z "${GIS_OPT_CATS}" ] ; then
+		# Extract points _only_.
+		v.extract input="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" type="point" output="${TMP_VECT_NODES}" --overwrite --quiet		
+		check_error "Points extraction failed on input vector map."
+		# If we get this far then the extract succeeded.
+		eval `v.info -t map="${TMP_VECT_NODES}" layer=1`
+		check_error "Failed to get info for temporary layer with input points."
+		if [ ${points} -lt 1 ] ; then
+			exit_error "No points in chosen layer of input vector map."
+		fi
+	fi
+	
+	# If we get this far, then we can be sure, that:
+	# - we have an input map (currently in TMP_VECT_NODES)
+	# - the input map contains only points
+	# - all attribute data is linked to layer 1
+		
+	# Check that "size" attribute (if given) is present and valid.
+	if [ -n "${GIS_OPT_SIZE}" ] ; then
+		# Check if attribute exists
+		result=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -c "|${GIS_OPT_SIZE}"`
+		if [ ${result} -lt 1 ] ; then
+			exit_error "Attribute '${GIS_OPT_SIZE}' not found in input vector map (case sensitive check)."
+		fi
+		# Check if attribute type is numeric
+		int=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -i -c "INTEGER|"`
+		dbl=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -i -c "PRECISION|"`
+		if [ ${int} -lt 1 ] && [ ${dbl} -lt 1 ] ; then
+			exit_error "Attribute '${GIS_OPT_SIZE}' in input vector map is not of numeric type."
+		fi
+		# - must contain data for each feature (=${points})
+		num_vals=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+		check_error "Key field (option 'key=') is not valid."
+		if [ ${points} -ne ${num_vals} ] ; then
+			exit_error "Number of 'size' fields with data (option 'size=') does not match number of input points (${num_keys} vs ${num_vals})."
+		fi
+		# Check that "size" attribute field name does not clash with a reserved field name
+		if [ "${GIS_OPT_SIZE}" = "${FLD_COORD_X}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_COORD_X}'."
+		fi
+		if [ "${GIS_OPT_SIZE}" = "${FLD_COORD_Y}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_COORD_Y}'."
+		fi
+		if [ "${GIS_OPT_SIZE}" = "${FLD_COORD_Z}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_COORD_Z}'."
+		fi
+		if [ "${GIS_OPT_SIZE}" = "${FLD_LINKS}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_LINKS}'."
+		fi
+		if [ "${GIS_OPT_SIZE}" = "${FLD_LEN_SUM}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_LEN_SUM}'."
+		fi
+		if [ "${GIS_OPT_SIZE}" = "${FLD_LEN_AVG}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_LEN_AVG}'."
+		fi
+		if [ "${GIS_OPT_SIZE}" = "${FLD_COST_SUM}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_COST_SUM}'."
+		fi
+		if [ "${GIS_OPT_SIZE}" = "${FLD_COST_AVG}" ] ; then
+			exit_error "Attribute for 'size' must not have reserved field name '${FLD_COST_AVG}'."
+		fi
+		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+			if [ "${GIS_OPT_SIZE}" = "${FLD_NSTRENGTH}" ] ; then
+				exit_error "Attribute for 'size' must not have reserved field name '${FLD_NSTRENGTH}'."
+			fi
+		fi
+	fi
+		
+	# Warn if reserved field names are present in input map's attribute table
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_COORD_X}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_COORD_X}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_COORD_Y}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_COORD_Y}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_COORD_Z}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_COORD_Z}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_LINKS}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_LINKS}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_LEN_SUM}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_LEN_SUM}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_LEN_AVG}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_LEN_AVG}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_COST_SUM}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_LEN_SUM}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_COST_AVG}"`
+	if [ -n "${fld}" ] ; then
+		g.message -w "Found attribute with reserved field name '${FLD_COST_AVG}' in input points map."
+	fi
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${FLD_NSTRENGTH}"`
+	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+		if [ -n "${fld}" ] ; then
+			g.message -w "Found attribute with reserved field name '${FLD_NSTRENGTH}' in input points map."
+		fi
+	fi
+	
+	# Success? Then the map with extracted nodes is now our main nodes input map!
+	GIS_OPT_INPUT="${TMP_VECT_NODES}"
+	
+	# Reduce points to those in current region (either cost raster or '-r' flag)?
+	if [ -n "${GIS_OPT_COSTMAP}" ] || [ ${GIS_FLAG_R} -eq 1 ] ; then
+		# Get bbox polygon of current region.
+		v.in.region output="${TMP_VECT_REGION}" --quiet --overwrite
+		check_error "Failed to create bounding box of current region."
+		# Reduce nodes to those within current region.
+		v.select ainput="${TMP_VECT_NODES}" alayer="1" atype="point" binput="${TMP_VECT_REGION}" blayer="1" btype="area" operator="overlap" output="${TMP_VECT_SELECT}" --overwrite --quiet
+		check_error "Failed to extract input points in current region."
+		points_before=${points}
+		# If we get this far then the selection succeeded.
+		eval `v.info -t map="${TMP_VECT_SELECT}" layer=1`
+		check_error "Failed to get info for temporary layer with selected input points (points within current region)."
+		if [ -n "${GIS_OPT_COSTMAP}" ] && [ ${GIS_FLAG_R} -eq 0 ] ; then
+			# Warn if input points were reduced due to current cost map raster's regional extent!
+			if [ ${points_before} -ne ${points} ] ; then
+				g.message -w "Cost map region limits: input points reduced to ${points} (from ${points_before})."
+			fi
+		else
+			if [ ${points_before} -ne ${points} ] ; then
+				g.message -i "Input points reduced to ${points} (from ${points_before}) in current region."
+			fi
+		fi
+		# Success? Then this filtered map is now our nodes input map!
+		GIS_OPT_INPUT="${TMP_VECT_SELECT}"
+	fi
+	
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		# Cost raster? Exit if only "null" cells present in current region!
+		g.message -i "Checking cost raster values..."
+		result=`r.stats input="${GIS_OPT_COSTMAP}" -N nsteps=1 --quiet`
+		check_error "Failed to read cell values from cost raster map."
+		if [ -z "${result}" ] ; then
+			exit_error "Input cost raster map contains only NULL cells in current region."
+		fi
+	fi	
+	
+	# Check if there are at least two points left now!
+	eval `v.info -t map="${GIS_OPT_INPUT}" layer=1`
+	check_error "Failed to get info for temporary layer with input points."
+	if [ ${points} -lt 1 ] ; then
+		exit_error "No points in chosen layer of input vector map (after 'cats=')."
+	fi
+	if [ ${points} -lt 2 ] ; then
+		exit_error "Minimum of 2 points not available in input. Check 'cats=' and 'where=' options; if using a cost raster: check region."
+	fi
+	
+	# ATTENTION: ORDER MATTERS!
+	# After this point, we run all validity checks for which it is
+	# sufficient that they are passed by the *filtered* (if applicable) set of points.
+	# This reduces overhead for slow validation ops on filtered input points.
+	#
+	
+	# Check that 'key' field is valid:
+	g.message -i "Checking key (and label) field validity..."
+	# - must exist (case sensitive, white space possible)
+	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "|${GIS_OPT_KEY}" -o`
+	if [ "${result}" != "|${GIS_OPT_KEY}" ] ; then
+		exit_error "Chosen 'key' field '${GIS_OPT_KEY}' does not exist in input points map (option 'key=')."
+	fi
+	# - must contain data for each feature (=${points})
+	num_keys=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+	check_error "Key field (option 'key=') is not valid."
+	if [ ${points} -ne ${num_keys} ] ; then
+		exit_error "Number of primary key records (option 'key=') does not match number of input points (${num_keys} vs ${num_points})."
+	fi
+	# - must be of type, integer, double or text
+	KEY_TYPE="UNKNOWN"
+	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "INTEGER|${GIS_OPT_KEY}" -w -c`
+	if [ ${result} -eq 1 ] ; then
+		KEY_TYPE="INTEGER"
+	fi
+	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${GIS_OPT_KEY}" -w -c`
+	if [ ${result} -eq 1 ] ; then
+		KEY_TYPE="DOUBLE PRECISION"
+	fi
+	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "CHARACTER|${GIS_OPT_KEY}" -w -c`
+	if [ ${result} -eq 1 ] ; then
+		KEY_TYPE="CHARACTER"
+	fi
+	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "TEXT|${GIS_OPT_KEY}" -w -c`
+	if [ ${result} -eq 1 ] ; then
+		KEY_TYPE="TEXT"
+	fi
+	if [ "${KEY_TYPE}" = "UNKNOWN" ] ; then
+		exit_error "Unable to determine type of 'key' field in input points layer (option 'key=')."
+	fi	
+	# - must be unique for each feature
+	KEYS=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$'`
+	for key in ${KEYS} ; do
+		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+			num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}='$key'" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+		else
+			num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}=$key" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+		fi
+		if [ ${num_matches} -eq 0 ] ; then
+			exit_error "Primary key value '$key' not found: Please ensure that primary key values do not contain whitespace (option 'key=')."
+		fi
+		if [ ${num_matches} -ne 1 ] ; then
+			exit_error "Primary key value '$key' is not unique, with ${num_matches} occurrences in (filtered) input data (option 'key=')."
+		fi
+	done
+	# - must not be the same as GRASS primary key for this layer	
+	cmd=`v.info -e map="${GIS_OPT_INPUT}"`	
+	check_error "Failed to query (filtered) input layer for extended metadata."
+	eval_ws_safe "${cmd}" "attribute_primary_key"
+	if [ "${EVAL_RESULT}" = "${GIS_OPT_KEY}" ] ; then
+		exit_error "Name of 'key' field ('$key') is the same as GRASS primary key of input points layer (option 'key=')."
+	fi
+
+	# Set/validate 'label' field.
+	if [ -n "${GIS_OPT_LABEL}" ] && [ "${GIS_OPT_LABEL}" != "${GIS_OPT_KEY}" ] ; then		
+		# Check that 'label' field is valid:
+		# - must exist (case sensitive, white space possible)
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "|${GIS_OPT_LABEL}" -o`
+		if [ "${result}" != "|${GIS_OPT_LABEL}" ] ; then
+			exit_error "Chosen 'label' field '${GIS_OPT_LABEL}' does not exist in input points map (option 'label=')."
+		fi
+		# - must contain data for each feature (=${points})
+		num_keys=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+		check_error "Label field (option 'label=') is not valid."
+		if [ ${points} -ne ${num_keys} ] ; then
+			exit_error "Number of label field records (option 'label=') does not match number of input points (${num_keys} vs ${num_points})."
+		fi
+		# - must be of type, integer, double or text
+		LABEL_TYPE="UNKNOWN"
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "INTEGER|${GIS_OPT_LABEL}" -w -c`
+		if [ ${result} -eq 1 ] ; then
+			LABEL_TYPE="INTEGER"
+		fi
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${GIS_OPT_LABEL}" -w -c`
+		if [ ${result} -eq 1 ] ; then
+			LABEL_TYPE="DOUBLE PRECISION"
+		fi
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "CHARACTER|${GIS_OPT_LABEL}" -w -c`
+		if [ ${result} -eq 1 ] ; then
+			LABEL_TYPE="CHARACTER"
+		fi
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "TEXT|${GIS_OPT_LABEL}" -w -c`
+		if [ ${result} -eq 1 ] ; then
+			LABEL_TYPE="TEXT"
+		fi
+		if [ "${LABEL_TYPE}" = "UNKNOWN" ] ; then
+			exit_error "Unable to determine type of 'label' field in input points layer (option 'label=')."
+		fi
+		# - should be unique for each feature with valid primary key
+		OLD_IFS="$IFS"
+		IFS=$(echo -en "\n\b")
+		KEYS=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$'`
+		for key in ${KEYS} ; do
+			if [ "${LABEL_TYPE}" = "CHARACTER" ] || [ "${LABEL_TYPE}" = "TEXT" ] ; then
+				num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}='$key'" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+			else
+				num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}=$key" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+			fi
+			if [ ${num_matches} -eq 0 ] ; then
+				exit_error "Label value '$key' not valid: Please ensure that labels do not contain newline characters (option 'label=')."
+			fi
+			if [ ${num_matches} -ne 1 ] ; then
+				g.message -w "Label field value '$key' is not unique, with ${num_matches} occurrences in (filtered) input data (option 'label=')."
+			fi
+		done
+		IFS="$OLD_IFS"
+		# - must not be the same as GRASS primary key for this layer	
+		cmd=`v.info -e map="${GIS_OPT_INPUT}"`	
+		check_error "Failed to query (filtered) input layer for extended metadata."
+		eval_ws_safe "${cmd}" "attribute_primary_key"
+		if [ "${EVAL_RESULT}" = "${GIS_OPT_LABEL}" ] ; then
+			exit_error "Name of 'label' field ('$key') is the same as GRASS primary key of input points layer (option 'label=')."
+		fi
+	else
+		# Default: label field = key field
+		GIS_OPT_LABEL="${GIS_OPT_KEY}"
+		LABEL_TYPE="${KEY_TYPE}"
+	fi
+
+	# Model 'attsim': check that all fields exist in input
+	if [ -n "${GIS_OPT_ATTRIBUTES}" ] ; then
+		cmd=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_ATTRIBUTES}" -c --quiet`
+		check_error "Not all attribute fields specified by 'attributes=' exist in input points map."
+	fi
+	
+	# Run points topology test?
+	grep_is_zero "${GIS_OPT_THRESHOLD}"
+	if [ -n "${GREP_VALUE}" ] ; then
+		# Run topological test for input points using v.distance and a user-definable threshold.
+		g.message -i "Checking input points (${points}) for duplicates:"
+		get_primary_keys "${GIS_OPT_INPUT}"
+		step=1
+		for key in $PRIMARY_KEYS ; do
+			get_label "${GIS_OPT_INPUT}" "$key"
+			# Retrieve the one feature with the current primary key value and extract it to a
+			# separate temp map.
+			get_where_clause "${key}"
+			v.extract input="${GIS_OPT_INPUT}" layer="1" type="point" where="${WHERE}" output="${TMP_VECT_EXTRACT}" -t --overwrite --quiet
+			check_error "Failed to extract point with primary key='${key}' from copy of input vector map."
+			# Retrieve all the other features and extract them to a separate temp map, as well.
+			get_where_clause_inv "${key}"
+			v.extract input="${GIS_OPT_INPUT}" layer="1" type="point" where="${WHERE}" output="${TMP_VECT_LINKS}" -t --overwrite --quiet
+			check_error "Failed to extract points with primary key!='${key}' from copy of input vector map."
+			# Add attribute table with column to hold 'dist' value to extracted point
+			v.db.addtable map="${TMP_VECT_EXTRACT}" columns="dist DOUBLE PRECISION" --quiet
+			check_error "Failed to add attribute table to map with extracted point with primary key='${key}'."
+			# Get minimum distance between current point and all others and store it in attribute table.
+			v.distance from="${TMP_VECT_EXTRACT}" to="${TMP_VECT_LINKS}" upload="dist" column="dist" --quiet
+			check_error "Failed to compute distance between point with primary key '${key}' and all other points of input map."
+			# Try to retrieve a distance value that is less than the threshold for duplicates.
+			result=`v.db.select map="${TMP_VECT_EXTRACT}" columns="dist" where="\"dist\"<${GIS_OPT_THRESHOLD}" -c --quiet`
+			if [ -n "${result}" ] ; then
+				exit_error "Point '${key}' (label: '${LABEL}') lies too close to another point (distance: ${result} with threshold=${GIS_OPT_THRESHOLD}) and is considered a duplicate."
+			fi
+			# Clean up to suppress useless overwrite warnings
+			g.remove type="vector" name="${TMP_VECT_EXTRACT}" -f --quiet
+			g.remove type="vector" name="${TMP_VECT_LINKS}" -f --quiet
+			# Show progress		
+			g.message -p "${step} ${points} 1"
+			step=`expr ${step} + 1`
+		done
+	fi
+
+	g.message -i "Good: Input data has passed all validity checks."
+}
+
+
+# FUNCTION
+# check_params:		Check parametrization for validity.
+#					This is done before any data is produced.
+#					So we can use g.message -e/exit here to abort without
+#					triggering any clean-ups!
+check_params () {	
+	# Options "where" and "cats=" are mutually exclusive.
+	if [ -n "${GIS_OPT_WHERE}" ] && [ -n "${GIS_OPT_CATS}" ] ; then
+		g.message -e "Options 'where=' and 'cats=' are mutually exclusive."
+		exit ${EXIT_ERROR}
+	fi
+	
+	# Option "costerr" is only meaningful if "costmap" is also provided.
+	grep_is_zero "${GIS_OPT_COSTERR}"
+	if [ -n "${GREP_VALUE}" ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -e "Option 'costerr=' requires 'costmap=', which was not provided."
+		exit ${EXIT_ERROR}
+	fi
+	# Option "costres" is only meaningful if "costerr" is also provided.
+	if [ ${GIS_OPT_COSTRES} -gt 1 ] && [ -z "${GREP_VALUE}" ] ; then		
+		g.message -e "Option 'costres=' requires 'costerr=', which was not provided."
+		exit ${EXIT_ERROR}
+	fi
+	
+	# Option "costres" is only meaningful if "costmap" is also provided.
+	if [ ${GIS_OPT_COSTRES} -gt 1 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -e "Option 'costres=' requires 'costmap=', which was not provided."
+		exit ${EXIT_ERROR}
+	fi
+	
+	# Flag "-m" is only meaningful if "costmap" is also provided.
+	if [ ${GIS_FLAG_M} -eq 1 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -e "Flag '-m(eters)' is only useful if option 'costmap=' is also provided."
+		exit ${EXIT_ERROR}
+	fi
+	
+	# Flag "-c" and options "maxdist="/"size="" are not meaningful for complete models.
+	if [ "${GIS_OPT_MODEL}" = "complete" ] ; then
+		if [ -z "${GIS_OPT_MAXDIST}" ] ; then
+			if [ ${GIS_FLAG_D} -eq 1 ] ; then
+				g.message -e "Flag '-d(elete)' does not apply to model choice 'complete', unless 'maxdist=' is also provided."
+				exit ${EXIT_ERROR}
+			fi
+			if [ ${GIS_FLAG_C} -eq 1 ] ; then
+				g.message -e "Flag '-c(onnect)' does not apply to model choice 'complete', unless 'maxdist=' is also provided."
+				exit ${EXIT_ERROR}
+			fi
+		fi
+	fi
+	
+	# TODO: Option 'initial' has a few more prerequisites:
+	# 			- must not specify any of costmap=/costerr=/costres=
+	#			  (cost-based mode will be activated automatically, if a 'cost' field
+	#			  exists in initial map
+	#
+	# Option "initial=" contradicts model choice "complete", unless "maxdist=" is also provided.
+	if [ "${GIS_OPT_MODEL}" = "complete" ] ; then
+		if [ -n "${GIS_OPT_INITIAL}" ] && [ -z "${GIS_OPT_MAXDIST}" ] ; then
+			g.message -e "Option 'initial=' conflicts with model choice 'complete'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	
+		# Flag "-c" and options "maxdist=, size= and costmap=" are not meaningful for 'attsim' models.
+	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then	
+		if [ ${GIS_FLAG_C} -eq 1 ] ; then
+			g.message -e "Flag '-c(onnect)' does not apply to model choice 'attsim'."
+			exit ${EXIT_ERROR}
+		fi
+		if [ -n "${GIS_OPT_MAXDIST}" ] ; then
+			g.message -e "Option 'maxdist=' does not apply to model choice 'attsim'."
+			exit ${EXIT_ERROR}
+		fi
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			g.message -e "Option 'costmap=' does not apply to model choice 'attsim'."
+			exit ${EXIT_ERROR}
+		fi
+	fi	
+	
+	# Option "size=" applies only to XTENT and NN
+	if [ -n "${GIS_OPT_SIZE}" ] ; then
+		if [ "${GIS_OPT_MODEL}" != "xtent" ] && [ "${GIS_OPT_MODEL}" != "nn" ] ; then
+			g.message -e "Option 'size=' applies only to model choices 'nn' and 'xtent'."
+			exit ${EXIT_ERROR}
+		else
+			if [ -n "${GIS_OPT_NEIGHBORS}" ] && [ "${GIS_OPT_MODEL}" = "nn" ] ; then
+				# "size=" conflicts with "neighbors="
+				g.message -e "Model choice 'nn' requires either 'size=' or 'neighbors='."
+				exit ${EXIT_ERROR}
+			fi
+		fi
+	fi
+	
+	# Options A and K only apply to model XTENT
+	if [ "${GIS_OPT_MODEL}" != "xtent" ] ; then		
+		if [ -n "${GIS_OPT_A}" ] ; then
+			g.message -e "Option 'a=' applies only to model choice 'xtent'."
+			exit ${EXIT_ERROR}
+		fi
+		if [ -n "${GIS_OPT_K}" ] ; then
+			g.message -e "Option 'k=' applies only to model choice 'xtent'."
+			exit ${EXIT_ERROR}
+		fi
+	else
+		# Options A and K must be provided for model choice XTENT		
+		if [ -z "${GIS_OPT_A}" ] ; then
+			g.message -e "Option 'a=' must be provided for model choice 'xtent'."
+			exit ${EXIT_ERROR}
+		fi
+		if [ -z "${GIS_OPT_K}" ] ; then
+			g.message -e "Option 'k=' must be provided for model choice 'xtent'."
+			exit ${EXIT_ERROR}
+		fi
+	fi	
+	
+	# Option ATTRIBUTES only applies to model ATTSIM
+	if [ "${GIS_OPT_MODEL}" != "attsim" ] ; then
+		if [ -n "${GIS_OPT_ATTRIBUTES}" ] ; then
+			g.message -e "Option 'attributes=' applies only to model choice 'attsim'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	
+	# Option NEIGHBORS only applies to model NN
+	if [ "${GIS_OPT_MODEL}" != "nn" ] ; then
+		if [ -n "${GIS_OPT_NEIGHBORS}" ] ; then
+			g.message -e "Option 'neighbors=' applies only to model choice 'nn'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	
+	# If we got to here, then there is no inconsistency in the parametrization.
+	# Now check individual model parameters for validity, depending on model choice!	
+	
+	# ATTRIBUTES
+	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+		# Option ATTRIBUTES must be provided for model choice ATTSIM
+		if [ -z "${GIS_OPT_ATTRIBUTES}" ] ; then
+			g.message -e "Option 'attributes=' must be provided for model choice 'attsim'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	
+	# NEIGHBORS
+	if [ "${GIS_OPT_MODEL}" = "nn" ] ; then
+		# nn: NEIGHBORS or SIZE must be provided
+		if [ -z "${GIS_OPT_NEIGHBORS}" ] && [ -z "${GIS_OPT_SIZE}" ] ; then
+			g.message -e "Either option 'neighbors=' or 'size=' must be provided for model choice 'nn'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	if [ -n "${GIS_OPT_NEIGHBORS}" ] ; then						
+		# if provided, then NEIGHBORS must be > 0.
+		grep_is_positive ${GIS_OPT_NEIGHBORS}
+		if [ -z "${GREP_VALUE}" ] ; then
+			g.message -e "Option 'neighbors=' must be a positive number larger than '0'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	
+	# MAXDIST
+	if [ -n "${GIS_OPT_MAXDIST}" ] ; then						
+		# if provided, then MAXDIST must be > 0.
+		grep_is_positive ${GIS_OPT_MAXDIST}
+		if [ -z "${GREP_VALUE}" ] ; then
+			g.message -e "Option 'maxdist=' must be a positive number larger than '0'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	
+	# SIZE
+	if [ "${GIS_OPT_MODEL}" = "xtent" ] ; then
+		# Option "size=" must be provided for XTENT
+		if [ -z "${GIS_OPT_SIZE}" ] ; then
+			g.message -e "Option 'size=' must be provided for model choice 'xtent'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+		
+	# K (XTENT)
+	if [ "${GIS_OPT_MODEL}" = "xtent" ] ; then
+		# Must be a positive number
+		grep_is_positive ${GIS_OPT_K}
+		if [ -z "${GREP_VALUE}" ] ; then
+			g.message -e "Option 'k=' must be a positive number larger than '0'."
+			exit ${EXIT_ERROR}
+		fi
+	fi
+	
+	# AVG (XTENT)
+	if [ "${GIS_OPT_MODEL}" = "xtent" ] ; then
+		# Default is 'mean'
+		if [ -z "${GIS_OPT_AVG}" ] ; then
+			GIS_OPT_AVG="mean"
+		fi
+	fi
+
+}
+
+
+# FUNCTION
+# preprocess: Perform some input data manipulation before the actual network
+#             reconstruction process starts.
+#             ATTENTION:
+#             All of these must have run successfully prior to preprocess():
+#             - check_setup
+#             - check_params
+#             - check_input
+#             - check_environment
+#             ... because only then we can rely on ${GIS_OPT_INPUT} being a valid
+#                 COPY of the original points input map!
+#
+preprocess () {
+	# Drop fields with reserved names from copy of input points map (if necessary)
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_COORD_X}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_COORD_X}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_COORD_X}' from copy of input points map."
+	fi
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_COORD_Y}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_COORD_Y}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_COORD_Y}' from copy of input points map."
+	fi
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_COORD_Z}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_COORD_Z}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_COORD_Z}' from copy of input points map."
+	fi
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_LINKS}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_LINKS}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_LINKS}' from copy of input points map."
+	fi
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_LEN_SUM}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_LEN_SUM}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_LEN_SUM}' from copy of input points map."
+	fi
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_LEN_AVG}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_LEN_AVG}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_LEN_AVG}' from copy of input points map."
+	fi
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_COST_SUM}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_COST_SUM}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_COST_SUM}' from copy of input points map."
+	fi
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_COST_AVG}"`
+	if [ -n "${fld}" ] ; then
+		v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_COST_AVG}" --quiet
+		check_error "Failed to remove reserved attribute '${FLD_COST_AVG}' from copy of input points map."
+	fi
+	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+		fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${FLD_NSTRENGTH}"`
+		if [ -n "${fld}" ] ; then
+			v.db.dropcolumn layer="1" map="${GIS_OPT_INPUT}" columns="${FLD_NSTRENGTH}" --quiet
+			check_error "Failed to remove reserved attribute '${FLD_NSTRENGTH}' from copy of input points map."
+		fi
+	fi
+	
+	# Add coordinate fields to copy of input points map
+	v.to.db map="${GIS_OPT_INPUT}" layer="1" option="coor" columns="${FLD_COORD_X},${FLD_COORD_Y},${FLD_COORD_Z}" --o --quiet
+	check_error "Failed to add coordinate attribute fields to copy of input points map."
+	# Add links counter field to copy of input points map
+	v.db.addcolumn map="${GIS_OPT_INPUT}" layer="1" columns="${FLD_LINKS} INTEGER"
+	check_error "Failed to add attribute field 'links' (integer) to copy of input points map."
+	
+	# Increase resolution for sampling input cost surface?
+	if [ ${GIS_OPT_COSTRES} -gt 1 ] ; then
+		#g.message -i "Resampling cost raster to $GIS_OPT_COSTRES times original resolution..."
+		# Store original region
+		g.region save="${TMP_GEN_REGION_ORG}"
+		check_error "Failed to store original GRASS region prior to increasing resolution."
+		# Increase current resolution:
+		awk_calc "${nsres}/${GIS_OPT_COSTRES}"
+		new_nsres="$AWK_VALUE"
+		awk_calc "${ewres}/${GIS_OPT_COSTRES}"
+		new_ewres="$AWK_VALUE"		
+		g.region nsres="${new_nsres}" ewres="${new_ewres}"	
+		check_error "Failed to increase GRASS region resolution."
+	fi
+	
+	# Add random error (noise) to cost surface?
+	grep_is_zero "${GIS_OPT_COSTERR}"
+	if [ -n "${GREP_VALUE}" ] ; then
+		 # Create random surface in range [0;200]:
+		 g.message -i "Creating random error/noise raster..."
+		 r.random.surface output="${TMP_RAST_COST_ERR}" distance="0" high="200" --overwrite
+		 check_error "Failed to create random error/noise raster (option 'costerr=')."
+		 # Add error and compress to normalized range +/-100% with e.g. PERC=0.2 for a +/-20% error margin:
+		 g.message -i "Normalizing random error/noise raster..."
+		 r.mapcalc expr="${TMP_RAST_COST_NRM}=( ${GIS_OPT_COSTMAP} * (1.0 + (100.0-${TMP_RAST_COST_ERR}) / (10000.0/${GIS_OPT_COSTERR})) )" --overwrite
+		 check_error "Failed to create normalized random error/noise raster (option 'costerr=')."
+		 # Assign cost surface with error as new cost surface!
+		 GIS_OPT_COSTMAP="${TMP_RAST_COST_NRM}"
+	fi
+	
+	# Create default version of output nodes map by copying (filtered) input map
+	g.copy vector="${GIS_OPT_INPUT},${GIS_OPT_NODES}" --overwrite --quiet
+	check_error "Failed to copy input map to initial output nodes map '${GIS_OPT_NODES}'."
+}
+
+
+# FUNCTION
+# links_adjust_nodes: Makes sure that the start and end nodes of each network link are
+# spatially adjusted to lie exactly at the locations of the original input points that
+# mark the intended start and end of each link. This is necessary if the links are
+# computed as least cost paths: GRASS 7's 'r.path' aligns the first and last vertices
+# of each path with the current region's cell system, not with the original start/end
+# points!
+#
+# The only argument to this function ($1) is the name of the map that holds
+# the network links.
+links_adjust_nodes ()
+{
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		# Temporary attribute field names
+		fld_key="cat"
+		fld_startxold="${FLD_COORD_X}"
+		fld_startyold="${FLD_COORD_Y}"
+		fld_endxold="${FLD_COORD_X}"
+		fld_endyold="${FLD_COORD_Y}"
+		fld_startxnew="startxnew"
+		fld_startynew="startynew"
+		fld_endxnew="endxnew"
+		fld_endynew="endynew"
+		# The start/stop nodes of each path produced by 'r.path' are no longer
+		# located exactly at the input points. We move/snap them to correct that
+		# problem and retain a topologically correct network of nodes that lie
+		# exactly on the first and last vertex of each link!
+		# Store original starting point coordinates.
+		endxold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${fld_endxold}"`
+		check_error "Failed to query temporary nodes map for stored coordinates (field '${fld_endxold}')."
+		endyold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${fld_endyold}"`
+		check_error "Failed to query temporary nodes map for stored coordinates (field '${fld_endyold}')."
+		# Attach attribute table to links map of this iteration, so we can
+		# easily loop over all links, fixing each one in turn:	
+		v.db.addtable map="$1" layer="1" key="${fld_key}" --quiet
+		check_error "Failed to attach attribute table to temporary links map."
+		#DEBUG: Enable additional columns to store old node coordinates in attribute table
+		  #v.db.addcolumn map="$1" layer="1" columns="${fld_startxold} DOUBLE PRECISION, ${fld_startyold} DOUBLE PRECISION"
+		  #v.db.addcolumn map="$1" layer="1" columns="${fld_endxold} DOUBLE PRECISION, ${fld_endyold} DOUBLE PRECISION"
+		#END DEBUG
+		# Upload current node coordinates to each link's table:
+		v.to.db map="$1" layer="1" type="line" option="start" columns="${fld_startxnew},${fld_startynew}" --quiet
+		check_error "Failed to upload start node coordinates to temporary links map."
+		v.to.db map="$1" layer="1" type="line" option="end" columns="${fld_endxnew},${fld_endynew}" --quiet
+		check_error "Failed to upload end node coordinates to temporary links map."
+		step_inner=1
+		cat_inner=1				
+		while [ ${step_inner} -lt ${NUM_LINKS} ] ; do
+			#echo "${fld_key}=${cat_inner}"
+			val=`v.db.select -c map="$1" column="${fld_key}" where="${fld_key}=${cat_inner}"`
+			check_error "Failed to query attribute table of partial links map (iteration ${step_inner})."
+			if [ -n "${val}" ] ; then # Feature exists! Process it:					
+				# Upload original node coordinates to current link:
+				#DEBUG: Store coordinates of original end node in attribute table
+				  #echo "Feature ${step_inner} has ${fld_key}=${cat_inner}."
+				  #v.db.update map="$1" layer="1" column="${fld_endxold}" value="${endxold}" where="${fld_key}=${cat_inner}" --quiet
+				  #v.db.update map="$1" layer="1" column="${fld_endyold}" value="${endyold}" where="${fld_key}=${cat_inner}" --quiet
+				#END DEBUG
+				startxold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${fld_startxold}" where="${fld_key}=${cat_inner}"`
+				check_error "Failed to query temporary nodes map for stored coordinates (field '${fld_startxold}')."
+				startyold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${fld_startyold}" where="${fld_key}=${cat_inner}"`
+				check_error "Failed to query temporary nodes map for stored coordinates (field '${fld_startyold}')."
+				#DEBUG: Store coordinates of original start node in attribute table
+				  #v.db.update map="$1" layer="1" column="${startxold}" value="${startxold}" where="${fld_key}=${cat_inner}" --quiet
+				  #v.db.update map="$1" layer="1" column="${startyold}" value="${startyold}" where="${fld_key}=${cat_inner}" --quiet
+				#END DEBUG
+				# Compute translation factors for moving vertices:
+				# Start vertex:
+				startxnew=`v.db.select -c map="$1" column="${fld_startxnew}" where="${fld_key}=${cat_inner}"`				
+				startynew=`v.db.select -c map="$1" column="${fld_startynew}" where="${fld_key}=${cat_inner}"`
+				d_startxnew=`echo ${startxold} ${startxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+				d_startynew=`echo ${startyold} ${startynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+				# End vertex:
+				endxnew=`v.db.select -c map="$1" column="${fld_endxnew}" where="${fld_key}=${cat_inner}"`
+				endynew=`v.db.select -c map="$1" column="${fld_endynew}" where="${fld_key}=${cat_inner}"`
+				d_endxnew=`echo ${endxold} ${endxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+				d_endynew=`echo ${endyold} ${endynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+				#DEBUG: Show node coordinates as stored in attribute table of current link 
+				  #v.db.select map="$1" layer="1" where="${fld_key}=${cat_inner}"
+				#END DEBUG
+				#DEBUG: Print deltas.
+				  #echo "  d_startxnew=${d_startxnew}"
+				  #echo "  d_startynew=${d_startynew}"
+				  #echo "  d_endxnew=${d_endxnew}"
+				  #echo "  d_endynew=${d_endynew}"
+				#END DEBUG
+				# Use v.edit to correct node positions now!
+				# TODO: set threshold="0.00000001"
+				v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${startxnew},${startynew}" move="${d_startxnew},${d_startynew},0" cats="${cat_inner}" --quiet
+				v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${endxnew},${endynew}" move="${d_endxnew},${d_endynew},0" cats="${cat_inner}" --quiet
+				# Move on to next link:
+				step_inner=`expr ${step_inner} + 1`
+			fi
+			# Try next category value:
+			cat_inner=`expr ${cat_inner} + 1`
+			#TODO: Guard against endless loop
+			#if [ ${cat_inner -gt ${MAXCAT} ] ; then # ERROR! Category index out of bounds!
+			#ERROR: ABORT!
+			#fi					
+		done				
+		# Since we extract one node per run, we need to do one pass less
+		# through the inner loop each time we look at another set of links.
+		NUM_LINKS=`expr ${NUM_LINKS} - 1`
+		# Drop attribute table from temporary links map.				
+		v.db.droptable map="$1" layer="1" -f --quiet		
+	fi
+}
+
+
+# FUNCTION
+# links_droprow:	DELETES one row from the LINKS output vector map in 'GIS_OPT_LINKS'.
+#
+#					This function MUST BE CALLED after running any model that reduces
+#					the number of network links in the output map! 
+#		
+#					Reason: GRASS GIS treats attribute tables as data structures that are
+#					completely separate from the vector geometries. Geometries are linked
+#					to attribute tables only by a primary key column (normally: 'cat').
+#					However, removing the primary key from a geometry will leave the
+#					original table row untouched!
+#
+#					So in order to reduce the attribute table to only those rows that
+#					are (still; after links reduction) attached to geometries, we
+#					explicitely call v.db.droprow on the affected primary keys.
+#					This function works on only one primary key at a time and will each
+#					time generate a new temporary vector map. The caller must take care
+#					to copy this temporary map back to the original output map!
+#
+#					This function reads only one argument:
+#
+#					$1: GRASS cat value of table row to delete
+#  					
+#					This function will modify ${GIS_OPT_LINKS}!!!
+#					After it has run, GIS_OPT_LINKS will contain the name of a new vector map,
+#					with one row dropped from the attribute table.
+links_droprow () {
+	# Choose new (temp) name for links output map
+	droprow_in="${GIS_OPT_LINKS}"
+	if [ "${droprow_in}" = "${TMP_VECT_LINKS_DROPROW_1}" ] ; then
+		droprow_out="${TMP_VECT_LINKS_DROPROW_2}"
+	else
+		droprow_out="${TMP_VECT_LINKS_DROPROW_1}"
+	fi
+	# Remove existing vector map to keep v.db.droprow quiet:
+	found=`g.list type="vector" | ${GREP} -c "${droprow_out}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="vector" name="${droprow_out}" -f --q
+	fi
+	# Call droprow on ${droprow_in}:
+	v.db.droprow input="${droprow_in}" output="${droprow_out}" where="cat=$1" --overwrite --quiet
+	check_error "Failed to drop attribute table row with cat='$1' from links output map."	
+	# Now set GIS_OPT_LINKS to new map with one dropped attribute!
+	GIS_OPT_LINKS="${droprow_out}"
+}
+
+
+# FUNCTION
+# nodes_droprow:	DELETES one row from the NODES output vector map in 'GIS_OPT_NODES'.
+#
+#					See links_droprow() for details!
+#
+#					This function MUST BE CALLED after running any model that reduces
+#					the number of network nodes in the output map! 	
+#
+#					This function reads only one argument:
+#
+#					$1: GRASS cat value of table row to delete
+#  					
+#					This function will modify ${GIS_OPT_NODES}!!!
+#					After it has run, GIS_OPT_NODES will contain the name of a new vector map,
+#					with one row dropped from the attribute table.
+nodes_droprow () {
+	# Choose new (temp) name for links output map
+	droprow_in="${GIS_OPT_NODES}"
+	if [ "${droprow_in}" = "${TMP_VECT_NODES_DROPROW_1}" ] ; then
+		droprow_out="${TMP_VECT_NODES_DROPROW_2}"
+	else
+		droprow_out="${TMP_VECT_NODES_DROPROW_1}"
+	fi
+	# Remove existing vector map to keep v.db.droprow quiet:
+	found=`g.list type="vector" | ${GREP} -c "${droprow_out}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="vector" name="${droprow_out}" -f --q
+	fi
+	# Call droprow on ${droprow_in}:
+	v.db.droprow input="${droprow_in}" output="${droprow_out}" where="cat=$1" --overwrite --quiet
+	check_error "Failed to drop attribute table row with cat='$1' from nodes output map."	
+	# Now set GIS_OPT_NODES to new map with one dropped attribute!
+	GIS_OPT_NODES="${droprow_out}"
+}
+
+
+# FUNCTION
+# stats_complte: 	Computes and statistics for unreduced network (to be printed later).
+#					MUST be called before any function to reduce the network is called,
+#					since these may rely on the stats computed here!
+#
+stats_unreduced () {
+	# Get global statistics for unreduced network.
+	# We will output these at the end of the program run!
+	g.message -i "Computing statistics for unreduced network:"
+	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
+	get_grass_cats "${GIS_OPT_LINKS}"
+	total_cost=0
+	total_len=0
+	# min/max initially empty strings
+	min_len=""
+	max_len=""
+	min_cost=""
+	max_cost=""
+	step=1 # This one is just for progress reporting.
+	# Compute simple metrics
+	for cat in $GRASS_CATS ; do
+		len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to query field '${fld_length_m}' from links output layer (cat='${cat}')"
+		awk_min "${min_len}" "${len}"
+		min_len="${AWK_VALUE}"
+		awk_max "${max_len}" "${len}"
+		max_len="${AWK_VALUE}"
+		awk_calc "$total_len+$len"
+		total_len=${AWK_VALUE}
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+			check_error "Failed to query field '${fld_cost}' from links output layer (cat='${cat}')"
+			awk_min "${min_cost}" "${cost}"
+			min_cost="${AWK_VALUE}"
+			awk_max "${max_cost}" "${cost}"
+			max_cost="${AWK_VALUE}"			
+			awk_calc "$total_cost+$cost"
+			total_cost=${AWK_VALUE}
+		fi
+		g.message -p "${step} ${lines} 1"
+		step=`expr ${step} + 1`
+	done	
+	net_nodes_undreduced=${NUM_INPUT_NODES}
+	net_links_unreduced=${lines}
+	net_len_unreduced=${total_len}
+	net_len_min_unreduced="${min_len}"
+	net_len_max_unreduced="${max_len}"
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		net_cost_unreduced=${total_cost}
+		net_cost_min_unreduced="${min_cost}"
+		net_cost_max_unreduced="${max_cost}"
+	fi
+	# Compute means
+	awk_calc "(($lines*2)/$NUM_INPUT_NODES)" # 1 link = 2 connections (one at each end!)
+	net_cons_mean_unreduced=${AWK_VALUE}
+	awk_calc "$total_len/$lines"
+	net_len_mean_unreduced=${AWK_VALUE}
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		awk_calc "$total_cost/$lines"
+		net_cost_mean_unreduced=${AWK_VALUE}
+	fi
+	# Compute median(s)
+	lengths=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" -c`
+	check_error "Failed to query field '${fld_length_m}' from links output layer (${GIS_OPT_LINKS})."
+	awk_median "$lengths"	
+	if [ -z "${AWK_VALUE}" ] ; then
+		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
+	fi
+	net_len_median_unreduced=${AWK_VALUE}
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" -c`
+		check_error "Failed to query field '${fld_cost}' from links output layer (${GIS_OPT_LINKS})."
+		awk_median "$costs"	
+		if [ -z "${AWK_VALUE}" ] ; then
+			exit_error "No cost data found in attribute table of links output layer (${GIS_OPT_LINKS})."
+		fi
+		net_cost_median_unreduced=${AWK_VALUE}
+	fi
+}
+
+
+# FUNCTION
+# model_complete: Create a network where nodes are connected if they have common
+#				   attribute values.
+model_attsim () {
+	# Check_input() has already made sure that the fields listed in 'attributes=' all exist!
+	g.message -i "Reducing network by connectivity model 'ATTSIM':"	
+	# Add additional field 'strength' to output links map.
+	v.db.addcolumn map="${GIS_OPT_LINKS}" layer="1" columns="\"${fld_strength}\" INTEGER" --quiet
+	check_error "Failed to add attribute field '${fld_strength}' (type 'INTEGER') to links output vector map."
+	# Set strength to '0' for all links by default:
+	v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_strength}" value="0" --quiet
+	check_error "Failed to initalize attribute field '${fld_strength}' to '0' for all links in output vector map."
+	# Step through all (filtered) input nodes:
+	get_primary_keys "${GIS_OPT_INPUT}"
+	step=1 # This one is just for progress reporting.
+	for key in $PRIMARY_KEYS ; do
+		# Step through attribute all fields:
+		#echo "[$key] FIELDS:"
+		OLD_IFS="$IFS"
+		IFS=","
+		for fld in ${GIS_OPT_ATTRIBUTES} ; do				
+			# Get field type
+			fld_type="UNKNOWN"
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "INTEGER|${fld}" -w -c`
+			if [ ${result} -eq 1 ] ; then
+				fld_type="INTEGER"
+			fi
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${fld}" -w -c`
+			if [ ${result} -eq 1 ] ; then
+				fld_type="DOUBLE PRECISION"
+			fi
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "CHARACTER|${fld}" -w -c`
+			if [ ${result} -eq 1 ] ; then
+				fld_type="CHARACTER"
+			fi
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "TEXT|${fld}" -w -c`
+			if [ ${result} -eq 1 ] ; then
+				fld_type="TEXT"
+			fi
+			if [ "${fld_type}" = "UNKNOWN" ] ; then
+				exit_error "Unable to determine type of field '${fld}' in input points layer (option 'attributes=')."
+			fi
+			#echo "  $fld ($fld_type)"			
+			# Build database query statement: Retrieve primary keys of all other nodes
+			# that have the same value for the current field:
+			get_where_clause "${key}"
+			val=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${WHERE}" columns="${fld}" -c --quiet`
+			check_error "Failed to query attribute field '${fld}' for key='$key' in nodes input map."
+			#echo "  val='$val'"
+			if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+				if [ "${fld_type}" = "CHARACTER" ] || [ "${fld_type}" = "TEXT" ] ; then
+					where="\"${GIS_OPT_KEY}\"!='$key' AND \"${fld}\"='$val'"
+				else
+					where="\"${GIS_OPT_KEY}\"!='$key' AND \"${fld}\"=$val"
+				fi				
+			else
+				if [ "${fld_type}" = "CHARACTER" ] || [ "${fld_type}" = "TEXT" ] ; then
+					where="\"${GIS_OPT_KEY}\"!=$key AND \"${fld}\"='$val'"
+				else
+					where="\"${GIS_OPT_KEY}\"!=$key AND \"${fld}\"=$val"
+				fi
+			fi
+			# Get list of keys of nodes with identical attributes 
+			LIST=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${where}" columns="${GIS_OPT_KEY}" -c --quiet`
+			if [ -n "${LIST}" ] ; then
+				list=""
+				IFS=$(echo -en "\n\b")
+				for item in ${LIST} ; do
+					list="$list $item"
+					# Get the one link with $item in field 'from_id' and our current primary key in 'to_id',
+					# NOT the other way around (or links don't have directionality!). That way, we make sure
+					# to only count every similarity once (from one end of the link).
+					# Then update that link with the current link strength!
+					if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+						where="\"${fld_from_id}\"='$item' AND \"${fld_to_id}\"='$key'"
+					else
+						where="\"${fld_from_id}\"=$item AND \"${fld_to_id}\"=$key"
+					fi
+					cat=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${where}" columns="cat" -c --quiet`
+					check_error "Failed to query attribute field '${fld_from_id}' for link with cat='$cat' in links output vector map."					
+					if [ -n "${cat}" ] ; then
+						# Read strength of current link, increase by '1', update field:
+						#echo "CAT=$cat"
+						strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="cat=${cat}" columns="${fld_strength}" -c --quiet`
+						check_error "Failed to read from attribute field '${fld_strength}' of link with cat='$cat' in output vector map."
+						strength=`expr ${strength} + 1`
+						v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_strength}" value="${strength}" where="cat=${cat}" --quiet
+						check_error "Failed to update attribute field '${fld_strength}' to '${strength}' for link with cat='$cat' in output vector map."
+					fi
+				done
+				IFS=","
+				#echo "$list"
+			fi			
+		done
+		IFS="$OLD_IFS"
+		g.message -p "${step} ${NUM_INPUT_NODES} 1"
+		step=`expr ${step} + 1`
+	done
+	
+	# PASS 2: Step through all links again and delete those that have strength '0'
+	# Store name of original links output map (we might modify it).
+	links_org="${GIS_OPT_LINKS}"
+	# Get GRASS primary keys for links map and step through them:
+	get_grass_cats "${GIS_OPT_LINKS}"	
+	for cat in $GRASS_CATS ; do
+		# Get strength of link:
+		strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_strength}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to read from attribute field '${fld_strength}' of link with cat='$cat' in output vector map."
+		if [ ${strength} -lt 1 ] ; then
+			# Strength is '0': DELETE
+			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
+			#		There is no way to make v.edit delete an attribute table row itself. 
+			#       'v.db.select -f' can be used to select only rows that are still linked to features...
+			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
+			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			# Drop associated row of attribute table from links map:
+			links_droprow ${cat}
+		fi
+	done
+	
+	# In case that any rows were dropped, we need to copy the temporary
+	# map with reduced attribute table back to the original output map!
+	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
+		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
+		g.remove type="vector" name="${links_org}" -f --quiet
+		check_error "Failed to delete links vector map for replacement with reduced attributes map."
+		# Copy new version with reduced attribute rows as original output map name:
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		check_error "Failed to copy new links map with reduced attributes to output map."
+	fi
+}
+
+
+# FUNCTION
+# model_complete: Create a network where every node is connected to every other node.
+model_complete () {		
+	g.message -i "Creating network using connectivity model 'COMPLETE':"	
+	# Step through all points of input map and connect them with each other.
+	step=1
+	# This loop steps through number of input nodes MINUS ONE(!).
+	# The reason for this is that the last node will already be part
+	# of the fully connected network when the loop reaches its index.
+	NUM_LINKS=${NUM_INPUT_NODES} # Number of links at current processing step: Needed by links_adjust_nodes()!
+	get_primary_keys "${GIS_OPT_INPUT}"
+	for key in $PRIMARY_KEYS ; do
+		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
+			# Form SQL where to get next primary key value.
+			get_where_clause "${key}"
+			val=`v.db.select map="${GIS_OPT_INPUT}" column="${GIS_OPT_KEY}" where="${WHERE}" -c`
+			check_error "Failed to query attribute table of copy of input points map."
+			if [ -n "${val}" ] ; then # Feature exists! Process it:
+				# We move each node in turn to a new map and connect all other
+				# nodes that remain in the old map with it.
+				#g.message -i "Linking node with ID (cat) ${cat} to all other nodes."
+				# Extract current node to new map:
+				v.extract input="${GIS_OPT_INPUT}" layer="1" type="point" where="${WHERE}" output="${TMP_VECT_EXTRACT}" --overwrite --quiet
+				check_error "Failed to extract point with primary key value '${key}' from copy of input vector map."
+				# Delete extracted node from old map(!):
+				v.edit map="${GIS_OPT_INPUT}" layer="1" type="point" tool="delete" where="${WHERE}" --overwrite --quiet
+				check_error "Failed to delete point with primary key value '${key}' from copy of input vector map."
+				# Connect extracted node with all remaining nodes in old map:			
+				if [ ${step} -gt 1 ] ; then # Second and later iterations: We must to PATCH the output of this iteration! 				
+					# COST map provided? Then we must now change the shapes of the links to least-cost paths!
+					if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+						# Compute least cost surface from current node to all other nodes:
+						r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}" stop_points="${GIS_OPT_INPUT}" output="${TMP_RAST_COST_MIN}" outdir="${TMP_RAST_COST_DIR}" --o --quiet
+						check_error "Failed to compute cost and direction surfaces (iteration ${step})."
+						# Compute least cost vector paths based on directional surface computed above
+						# (end points now become start points, as r.cost has produced back-links!): 
+						r.path input=${TMP_RAST_COST_DIR} format="degree" vector_path="${TMP_VECT_LINKS_ADD}" start_points="${GIS_OPT_INPUT}" --overwrite --quiet
+						check_error "Failed to compute least cost paths (iteration ${step})."
+					else
+						v.distance from="${GIS_OPT_INPUT}" from_layer="1" from_type="point" to="${TMP_VECT_EXTRACT}" to_layer="1" to_type="point" output="${TMP_VECT_LINKS_ADD}" --overwrite --quiet
+						check_error "Failed to connect point with primary key value '${key}' to all other points of input vector map."						 
+					fi									
+					# Smooth output path '-s' flag given (we do this before adjusting link nodes to original points!):
+					if [ ${GIS_FLAG_S} -eq 1 ] ; then
+						v.generalize --o input="${TMP_VECT_LINKS_ADD}" output="${TMP_VECT_LINKS_SMOOTH}" type="line" alpha="1" beta="1" method="snakes" threshold="0" --overwrite --quiet
+						check_error "Failed to smooth network links map (${step} of ${NUM_INPUT_NODES})."
+						g.remove type="vector" name="${TMP_VECT_LINKS_ADD}" -f --quiet # So that g.copy won't issue a warning.
+						g.copy vector="${TMP_VECT_LINKS_SMOOTH},${TMP_VECT_LINKS_ADD}" --overwrite --quiet
+						check_error "Failed to copy smoothed network links map (${step} of ${NUM_INPUT_NODES})."
+						g.remove type="vector" name="${TMP_VECT_LINKS_SMOOTH}" -f --quiet
+					fi
+					# Adjust node coordinates of least cost paths (if required)
+					links_adjust_nodes "${TMP_VECT_LINKS_ADD}"
+					# Add new links to existing ones
+					clean_links # Just to suppress useless overwrite warning
+					v.patch input="${TMP_VECT_LINKS},${TMP_VECT_LINKS_ADD}" output="${GIS_OPT_LINKS}" --overwrite --quiet
+					check_error "Failed to add to network links map for next iteration (${step} of ${NUM_INPUT_NODES})."
+					# Overwrite links map with patched map for next iteration
+					g.remove type="vector" name="${TMP_VECT_LINKS}" -f --quiet
+					g.copy vector="${GIS_OPT_LINKS},${TMP_VECT_LINKS}" --overwrite --quiet
+					check_error "Failed to copy patched network links map for next iteration (${step} of ${NUM_INPUT_NODES})."
+				else # First iteration: We do not have to patch the output of this iteration.
+					# COST map provided? Then we must now change the shapes of the links to least-cost paths!
+					if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+						# Compute least cost surface from current node to all other nodes:
+						r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}" stop_points="${GIS_OPT_INPUT}" output="${TMP_RAST_COST_MIN}" outdir="${TMP_RAST_COST_DIR}" --o --quiet
+						check_error "Failed to compute cost and direction surfaces (iteration ${step})."
+						# Compute least cost vector paths based on directional surface computed above
+						# (end points now become start points, as r.cost has produced back-links!): 
+						r.path input=${TMP_RAST_COST_DIR} format="degree" vector_path="${TMP_VECT_LINKS}" start_points="${GIS_OPT_INPUT}" --overwrite --quiet
+						check_error "Failed to compute least cost paths (iteration ${step})."
+					else
+						# No cost map? Then this is a straight-line link
+						v.distance from="${GIS_OPT_INPUT}" from_layer="1" from_type="point" to="${TMP_VECT_EXTRACT}" to_layer="1" to_type="point" output="${TMP_VECT_LINKS}" --overwrite --quiet
+						check_error "Failed to connect point with primary key value '${key}' to all other points of input vector map."
+					fi					
+					# Smooth output path if asked for (we do this before adjusting link nodes to original points!):
+					if [ ${GIS_FLAG_S} -eq 1 ] ; then
+						v.generalize --o input="${TMP_VECT_LINKS}" output="${TMP_VECT_LINKS_SMOOTH}" type="line" alpha="1" beta="1" method="snakes" threshold="0" --overwrite --quiet
+						check_error "Failed to smooth network links map (${step} of ${NUM_INPUT_NODES})."
+						g.remove type="vector" name="${TMP_VECT_LINKS}" -f --quiet # So that g.copy won't issue a warning.
+						g.copy vector="${TMP_VECT_LINKS_SMOOTH},${TMP_VECT_LINKS}" --overwrite --quiet
+						check_error "Failed to copy smoothed network links map (${step} of ${NUM_INPUT_NODES})."
+						g.remove type="vector" name="${TMP_VECT_LINKS_SMOOTH}" -f --quiet
+					fi
+					# Adjust node coordinates of least cost paths (if required)
+					links_adjust_nodes "${TMP_VECT_LINKS}"
+					clean_links # Just to suppress useless overwrite warning
+					g.copy vector="${TMP_VECT_LINKS},${GIS_OPT_LINKS}" --overwrite --quiet
+					check_error "Failed to copy patched network links map to output map."
+				fi			
+				# Remove some temp maps immediately so we do not get overwrite warnings during next iteration:
+				g.remove type="vector" name="${TMP_VECT_EXTRACT}" -f --quiet
+				if [ ${step} -gt 1 ] ; then
+					g.remove type="vector" name="${TMP_VECT_LINKS_ADD}" -f --quiet
+				fi
+				step=`expr ${step} + 1`
+				g.message -p "${step} ${NUM_INPUT_NODES} 1"			
+			fi
+			##cat=`expr ${cat} + 1`
+			#TODO: Guard against endless loop
+			#if [ ${cat -gt ${MAXCAT} ] ; then # ERROR! Category index out of bounds!
+			#ERROR: ABORT!
+			#fi			
+		else # Last point reached: Do not process!
+			step=`expr ${step} + 1`
+		fi
+	done
+	
+	# Build topology of links output map
+	v.build map="${GIS_OPT_LINKS}" -e --overwrite
+	check_error "Failed to build/check topology of output vector map (links)."
+	
+	# After v.patch, categories are a mess. We rebuild them now, so that every link has its own category ID!
+	# Delete old category IDs:
+	v.category input="${GIS_OPT_LINKS}" output="${TMP_VECT_LINKS_CAT}" layer="1" option="del" cat="-1" --overwrite --quiet
+	check_error "Failed to remove defective category IDs from links output vector map."
+	clean_links # Just to suppress useless overwrite warning
+	v.category output="${GIS_OPT_LINKS}" input="${TMP_VECT_LINKS_CAT}" layer="1" option="add" cat="1" step="1" --overwrite --quiet
+	check_error "Failed to add proper category IDs to links output vector map."
+	
+	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
+	g.message -i "Fully connected network has ${lines} links."
+	
+	# ATTACH OUTPUT ATTRIBUTES
+	# Attach an (empty except for 'cat') attribute table.
+	v.db.addtable map="${GIS_OPT_LINKS}" layer="1" key="${fld_key}" --quiet
+	check_error "Failed to add attribute table to links output vector map."
+	v.db.addcolumn map="${GIS_OPT_LINKS}" layer="1" columns="\"${fld_from_id}\" ${KEY_TYPE}" --quiet
+	check_error "Failed to add attribute field '${fld_from_id}' (type '${KEY_TYPE}') to links output vector map."
+	v.db.addcolumn map="${GIS_OPT_LINKS}" layer="1" columns="\"${fld_to_id}\" ${KEY_TYPE}" --quiet
+	check_error "Failed to add attribute field '${fld_to_id}' (type '${KEY_TYPE}') to links output vector map."
+	v.db.addcolumn map="${GIS_OPT_LINKS}" layer="1" columns="\"${fld_from_lbl}\" ${LABEL_TYPE}" --quiet
+	check_error "Failed to add attribute field '${fld_from_lbl}' (type '${LABEL_TYPE}') to links output vector map."
+	v.db.addcolumn map="${GIS_OPT_LINKS}" layer="1" columns="\"${fld_to_lbl}\" ${LABEL_TYPE}" --quiet
+	check_error "Failed to add attribute field '${fld_to_lbl}' (type '${LABEL_TYPE}') to links output vector map."
+	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="end" columns="${fld_from_x},${fld_from_y}" --quiet
+	check_error "Failed to add attribute fields '${fld_from_x}' & '${fld_from_y}' to links output vector map."
+	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="start" columns="${fld_to_x},${fld_to_y}" --quiet
+	check_error "Failed to add attribute fields '${fld_to_x}' & '${fld_to_y}' to links output vector map."
+	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="length" columns="${fld_length_m}" units="meters" --quiet
+	check_error "Failed to add attribute field '${fld_length_m}' to links output vector map."
+	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="length" columns="${fld_length_km}" units="kilometers" --quiet
+	check_error "Failed to add attribute field '${fld_length_km}' to links output vector map."	
+	
+	# THIS ONE IS TRICKY.
+	# We now have:
+	# (A) The set of original attribute points, with user-specified primary keys (and labels).
+	# (B) A completely separate set of lines that represent all possible links of the network.
+	# We now need to transfer the primary keys (and labels) of A to the lines of B as from/to
+	# attributes. The solution here is to once more loop through all original points in A,
+	# just as we have just done, and to 'reconstruct' the 'rythm'
+	# To do this, we can rely on two simple properties of the links map:
+	# 1. Number of links(x) in fully connected network: x = n(n - 1) / 2
+	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2), etc.
+	g.message -i "Transferring input point attributes to output lines (links):"
+	# Step through all points of input map and connect them with each other.
+	previous="" # List of previous primary keys that have already been connected as "TO" nodes.
+	step=1 # This one is just for progress reporting.
+	cat=1 # This is the category value (GRASS primary key) of the current link. We use this
+	      # to step through all links of the completely connected network, regardless of any
+	      # other attribute values.
+	links=`expr ${NUM_INPUT_NODES} - 1` # This is the number of links that are connected
+										  # FROM the current node; this number is decreased by 1
+										  # each step through the loop.
+	# Step through all nodes in the same order once more; on this pass, we only transfer
+	# some important attributes.
+	get_primary_keys "${GIS_OPT_INPUT}"
+	for key in $PRIMARY_KEYS ; do
+		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
+			previous="${previous} $key " # Add current key to list of previous keys.			
+ 			# Form SQL where to get next primary key value.
+			get_where_clause "${key}"		
+			val=`v.db.select map="${GIS_OPT_INPUT}" column="${GIS_OPT_KEY}" where="${WHERE}" -c`
+			check_error "Failed to query attribute table of copy of input points map."
+			if [ -n "${val}" ] ; then # Feature exists! Process it:
+				#echo "Transfering to ${links} links: "
+				get_label "${GIS_OPT_INPUT}" "${key}"
+				#echo "  From ID    = '${key}'"
+				#echo "  From Label = '${LABEL}'"				
+				target=`expr ${cat} + ${links} - 1`
+				#echo "  cat range  = ${cat} to ${target}"
+				while [ $cat -le $target ] ; do
+					# Inner loop: We transfer a FROM/TO pair in every pass through this loop. 
+					# The FROM key is constant here,
+					# while the TO key becomes, in turn, every entry on the list of
+					# primary keys that is _neither_ the current key _nor_ any key that
+					# was used previously as a FROM key!
+					get_label "${GIS_OPT_INPUT}" "${key}"
+					from_lbl="${LABEL}"
+					for cur in $PRIMARY_KEYS ; do
+						res=`echo "${previous}" | ${GREP} " $cur " -c`
+						if [ $res -eq 0 ] ; then # Key not found on list of previously transfered keys: Transfer as new TO key in FROM/TO pair.
+							get_label "${GIS_OPT_INPUT}" "${cur}"
+							to_lbl="${LABEL}"
+							#echo "    $cat: FROM ${key} ('$from_lbl') TO ${cur} ('$to_lbl')"
+							# Now transfer the actual from/to attributes to the output (links) map's table!
+							v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_from_id}" value="${key}" where="\"${fld_key}\"=${cat}" --quiet
+							check_error "Failed to upload attribute '${fld_from_id}' to links output vector map (value='${key}'; ${fld_key}=${cat})."
+							v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_to_id}" value="${cur}" where="\"${fld_key}\"=${cat}" --quiet
+							check_error "Failed to upload attribute '${fld_to_id}' to links output vector map (value='${cur}'; ${fld_key}=${cat})."
+							v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_from_lbl}" value="${from_lbl}" where="\"${fld_key}\"=${cat}" --quiet
+							check_error "Failed to upload attribute '${fld_from_lbl}' to links output vector map (value='${from_lbl}'; ${fld_key}=${cat})."
+							v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_to_lbl}" value="${to_lbl}" where="\"${fld_key}\"=${cat}" --quiet
+							check_error "Failed to upload attribute '${fld_to_lbl}' to links output vector map (value='${to_lbl}'; ${fld_key}=${cat})."
+							g.message -p "${cat} ${lines} 1"
+							cat=`expr ${cat} + 1`							
+						fi
+					done
+				done
+				links=`expr ${links} - 1`
+			fi
+			step=`expr ${step} + 1`			
+			#g.message -p "${step} ${NUM_INPUT_NODES} 1"
+		else # Last point reached: Do not process!
+			step=`expr ${step} + 1`
+		fi
+	done
+
+	# Upload link costs (if cost raster given).
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -i "Updating link costs and uploading to links output attribute table:"
+		# Upload link costs.
+		# SHOULD we use v.rast.stats on 
+		# Step through all nodes in the same order once more; on this pass, we only transfer
+		# some important attributes.
+		v.db.addcolumn map="${GIS_OPT_LINKS}" layer="1" columns="\"${fld_cost}\" DOUBLE PRECISION" --quiet
+		check_error "Failed to add attribute field '${fld_cost}' to links output vector map."
+		get_grass_cats "${GIS_OPT_LINKS}"
+		step=1 # This one is just for progress reporting.
+		for cat in $GRASS_CATS ; do
+			from_coor_x=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_from_x}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+			check_error "Failed to retrieve attribute '${fld_from_x}' from links output vector map."
+			from_coor_y=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_from_y}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+			check_error "Failed to retrieve attribute '${fld_from_y}' from links output vector map."
+			to_coor_x=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_to_x}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+			check_error "Failed to retrieve attribute '${fld_to_x}' from links output vector map."
+			to_coor_y=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_to_y}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+			check_error "Failed to retrieve attribute '${fld_to_y}' from links output vector map."
+			#echo "Link $cat"
+			#echo "  From: $from_coor_x/$from_coor_y"
+			#echo "  To:   $to_coor_x/$to_coor_y"			
+			# Compute least cost surface from start to end node of current link:
+			r.cost -k -n input="${GIS_OPT_COSTMAP}" start_coordinates="${from_coor_x},${from_coor_y}" stop_coordinates="${to_coor_x},${to_coor_y}" output="${TMP_RAST_COST_MIN}" --o --quiet
+			check_error "Failed to compute cost surface from ${fld_from_x},${fld_from_y} to ${fld_to_x},${fld_to_y} (path no. ${step})."
+			costval=`r.what map="${TMP_RAST_COST_MIN}" coordinates="${to_coor_x},${to_coor_y}" separator="|" --quiet | ${AWK} -F "|" '{ print $4 }'`
+			check_error "Failed to query cost surface at ${to_coor_x},${to_coor_y} (path no. ${step})."
+			if [ -z $costval ] ; then
+				exit_error "No data at cost surface at ${to_coor_x},${to_coor_y} (path no. ${step})."
+			fi
+			v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_cost}" value="${costval}" where="\"${GRASS_PKEY}\"=${cat}" --quiet
+			check_error "Failed to upload attribute '${fld_cost}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
+			#echo "Cost:   $costval"
+			g.message -p "${step} ${lines} 1"
+			step=`expr ${step} + 1`
+		done
+	fi
+	
+	# We have modified GIS_OPT_INPUT (heavily) and deleted many of its points.
+	# But we have a copy of the (filtered) original input, made by 'preprocess()':
+	# Copy that back!
+	g.copy vector="${GIS_OPT_NODES},${GIS_OPT_INPUT}" --overwrite --quiet
+	check_error "Failed to copy initial output nodes back to original input points map '${GIS_OPT_INPUT}'."
+}
+
+
+# FUNCTION
+# model_delaunay: Create a network where nodes are connected using delaunay minimal triangulation.
+model_delaunay () {
+	# - first create a complete model, then reduce the links to those that have
+	#   identical copies in the set of lines produced by v.delaunay
+	#   (upload start and end coordinates to delaunay lines, then compare with
+	#    those uploaded to set of complete links)
+	g.message -i "Reducing network using connectivity model 'DELAUNAY':"
+	# NOTE: Current version of v.delaunay (GRASS 7.8.3) is botched: When using its '-l'
+	# flag to produce lines, it produces a faulty geometry structure that prevents adding
+	# valid categories (cats) using v.db.addtable or v.category to the features.
+	# As work-around, we use create polygonal delaunay output and then use  
+	# the rather awful v.to.lines, which is a Python script around v.edit & Co.
+	# that polutes the console with useless messages and also adds an attribute table
+	# to layer 2, while expecting an attributes table to be present in layer 1.
+	# We'll need to clean up all that mess to get something useful, then use v.to.db
+	# to upload delaunay line start/end node coords to the attribute table in layer 1...
+	v.delaunay input="${GIS_OPT_INPUT}" output="${TMP_VECT_LINKS_DELAUNAY_P}" --o --quiet
+	check_error "Failed to compute Delaunay triangulation for input points/nodes."
+	v.db.addtable map="${TMP_VECT_LINKS_DELAUNAY_P}" layer="1" --quiet
+	check_error "Failed to add attribute table (layer 1) to temporary map with Delaunay triangulation."
+	v.to.lines input="${TMP_VECT_LINKS_DELAUNAY_P}" output="${TMP_VECT_LINKS_DELAUNAY_L}" --o --quiet
+	check_error "Failed to convert Delaunay triangulation of input points/nodes to lines."
+	v.db.droptable map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="2" -f --quiet
+	check_error "Failed to delete attribute table (layer 2) from temporary map with Delaunay triangulation."
+	v.db.addtable map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" --quiet
+	check_error "Failed to add attribute table (layer 1) to temporary map with Delaunay triangulation."
+	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="start" columns="${fld_from_x},${fld_from_y}" units="meters" --o --quiet
+	check_error "Failed to upload line start coordinates to temporary map with Delaunay triangulation."
+	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="end" columns="${fld_to_x},${fld_to_y}" units="meters" --o --quiet
+	check_error "Failed to upload line end coordinates to temporary map with Delaunay triangulation."
+	# DEBUG
+	#v.info ${TMP_VECT_LINKS_DELAUNAY_L}
+	#v.db.select ${TMP_VECT_LINKS_DELAUNAY_L}
+	#v.db.select ${GIS_OPT_LINKS}
+	# Store name of original links output map (we might modify it).
+	links_org="${GIS_OPT_LINKS}"
+	# Step through all links and use v.edit to delete every link that is not also a Delaunay link	
+	get_grass_cats "${GIS_OPT_LINKS}"
+	step=1 # This one is just for progress reporting.
+	for cat in $GRASS_CATS ; do		
+		preserve="false"
+		# Get node coordinates of current link in completely connected network:
+		from_x_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_from_x}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to read field '${fld_from_x}' from output links map ('${GIS_OPT_LINKS}')."
+		from_y_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_from_y}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to read field '${fld_from_y}' from output links map ('${GIS_OPT_LINKS}')."
+		to_x_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_to_x}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to read field '${fld_to_x}' from output links map ('${GIS_OPT_LINKS}')."
+		to_y_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_to_y}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to read field '${fld_to_y}' from output links map ('${GIS_OPT_LINKS}')."
+		# Now get node coordinates of all Delaunay links and see if we have a match:
+		DELAUNAY_CATS=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" columns="cat" -c --quiet`
+		check_error "Failed to retrieve list of GRASS primary keys (map='TMP_VECT_LINKS_DELAUNAY_L')."
+		for dcat in $DELAUNAY_CATS ; do
+			from_x_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${fld_from_x}" where="cat=${dcat}" -c --quiet`
+			check_error "Failed to read field '${fld_from_x}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
+			from_y_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${fld_from_y}" where="cat=${dcat}" -c --quiet`
+			check_error "Failed to read field '${fld_from_y}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
+			to_x_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${fld_to_x}" where="cat=${dcat}" -c --quiet`
+			check_error "Failed to read field '${fld_to_x}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
+			to_y_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${fld_to_y}" where="cat=${dcat}" -c --quiet`
+			check_error "Failed to read field '${fld_to_y}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
+			# We check both line directions for complete overlap:
+			if [ "${from_x_A}" = "${from_x_B}" ] && [ "${from_y_A}" = "${from_y_B}" ] && [ "${to_x_A}" = "${to_x_B}" ] && [ "${to_y_A}" = "${to_y_B}" ] ; then
+				preserve="true"
+			fi
+			if [ "${from_x_A}" = "${to_x_B}" ] && [ "${from_y_A}" = "${to_y_B}" ] && [ "${to_x_A}" = "${from_x_B}" ] && [ "${to_y_A}" = "${from_y_B}" ] ; then
+				preserve="true"
+			fi
+		done
+		if [ ${preserve} = "false" ] ; then
+			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
+			#		There is no way to make v.edit delete an attribute table row itself. 
+			#       'v.db.select -f' can be used to select only rows that are still linked to features...
+			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
+			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			# Drop associated row of attribute table from links map:
+			links_droprow ${cat}
+		fi
+		g.message -p "${step} ${lines} 1"
+		step=`expr ${step} + 1`
+	done
+
+	# In case that any rows were dropped, we need to copy the temporary
+	# map with reduced attribute table back to the original output map!
+	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
+		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
+		g.remove type="vector" name="${links_org}" -f --quiet
+		check_error "Failed to delete links vector map for replacement with reduced attributes map."
+		# Copy new version with reduced attribute rows as original output map name:
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		check_error "Failed to copy new links map with reduced attributes to output map."
+	fi
+}
+
+
+# FUNCTION
+# model_linkdist:	Create a network where nodes are connected only if they are at most a threshold 
+#					distance or cost value apart (linking bounded by distance).
+# 					ATTENTION: Function model_complete() MUST be called before this one, as it sets
+#					some important variables that this function reads!
+#					This model type is never called directly by the user!
+#					Instead, it is run as an additional model, every time the option
+#					'maxdist=' is given.
+model_linkdist () {		
+	if [ ${GIS_FLAG_M} -eq 1 ] ; then
+		distfld=${fld_length_m} # Force distance units to be meters if '-m' flag is given
+		units="m"
+	fi
+	g.message -i "Maximum linking distance set to '${GIS_OPT_MAXDIST}' (${units})."	
+	g.message -i "Reducing network:"
+	# Store name of original links output map (we might modify it).
+	links_org="${GIS_OPT_LINKS}"
+	# Step through all links and use v.edit to delete every link that is longer than 'maxdist'	
+	get_grass_cats "${GIS_OPT_LINKS}"
+	step=1 # This one is just for progress reporting.
+	for cat in $GRASS_CATS ; do				
+		# This will produce a non-empty result only if the current link's length exceeds the threshold:
+		length=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${distfld}" where="\"${GRASS_PKEY}\"=${cat} AND \"${distfld}\" > ${GIS_OPT_MAXDIST}" -c --quiet`
+		check_error "Failed to retrieve attribute '${distfld}' from links output vector map (cat='$cat')."
+		if [ -n "${length}" ] ; then
+			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
+			#		There is no way to make v.edit delete an attribute table row itself. 
+			#       'v.db.select -f' can be used to select only rows that are still linked to features...
+			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
+			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			# Drop associated row of attribute table from links map:
+			links_droprow ${cat}
+		fi
+		g.message -p "${step} ${lines} 1"
+		step=`expr ${step} + 1`
+	done
+	
+	# In case that any rows were dropped, we need to copy the temporary
+	# map with reduced attribute table back to the original output map!
+	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
+		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
+		g.remove type="vector" name="${links_org}" -f --quiet
+		check_error "Failed to delete links vector map for replacement with reduced attributes map."
+		# Copy new version with reduced attribute rows as original output map name:
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		check_error "Failed to copy new links map with reduced attributes to output map."
+	fi
+}
+
+
+# FUNCTION
+# model_nn: Create a network where nodes are connected to their n nearest neighbors.
+model_nn () {
+	#  At this point, it is assured that 'neighbors=' has been provided and is > 0 OR 'size=' has been provided.	
+	if [ -z "${GIS_OPT_SIZE}" ] ; then
+		#  Check that neighbors < num (filtered) input points:
+		if [ ${NUM_INPUT_NODES} -le ${GIS_OPT_NEIGHBORS} ] ; then
+			exit_error "Value of option 'neighbors=' must be smaller than number of (filtered) input points/nodes."
+		fi
+		g.message -i "Number of nearest neighbors to connect is '${GIS_OPT_NEIGHBORS}'."
+	else
+		g.message -i "Number of nearest neighbors will be read from '${GIS_OPT_SIZE}'."
+	fi
+	# Go!
+	g.message -i "Reducing network by connectivity model 'NN':"
+	# Store name of original links output map (we might modify it).
+	links_org="${GIS_OPT_LINKS}"
+	# Add an attribute field to indicate whether a link must be preserved:
+	fld_keep="keep" # Name of field to indicate "keep this link".
+	v.db.addcolumn map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep} INTEGER" --quiet
+	check_error "Failed to add field '${fld_keep}' to links output map ('${GIS_OPT_LINKS}')."
+	# Initialize all links to "keep=0"
+	v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="0" --quiet
+	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."	
+	# Step through all input nodes:
+	get_primary_keys "${GIS_OPT_INPUT}"
+	step=1 # This one is just for progress reporting.
+	for key in $PRIMARY_KEYS ; do
+		if [ -n "${GIS_OPT_SIZE}" ] ; then
+			# Read number of nearest neighbors from 'size' field of current node			
+			if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+				GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"='${key}'" -c --quiet`		
+			else
+				GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"=${key}" -c --quiet`			
+			fi		
+			check_error "Failed to query field '${GIS_OPT_SIZE}' of input nodes map (key='$key')."
+			grep_is_positive ${GIS_OPT_NEIGHBORS}
+			if [ -z ${GREP_VALUE} ] ; then
+				exit_error "Invalid 'size' for input point with 'key'='${key}': Must be larger than '0'."
+			fi
+			if [ ${NUM_INPUT_NODES} -le ${GIS_OPT_NEIGHBORS} ] ; then
+				exit_error "Number of nearest must be smaller than number of (filtered) input points/nodes (is: '${GIS_OPT_NEIGHBORS}' for input node with key'='${key})."
+			fi
+		fi
+		# Get sorted list of lengths for all links connected to current node via 'from_id' or 'to_id'.
+		# We look at 'from_id' first:
+		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+			lengths_from=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${distfld}" where="$fld_from_id='$key'" -c`
+		else
+			lengths_from=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${distfld}" where="$fld_from_id=$key" -c`
+		fi
+		check_error "Failed to query fields '${distfld}' and '${fld_from_id}' of links output map (key='${key}')."
+		# Now 'to_id':
+		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+			lengths_to=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${distfld}" where="$fld_to_id='$key'" -c`
+		else
+			lengths_to=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${distfld}" where="$fld_to_id=$key" -c`
+		fi
+		check_error "Failed to query fields '${distfld}' and '${fld_to_id}' of links output map (key='${key}')."
+lengths="${lengths_from}
+${lengths_to}"
+		if [ -n "${lengths}" ] ; then			
+			LIST=`echo "$lengths" | ${AWK} '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`			
+			if [ -n "${LIST}" ] ; then
+				#echo "$LIST"
+				# Now get GRASS primary keys (cat) for all links connected FROM this node via 'from_id':
+				if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+					CATS_FROM=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_from_id}='$key'" -c`
+				else
+					CATS_FROM=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_from_id}=$key" -c`
+				fi			
+				# Now get GRASS primary keys (cat) for all links connected TO this node via 'to_id':
+				check_error "Failed to query field '${fld_from_id}' of links output map (key='${key}')."
+				if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+					CATS_TO=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_to_id}='$key'" -c`
+				else
+					CATS_TO=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_to_id}=$key" -c`
+				fi	
+				check_error "Failed to query field '${fld_from_id}' of links output map (key='${key}')."
+CATS="${CATS_FROM}
+${CATS_TO}"
+				if [ -n "$CATS" ] ; then
+					#echo "$CATS"
+					connected=0 # Count of neighbors connected to this node
+					for cat in $CATS ; do
+						preserve="false" # If not 'true' by the end of this loop, link will be deleted!
+						if [ $connected -lt ${GIS_OPT_NEIGHBORS} ] ; then
+							# We are still looking to connect at least one more!
+							len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${distfld}" where="cat=${cat}" -c`
+							check_error "Failed to query links output map for field '${distfld}' (cat='${cat}')."
+							# Step through sorted list of distances and see if we can get a match
+							# in the first n items!
+							neighbor=0;
+							for cur in $LIST ; do
+								if [ "$cur" = "$len" ] ; then
+									if [ $neighbor -lt ${GIS_OPT_NEIGHBORS} ] ; then										
+										connected=`expr ${connected} + 1`
+										#echo "connected: $cat ($neighbor) = $len"
+										# Mark this link as "keep":
+										v.db.update map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="1" where="cat=${cat}" --quiet
+										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for cat='${cat}'."										
+									fi
+								fi
+								neighbor=`expr ${neighbor} + 1` # Advance to next neighbor.
+							done							
+						fi						
+					done
+				fi
+			fi
+			g.message -p "${step} ${NUM_INPUT_NODES} 1"
+			step=`expr ${step} + 1`
+		fi
+	done
+	
+	# Now we delete all the links that are not marked "keep=1"
+	CATS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_keep}=0" -c`
+	check_error "Failed to query field '${fld_keep}' of links output map ('${GIS_OPT_LINKS}')."
+	for cat in $CATS ; do
+		# DELETE!
+		# NOTE:	This will delete the geometry, but leave the attribute table row intact!
+		#		There is no way to make v.edit delete an attribute table row itself. 
+		#       'v.db.select -f' can be used to select only rows that are still linked to features...
+		v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
+		check_error "Failed to delete link with cat='$cat' from links output vector map ."
+		# Drop associated row of attribute table from links map:
+		links_droprow ${cat}
+	done
+
+	# Drop column "keep", we don't need it any longer.
+	v.db.dropcolumn map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep}" --quiet
+	check_error "Failed to drop field '${fld_keep}' from links output map ('${GIS_OPT_LINKS}')."
+	
+	# In case that any rows were dropped, we need to copy the temporary
+	# map with reduced attribute table back to the original output map!
+	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
+		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
+		g.remove type="vector" name="${links_org}" -f --quiet
+		check_error "Failed to delete links vector map for replacement with reduced attributes map."
+		# Copy new version with reduced attribute rows as original output map name:
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		check_error "Failed to copy new links map with reduced attributes to output map."
+	fi
+}
+
+
+# FUNCTION
+# model_xtent: Create a network where nodes are connected according to XTENT formula.
+model_xtent () {		
+	g.message -i "Node size will be read from field '${GIS_OPT_SIZE}'."
+	g.message -i "Exponential node weight 'a' set to '${GIS_OPT_A}'."
+	g.message -i "Linear distance weight 'k' set to '${GIS_OPT_K}'."
+	# Find min/max values of C in attribute table.
+	Cmin=""
+	Cmax=""
+	result=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -c "|${GIS_OPT_SIZE}"`
+	check_error "Failed to get columns info for nodes input vector map ('${GIS_OPT_INPUT}')."
+	if [ ${result} -gt 0 ] ; then		
+		VALUES=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" -c --quiet`
+		check_error "Failed to retrieve all values for 'C' from nodes input vector map ('${GIS_OPT_INPUT}')."
+		for val in ${VALUES} ; do
+			awk_max "${Cmax}" "${val}"
+			Cmax="${AWK_VALUE}"
+			awk_min "${Cmin}" "${val}"
+			Cmin="${AWK_VALUE}"
+		done
+	else
+		exit_error "Found no column for 'C' values in nodes input vector map ('${GIS_OPT_INPUT}')."
+	fi
+	if [ -z "$Cmax" ] ; then
+		exit_error "Found no 'C' values in nodes input vector map ('${GIS_OPT_INPUT}')."
+	fi
+	g.message -i "Minimum 'C' value in data is '${Cmin}'."
+	g.message -i "Maximum 'C' value in data is '${Cmax}'."
+	# Reduce!
+	g.message -i "Reducing network by connectivity model 'XTENT':"
+	# Store name of original links output map (we might modify it).
+	links_org="${GIS_OPT_LINKS}"
+	# Step through all links and use v.edit to delete every link which scores I <= 0 for XTENT
+	# or is longer than 'maxdist' (if applicable)
+	get_grass_cats "${GIS_OPT_LINKS}"
+	step=1 # This one is just for progress reporting.
+	for cat in $GRASS_CATS ; do
+		# Get size of "from node"
+		from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_from_id}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to query field '${fld_from_id}' of output nodes map (cat='$cat')."
+		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+			from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"='${from_id}'" -c --quiet`
+		else
+			from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"=${from_id}" -c --quiet`			
+		fi
+		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map (cat='$cat')."
+		grep_is_positive ${from_size}
+		if [ -z ${GREP_VALUE} ] ; then
+			exit_error "Invalid 'size' for input point with 'key'='${from_id}': Must be larger than '0'."
+		fi
+		# Get size of "to node"
+		to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_to_id}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to query field '${fld_to_id}' of output nodes map (cat='$cat')."
+		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+			to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"='${to_id}'" -c --quiet`
+			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map (cat='$cat')."
+		else
+			to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"=${to_id}" -c --quiet`
+			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map (cat='$cat')."
+		fi
+		grep_is_positive ${to_size}
+		if [ -z ${GREP_VALUE} ] ; then
+			exit_error "Invalid 'size' for input point with 'key'='${to_id}': Must be larger than '0'."
+		fi		
+		distance=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${distfld}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to query field '${distfld}' of output nodes map (cat='$cat')."
+		#awk_calc "((${from_size}^${GIS_OPT_A})+(${to_size}^${GIS_OPT_A}))-(${GIS_OPT_K}*${distance})"
+		#awk_calc "(((${from_size}^${GIS_OPT_A})+(${to_size}^${GIS_OPT_A}))*${distance})-(${GIS_OPT_K}*${distance})"
+		awk_calc "${from_size}^${GIS_OPT_A}"
+		C_a="${AWK_VALUE}" # weighted 'from' size
+		awk_calc "${to_size}^${GIS_OPT_A}"
+		C_b="${AWK_VALUE}" # weighted 'to' size
+		awk_calc "${C_a}+${C_b}"
+		C="${AWK_VALUE}" # combination of weighted 'from' & 'to' sizes
+		awk_calc "${GIS_OPT_K}*${distance}"
+		dist="${AWK_VALUE}" # weighted distance
+		# 'davg' is the _average_ length of links in complete network; by default, this is the arithmetic mean
+		if [ -z ${GIS_OPT_COSTMAP} ] ; then
+			davg=${net_len_mean_unreduced} # Default
+		else
+			davg=${net_cost_mean_unreduced} # Default
+		fi		
+		if [ "${GIS_OPT_AVG}" = "median" ] ; then
+			# Choice: Use median
+			if [ -z ${GIS_OPT_COSTMAP} ] ; then			
+				davg=${net_len_median_unreduced}
+			else				
+				davg=${net_cost_median_unreduced}
+			fi
+		fi
+		awk_calc "($C*($davg/$Cmax))-($dist)"
+		I=${AWK_VALUE} # must be > 0 to connect		
+		# DEBUG
+		#echo "LINK cat: $cat"		
+		#echo "  from_id=$from_id"
+		#echo "  to_id=$to_id"
+		#echo "  from_size=$from_size"
+		#echo "  to_size=$to_size"
+		#echo "  a=${GIS_OPT_A}"
+		#echo "  k=${GIS_OPT_K}"
+		#echo "  C_a=$C_a"
+		#echo "  C_b=$C_b"
+		#echo "  C=$C"
+		#echo "  Cmax=$Cmax"
+		#echo "  d=$distance"
+		#echo "  dist=$dist"		
+		#echo "  davg=${davg}"
+		#echo "  i=$I"
+		grep_is_positive "$I"
+		if [ -z ${GREP_VALUE} ] ; then
+			# I <= 0: DELETE
+			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
+			#		There is no way to make v.edit delete an attribute table row itself. 
+			#       'v.db.select -f' can be used to select only rows that are still linked to features...
+			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
+			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			# Drop associated row of attribute table from links map:
+			links_droprow ${cat}
+		fi
+		g.message -p "${step} ${lines} 1"
+		step=`expr ${step} + 1`
+	done
+	
+	# In case that any rows were dropped, we need to copy the temporary
+	# map with reduced attribute table back to the original output map!
+	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
+		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
+		g.remove type="vector" name="${links_org}" -f --quiet
+		check_error "Failed to delete links vector map for replacement with reduced attributes map."
+		# Copy new version with reduced attribute rows as original output map name:
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		check_error "Failed to copy new links map with reduced attributes to output map."
+	fi
+}
+
+
+########
+# MAIN #
+########
+
+# Run all pre-flight checks:
+check_setup
+check_params
+check_input
+
+# Get environment variables:
+check_environment
+
+# Perform input data pre-processing:
+preprocess
+
+# Keep track of starting time.
+START=`date`
+
+# GO!
+#GIS_OPT_INPUT is the input points map: Its handle has been set by check_input()!
+NUM_INPUT_NODES=${points}
+g.message -i "Input network has ${NUM_INPUT_NODES} nodes."
+
+# Set attribute field names for output links:
+# TODO: These must be set globally, at the beginning of the script,
+#       and with a name space that separates them from node fields!
+fld_key="cat"				# Default GRASS primary key
+fld_key_col=1				# Column number of attribute(!) THESE MUST BE CORRECT! WE RELY ON THEM LATER!
+fld_from_id="from_id"		# ID of start node
+fld_from_id_col=2
+fld_to_id="to_id"			# ID of end node
+fld_to_id_col=3
+fld_from_lbl="from_lbl"	# Label (name) of start node
+fld_from_lbl_col=4
+fld_to_lbl="to_lbl"			# Label (name) of end node
+fld_to_lbl_col=5
+fld_from_x="from_x"			# X coordinates of start node.
+fld_from_x_col=6
+fld_from_y="from_y"			# Y coordinates of start node.
+fld_from_y_col=7
+fld_to_x="to_x"				# X coordinates of end node.
+fld_to_x_col=8
+fld_to_y="to_y"				# Y coordinates of end node.
+fld_to_y_col=9
+fld_length_m="length_m" 	# Total length of link in meters
+fld_length_m_col=10
+fld_length_km="length_km" 	# Total length of link in kilometers
+fld_length_km_col=11
+fld_cost="cost"				# Total cost of link in unspecified units (will only exist if 'costmap=" provided)
+fld_cost_col=12
+fld_strength="strength"	# Link strength (number of similarities: will only exist for model 'attsim')
+fld_strength_col=13
+# Compute complete model first (always, unless option "initial=" is provided):
+if [ -n "${GIS_OPT_INITIAL}" ] ; then
+	# Load initial model instead of computing complete model.
+	eval `v.info -t map="${GIS_OPT_INITIAL}" layer="1"`
+	g.message -i "Initial network has ${lines} links."
+	# Copy initial map as (preliminary) links output map:
+	g.copy vector="${GIS_OPT_INITIAL},${GIS_OPT_LINKS}" --overwrite --quiet
+	check_error "Failed to copy initial links map as preliminary links output map."
+	# TODO: To run in cost-based mode (if attr 'cost' exists), we now need to set
+	# "GIS_OPT_COSTMAP" to some dummy value!
+else
+	# Complete model needs to be computed.
+	model_complete
+fi
+# Compute statistics of unreduced network
+stats_unreduced
+
+# TODO: 'distfld' and 'units' need to be capitalized as global variables!
+# Decide which attribute field to read for distance threshold
+distfld=${fld_length_m} # Default
+units="m"
+if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	distfld=${fld_cost} # Default if costmap is provided
+	units="cost"		
+fi
+
+# Compute selected reduced model (if any).
+if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+	model_attsim
+fi
+if [ "${GIS_OPT_MODEL}" = "delaunay" ] ; then
+	model_delaunay
+fi
+# We don't call 'linkdist' explicitly. It is semantically
+# the same as using model 'complete' plus specifying "maxdist="
+#if [ "${GIS_OPT_MODEL}" = "linkdist" ] ; then	
+#	model_complete
+#	model_linkdist
+#fi
+if [ "${GIS_OPT_MODEL}" = "nn" ] ; then
+	model_nn
+fi
+if [ "${GIS_OPT_MODEL}" = "xtent" ] ; then
+	model_xtent
+fi
+
+# Reduce further if "maxdist=" is given:
+if [ -n "${GIS_OPT_MAXDIST}" ] ; then
+	model_linkdist
+fi
+
+if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
+# Report: number of lines and connected points
+	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1" --quiet`
+	check_error "Failed to get topology info for links output vector map."
+	if [ ${lines} -lt 1 ] ; then
+		exit_error "No links left in output vector map. Please review model parameter values."
+	fi	
+	g.message -i "${lines} links in output vector map after reduction."
+fi
+
+# Produce second output vector map with nodes by copying temp. copy of input points
+# to output points map.
+eval `v.info -t map="${GIS_OPT_NODES}" layer="1"`
+check_error "Failed to get topology info for nodes output vector map ('${GIS_OPT_NODES}')."
+# Store name of original nodes output map (we might modify it).
+nodes_org="${GIS_OPT_NODES}"
+
+# Add subnetwork metrics fields to output nodes map:
+if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+	v.db.addcolumn map="${GIS_OPT_NODES}" layer="1" columns="\"${FLD_NSTRENGTH}\" INTEGER" --quiet
+	check_error "Failed to add attribute field '${FLD_NSTRENGTH}' to nodes output vector map."
+fi
+v.db.addcolumn map="${GIS_OPT_NODES}" layer="1" columns="\"${FLD_LEN_SUM}\" DOUBLE PRECISION" --quiet
+check_error "Failed to add attribute field '${FLD_LEN_SUM}' to nodes output vector map."
+v.db.addcolumn map="${GIS_OPT_NODES}" layer="1" columns="\"${FLD_LEN_AVG}\" DOUBLE PRECISION" --quiet
+check_error "Failed to add attribute field '${FLD_LEN_AVG}' to nodes output vector map."
+if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	v.db.addcolumn map="${GIS_OPT_NODES}" layer="1" columns="\"${FLD_COST_SUM}\" DOUBLE PRECISION" --quiet
+	check_error "Failed to add attribute field '${FLD_COST_SUM}' to nodes output vector map."
+	v.db.addcolumn map="${GIS_OPT_NODES}" layer="1" columns="\"${FLD_COST_AVG}\" DOUBLE PRECISION" --quiet
+	check_error "Failed to add attribute field '${FLD_COST_AVG}' to nodes output vector map."	
+fi
+
+# Initialize SUBNETWORK statistics for (reduced set of) NODES.
+# These represent the properties of the subnetwork of links attached to each
+# individual node, computed at that node. They will be written to the attribute
+# table of the output nodes.
+subnet_links=0
+subnet_nodes=0
+subnet_len=0
+subnet_cost=0
+
+g.message -i "Writing output nodes map:"
+# Start looping through nodes by user-defined key
+get_primary_keys "${GIS_OPT_NODES}"
+step=1 # For progress reporting
+for key in $PRIMARY_KEYS ; do
+	# Step through all input points and count the number of times that the current node's
+	# key is stored in either the "from_id" or "to_id" field.
+	# NOTE: Since the SQL WHERE clauses used below may return an empty result and thus
+	# an error value from grep, we CANNOT CHECK for errors and abort here!
+	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
+		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+			NLIST=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$fld_from_id='$key' OR $fld_to_id='$key'" columns="${fld_strength}" -c`
+			n_strength=0
+			#echo $NLIST
+			for val in $NLIST ; do
+				n_strength=`expr ${n_strength} + ${val}`				
+			done
+			#echo "[$key] NSTR = $n_strength"
+		fi
+		# TODO: Use SQL OR here, instead of querying from/to separately! 
+		from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$fld_from_id='$key'" -c | ${GREP} "${key}" -c`
+		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$fld_to_id='$key'" -c | ${GREP} "${key}" -c`
+		from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" where="$fld_from_id='$key'" -c`
+		to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" where="$fld_to_id='$key'" -c`
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			from_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" where="$fld_from_id='$key'" -c`
+			to_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" where="$fld_to_id='$key'" -c`
+		fi
+	else
+		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+			NLIST=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$fld_from_id=$key OR $fld_to_id=$key" columns="${fld_strength}" -c`
+			n_strength=0
+			#echo $NLIST
+			for val in $NLIST ; do
+				n_strength=`expr ${n_strength} + ${val}`				
+			done
+			#echo "[$key] NSTR = $n_strength"
+		fi
+		# TODO: Use SQL OR here, instead of querying from/to separately!
+		from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$fld_from_id=$key" -c | ${GREP} "${key}" -c`
+		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$fld_to_id=$key" -c | ${GREP} "${key}" -c`
+		from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" where="$fld_from_id=$key" -c`
+		to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" where="$fld_to_id=$key" -c`
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			from_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" where="$fld_from_id=$key" -c`
+			to_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" where="$fld_to_id=$key" -c`
+		fi
+	fi
+	# Update subnetwork metrics: number of links, total length and cost of links connected to current node.
+	num_links=`expr ${from_links} + ${to_links}`
+	if [ $num_links -gt 0 ] ; then
+		subnet_nodes=`expr ${subnet_nodes} + 1`
+		subnet_links=`expr ${subnet_links} + ${num_links}`
+	fi	
+	total_len=0
+	total_cost=0
+	avg_len=0
+	avg_cost=0
+	OLD_IFS="$IFS"
+	IFS=$(echo -en "\n\b")
+	for i in $from_len ; do
+		awk_calc "$total_len+$i"
+		total_len=${AWK_VALUE}
+		awk_calc "$subnet_len+$total_len"
+		subnet_len=${AWK_VALUE}
+	done	
+	for i in $to_len ; do
+		awk_calc "$total_len+$i"
+		total_len=${AWK_VALUE}
+	done	
+	if [ $num_links -gt 0 ] ; then
+		awk_calc "$total_len/$num_links"
+		avg_len=${AWK_VALUE}
+	fi
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		for i in $from_cost ; do
+			awk_calc "$total_cost+$i"
+			total_cost=${AWK_VALUE}
+			awk_calc "$subnet_cost+$total_cost"
+			subnet_cost=${AWK_VALUE}
+		done
+		for i in $to_cost ; do
+			awk_calc "$total_cost+$i"
+			total_cost=${AWK_VALUE}
+		done
+		if [ $num_links -gt 0 ] ; then
+			awk_calc "$total_cost/$num_links"
+			avg_cost=${AWK_VALUE}
+		fi		
+	fi
+	IFS="$OLD_IFS"
+
+	# Upload subnet metrics:
+	get_where_clause "${key}"
+	v.db.update map="${GIS_OPT_NODES}" layer="1" column="${FLD_LINKS}" value="${num_links}" where="${WHERE}"
+	check_error "Failed to write links count into attribute field '${FLD_LINKS}' of output nodes maps ('${GIS_OPT_NODES}')."
+	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+		v.db.update map="${GIS_OPT_NODES}" layer="1" column="${FLD_NSTRENGTH}" value="${n_strength}" where="${WHERE}"
+		check_error "Failed to write 'node strength' into attribute field '${FLD_NSTRENGTH}' of output nodes maps ('${GIS_OPT_NODES}')."
+	fi		
+	v.db.update map="${GIS_OPT_NODES}" layer="1" column="${FLD_LEN_SUM}" value="${total_len}" where="${WHERE}"
+	check_error "Failed to write links count into attribute field '${FLD_LEN_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
+	v.db.update map="${GIS_OPT_NODES}" layer="1" column="${FLD_LEN_AVG}" value="${avg_len}" where="${WHERE}"
+	check_error "Failed to write links count into attribute field '${FLD_LEN_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		v.db.update map="${GIS_OPT_NODES}" layer="1" column="${FLD_COST_SUM}" value="${total_cost}" where="${WHERE}"
+		check_error "Failed to write links count into attribute field '${FLD_COST_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
+		v.db.update map="${GIS_OPT_NODES}" layer="1" column="${FLD_COST_AVG}" value="${avg_cost}" where="${WHERE}"
+		check_error "Failed to write links count into attribute field '${FLD_COST_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
+	fi
+	# Delete nodes with zero connections?
+	if [ ${GIS_FLAG_D} -eq 1 ] ; then
+		# Flag '-d(elete)' has been set: Delete node from output map if it is unconnected!
+		if [ $num_links -lt 1 ] ; then
+			# Get GRASS primary key (cat) for this node.
+			cat=`v.db.select map="${GIS_OPT_NODES}" layer="1" where="${WHERE}" columns="cat" -c --quiet`
+			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
+			# There is no way to make v.edit delete an attribute table row itself. 
+			# 'v.db.select -f' can be used to select only rows that are still linked to features...				
+			v.edit map="${GIS_OPT_NODES}" layer="1" type="point" tool="delete" cats="${cat}" --quiet
+			check_error "Failed to delete node with cat='$cat' from nodes output vector map ."
+			# Drop associated row of attribute table from nodes map:
+			nodes_droprow ${cat}
+		fi			
+	fi
+	g.message -p "${step} ${points} 1"
+	step=`expr ${step} + 1`
+done
+
+# Compute statistics for reduced network (if applicable)
+if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
+	# Update output nodes count
+	eval `v.info -t map="${GIS_OPT_NODES}" layer="1"`
+	check_error "Failed to get topology info for nodes output vector map ('${GIS_OPT_NODES}')."
+	net_nodes_reduced=${points}
+	# Compute statistics
+	# Get global statistics for reduced network.
+	g.message -i "Computing statistics for reduced network:"
+	# Update output links count
+	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
+	check_error "Failed to get topology info for nodes output vector map ('${GIS_OPT_NODES}')."
+	get_grass_cats "${GIS_OPT_LINKS}"
+	total_cost=0
+	total_len=0
+	# min/max initially empty strings
+	min_len=""
+	max_len=""
+	min_cost=""
+	max_cost=""
+	min_cons=""
+	max_cons=""
+	step=1 # This one is just for progress reporting.
+	# Compute simple metrics
+	for cat in $GRASS_CATS ; do
+		len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+		check_error "Failed to query field '${fld_length_m}' from links output layer (where cat='${cat}')"
+		awk_min "${min_len}" "${len}"
+		min_len="${AWK_VALUE}"
+		awk_max "${max_len}" "${len}"
+		max_len="${AWK_VALUE}"
+		awk_calc "$total_len+$len"
+		total_len=${AWK_VALUE}
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
+			check_error "Failed to query field '${fld_cost}' from links output layer (where cat='${cat}')"
+			awk_min "${min_cost}" "${cost}"
+			min_cost="${AWK_VALUE}"
+			awk_max "${max_cost}" "${cost}"
+			max_cost="${AWK_VALUE}"
+			awk_calc "$total_cost+$cost"
+			total_cost=${AWK_VALUE}
+		fi
+		g.message -p "${step} ${lines} 1"
+		step=`expr ${step} + 1`
+	done	
+	net_links_reduced=${lines}
+	net_len_reduced=${total_len}
+	net_len_min_reduced="${min_len}"
+	net_len_max_reduced="${max_len}"
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		net_cost_reduced=${total_cost}
+		net_cost_min_reduced="${min_cost}"
+		net_cost_max_reduced="${max_cost}"
+	fi
+	# Compute mean(s)
+	awk_calc "(${lines}*2)/${net_nodes_reduced}"
+	net_cons_mean_reduced=${AWK_VALUE}
+	awk_calc "$total_len/$lines"
+	net_len_mean_reduced=${AWK_VALUE}
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		awk_calc "$total_cost/$lines"
+		net_cost_mean_reduced=${AWK_VALUE}
+	fi
+	# Compute median(s)
+	lengths=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_length_m}" -c`
+	check_error "Failed to query field '${fld_length_m}' from links output layer (${GIS_OPT_LINKS})."
+	awk_median "$lengths"	
+	if [ -z "${AWK_VALUE}" ] ; then
+		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
+	fi
+	net_len_median_reduced=${AWK_VALUE}
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${fld_cost}" -c`
+		check_error "Failed to query field '${fld_cost}' from links output layer (${GIS_OPT_LINKS})."
+		awk_median "$costs"	
+		if [ -z "${AWK_VALUE}" ] ; then
+			exit_error "No cost data found in attribute table of links output layer (${GIS_OPT_LINKS})."
+		fi
+		net_cost_median_reduced=${AWK_VALUE}
+	fi
+fi
+
+# Output global network statistics
+# 1. For unreduced network (these were already computed in 'model_complete' and are
+#    always available):
+if [ ${GIS_FLAG_G} -eq 1 ] ; then
+	echo "net_nodes_unreduced=${net_nodes_undreduced}"
+	echo "net_links_unreduced=${net_links_unreduced}"	
+	echo "net_len_unreduced=${net_len_unreduced}"
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		echo "net_cost_unreduced=${net_cost_unreduced}"
+	fi
+	echo "net_cons_mean_unreduced=${net_cons_mean_unreduced}"
+	echo "net_len_min_unreduced=${net_len_min_unreduced}"
+	echo "net_len_max_unreduced=${net_len_max_unreduced}"	
+	echo "net_len_mean_unreduced=${net_len_mean_unreduced}"
+	echo "net_len_median_unreduced=${net_len_median_unreduced}"
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then		
+		echo "net_cost_min_unreduced=${net_cost_min_unreduced}"
+		echo "net_cost_max_unreduced=${net_cost_max_unreduced}"
+		echo "net_cost_mean_unreduced=${net_cost_mean_unreduced}"
+		echo "net_cost_median_unreduced=${net_cost_median_unreduced}"
+	fi
+else
+	g.message -i "Unreduced ('complete') network properties:"
+	g.message -i "Nodes: ${net_nodes_undreduced}"
+	g.message -i "Links: ${net_links_unreduced}"
+	g.message -i "Total network length(m): ${net_len_unreduced}"
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -i "Total network cost: ${net_cost_unreduced}"
+	fi		
+	g.message -i "Mean connections/node: ${net_cons_mean_unreduced}"
+	g.message -i "Min. link length: ${net_len_min_unreduced}"
+	g.message -i "Max. link length: ${net_len_max_unreduced}"
+	g.message -i "Mean link length: ${net_len_mean_unreduced}"
+	g.message -i "Median link length: ${net_len_median_unreduced}"	
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -i "Min. link cost: ${net_cost_min_unreduced}"
+		g.message -i "Max. link cost: ${net_cost_max_unreduced}"
+		g.message -i "Mean link cost: ${net_cost_mean_unreduced}"
+		g.message -i "Median link cost: ${net_cost_median_unreduced}"
+	fi
+fi
+# 2. For reduced network: Only available if a model other than COMPLETE was chosen.
+if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
+	# Attempt to get contents of column in ${FLD_LINKS} from output nodes map.
+	# We need this to compute the min/max number of connections across all nodes.
+	net_cons_min_reduced=""
+	net_cons_max_reduced=""
+	result=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | ${GREP} -w "${FLD_LINKS}" | ${GREP} -c "|${FLD_LINKS}"`
+	check_error "Failed to get columns info for nodes output vector map ('${GIS_OPT_NODES}')."
+	if [ ${result} -gt 0 ] ; then		
+		LINKS=`v.db.select map="${GIS_OPT_NODES}" layer="1" columns="${FLD_LINKS}" -c --quiet`	
+		for link in ${LINKS} ; do
+			awk_min "${net_cons_min_reduced}" "${link}"
+			net_cons_min_reduced="${AWK_VALUE}"
+			awk_max "${net_cons_max_reduced}" "${link}"
+			net_cons_max_reduced="${AWK_VALUE}"
+		done
+	fi
+	if [ ${GIS_FLAG_G} -eq 1 ] ; then
+		echo "net_nodes_reduced=${net_nodes_reduced}"
+		echo "net_links_reduced=${net_links_reduced}"	
+		echo "net_len_reduced=${net_len_reduced}"
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			echo "net_cost_reduced=${net_cost_reduced}"
+		fi
+		if [ -n "${net_cons_min_reduced}" ] ; then
+			echo "net_cons_min_reduced=${net_cons_min_reduced}"
+			echo "net_cons_max_reduced=${net_cons_max_reduced}"
+		fi
+		echo "net_cons_mean_reduced=${net_cons_mean_reduced}"
+		echo "net_len_min_reduced=${net_len_min_reduced}"
+		echo "net_len_max_reduced=${net_len_max_reduced}"
+		echo "net_len_mean_reduced=${net_len_mean_reduced}"
+		echo "net_len_median_reduced=${net_len_median_reduced}"
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			echo "net_cost_min_reduced=${net_cost_min_reduced}"
+			echo "net_cost_max_reduced=${net_cost_max_reduced}"
+			echo "net_cost_mean_reduced=${net_cost_mean_reduced}"
+			echo "net_cost_median_reduced=${net_cost_median_reduced}"
+		fi
+	else
+		g.message -i "Reduced ('${GIS_OPT_MODEL}') network properties:"
+		g.message -i "Nodes: ${net_nodes_reduced}"
+		g.message -i "Links: ${net_links_reduced}"
+		g.message -i "Total length(m): ${net_len_reduced}"	
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			g.message -i "Cost: ${net_cost_reduced}"
+		fi
+		if [ -n "${net_cons_min_reduced}" ] ; then
+			echo "Min. connections/node: ${net_cons_min_reduced}"
+			echo "Max. connections/node: ${net_cons_max_reduced}"
+		fi
+		g.message -i "Mean connections/node: ${net_cons_mean_reduced}"
+		g.message -i "Min. link length: ${net_len_min_reduced}"
+		g.message -i "Max. link length: ${net_len_max_reduced}"
+		g.message -i "Mean link length: ${net_len_mean_reduced}"
+		g.message -i "Median link length: ${net_len_median_reduced}"
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			g.message -i "Min. link cost: ${net_cost_min_reduced}"
+			g.message -i "Max. link cost: ${net_cost_max_reduced}"
+			g.message -i "Mean link cost: ${net_cost_mean_reduced}"
+			g.message -i "Median link cost: ${net_cost_median_reduced}"
+		fi
+	fi
+fi
+
+# In case that any rows were dropped, we need to copy the temporary
+# map with reduced attribute table back to the original output map!
+if [ "${nodes_org}" != "${GIS_OPT_NODES}" ] ; then
+	# Remove old version of nodes output map, so that g.copy won't chatter about overwriting it.
+	g.remove type="vector" name="${nodes_org}" -f --quiet
+	check_error "Failed to delete nodes vector map for replacement with reduced attributes map."
+	# Copy new version with reduced attribute rows as original output map name:
+	g.copy vector="${GIS_OPT_NODES},${nodes_org}" --overwrite --quiet
+	check_error "Failed to copy new nodes map with reduced attributes to output map."
+fi
+
+# DONE!
+
+# Remove temp. maps, restore region, etc.
+clean_up
+
+# Show processing time.
+g.message -i "Success."
+g.message -i "Started: ${START}"
+END=`date`
+g.message -i "Completed: ${END}"
+
+# Exit with status "OK"
+exit ${EXIT_OK}
+
