@@ -91,7 +91,7 @@ For use via the QGIS Processing plug-in:
 5. Quit and restart QGIS using the "QGIS Desktop with GRASS 7"(!) launcher.
 
 Windows notes: 
-* GRASS modules may not be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher.
+* GRASS modules might only be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher.
 * The current GRASS plug-in for QGIS is not very good at monitoring continuous status messages that come from GRASS modules. There is too much buffering going on (this is a general problem with text output on Windows consoles), which means that status output by CPU and/or I/O expensive operations will be delayed until it is basically useless. Be patient: Even if no progress is visible in the QGIS status monitor, v.net.models will eventually complete.
 
 
