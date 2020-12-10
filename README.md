@@ -1,8 +1,8 @@
 # v.net.models
-Node-based network model generator for GRASS GIS 7.x (can also from within the QGIS Processing plug-in: see instructions below).
+Node-based network model generator for GRASS GIS 7.x (can also be used via the QGIS Processing plug-in: see instructions below).
 
-This program takes a vector points layer as input, produces a new vector lines layer that represents the links of the reconstructed network.
-Several connectivity models have been implemented to drive the reconstructions.
+This program takes a vector points layer as input and produces a new vector lines layer that represents the links of the reconstructed network.
+Several connectivity models have been implemented.
 
 # Included files
 
@@ -65,12 +65,12 @@ For use via the QGIS Processing plug-in:
 
 Make sure to set the Windows file manager to show "Extensions for known file types". Otherwise you might have trouble telling apart the different files that share the base name "v.net.models"!
 
-Use under Windows required installation of a Bourne Shell (or compatible interpreter) and associated GNU command line tools. A great solution for this is to install the MSYS2 distribution which comes with everything you need to run "v.net.models" (and more). Of course, if you already have MSYS2 installed, then you can skip this step (but remember to check and sdjust "v.net.models.bat" if necessary: see point 4, below):
+Use under Windows requires installation of a Bourne Shell (or compatible interpreter) and associated GNU command line tools. A great solution for this is to install the MSYS2 distribution which comes with everything you need to run "v.net.models" (and more). Of course, if you already have MSYS2 installed, then you can skip this step (but remember to check and sdjust "v.net.models.bat" if necessary: see point 4, below):
 
 1. Go to go to https://www.msys2.org/ and download the installer package for MSYS2.
 2. Run the installer. Accepting the default installation path (C:\msys64) is highly recommended.
 3. If you went with the default installation settings: Skip straight to the section on "use v.net.models in GRASS GIS" or "use via the QGIS Processing plug-in"!
-4. If (and only if) you have *not* installed into the default "C:\msys64" folder, then you npew need to edit edit "v.net.models.bat" and modify its first two lines: 
+4. If (and only if) you have *not* installed into the default "C:\msys64" folder, then you now need to edit edit "v.net.models.bat" and modify its first two lines: 
 
 set GRASS_SH=C:\msys64\usr\bin\sh.exe
 set MSYSPATH=/c/msys64/usr/bin
