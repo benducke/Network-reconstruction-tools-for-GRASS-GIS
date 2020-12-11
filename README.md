@@ -18,8 +18,7 @@ This software is a Bourne Shell script that has been tested and verified to run 
 
 Tested with:
 
-GRASS GIS 7.8.3
-QGIS 3.10.12
+GRASS GIS 7.8.3 & QGIS 3.10.12
 
 This script requires a working installation of GRASS 7 (confirmed to work with GRASS), the Bourne Shell (alternatively: BASH or another sh-compatible Shell) and a set of support tools (GNU awk, expr and grep are strictly required). Linux and macOS users will already have the latter on their system. Windows users must install an additional software package (MSYS2).
 
