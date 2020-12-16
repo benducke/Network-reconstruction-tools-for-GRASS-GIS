@@ -31,7 +31,8 @@ Linux-based operating systems have all required shell scripting tools.
 To use v.net.models in GRASS GIS:
 1. Copy the file "v.net.models" into the "scripts" subdirectory of your GRASS installation (use "sudo" if required).
 2. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-3. Alternatively, copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session ("sh <pat_to_file>/v.net.models").
+
+(Alternatively: copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session: "sh <path_to_script>/v.net.models")
 
 For use via the QGIS Processing plug-in:
 1. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled.
@@ -49,7 +50,8 @@ To use v.net.models in GRASS GIS:
 1. Browse the GRASS App folder using Finder (or "cd" into the "GRASS.Application" folder using the command line) and locate the subfolder "scripts".
 2. Copy the file "v.net.models" into the "Contents/Resources/scripts" subdirectory of your GRASS Application bundle (use "sudo" if required).
 3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-4. Alternatively, copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session ("sh <pat_to_file>/v.net.models").
+
+(Alternatively: copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session: "bash <path_to_script>/v.net.models")
 
 For use via the QGIS Processing plug-in:
 1. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled.
