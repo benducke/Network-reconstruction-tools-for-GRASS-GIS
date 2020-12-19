@@ -91,10 +91,10 @@
 #% keywords: vector, points, lines, network, reconstruction
 #%End
 
-#%Flag
-#%  key: c
-#%  description: Connect distant nodes to links if reachable
-#%End
+##%Flag
+##%  key: c
+##%  description: Connect distant nodes to links if reachable
+##%End
 
 #%Flag
 #%  key: d
@@ -116,10 +116,10 @@
 #%  description: Reduce input points to those in current region
 #%End
 
-#%Flag
-#%  key: s
-#%  description: Smooth paths of least-cost links
-#%End
+##%Flag
+##%  key: s
+##%  description: Smooth paths of least-cost links
+##%End
 
 #%Option
 #% key: input
@@ -303,16 +303,16 @@
 #% answer: 0.000001
 #%End
 
-#%Option
-#% key: threads
-#% type: integer
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Number of threads for parallel processing (performance) 
-#% options: 1-1024
-#% answer: 2
-#%End
+##%Option
+##% key: threads
+##% type: integer
+##% required: no
+##% multiple: no
+##% key_desc: value
+##% description: Number of threads for parallel processing (performance) 
+##% options: 1-1024
+##% answer: 2
+##%End
 
 # System setup: Modify if needed.
 if [ -n "$MSYSPATH" ] ; then
