@@ -404,11 +404,12 @@ TMP_VECT_NODES_DROPROW_2="${TMP_PREFIX}_v_n_droprow_2" # Nodes with row dropped 
 TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" # BASE name of one vector map patch for model_complete
 
 # Names of temporary maps (RASTER)
+TMP_RAST_COST_RSP="${TMP_PREFIX}_r_cost_rsp" # Resampled version of original cost raster map
 TMP_RAST_COST_MIN="${TMP_PREFIX}_r_cost_min" # Minimum cost output of r.cost
 TMP_RAST_COST_DIR="${TMP_PREFIX}_r_cost_dir" # Directional surface output r.cost
 TMP_RAST_COST_RES="${TMP_PREFIX}_r_cost_res" # Directional surface output r.cost (resampled)
 TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost (random error)
-TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
+TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error) 
 
 # Names of temporary regions
 TMP_GEN_REGION_ORG="${TMP_PREFIX}_g_region_org" # Original region settings
@@ -547,6 +548,12 @@ clean_up () {
 	
 	# Temporary RASTER maps
 	type="raster"
+	# Resampled version of original cost raster map
+	elem="${TMP_RAST_COST_RSP}"
+	 found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
 	# Minimum cost output of r.cost
 	elem="${TMP_RAST_COST_MIN}"
 	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
@@ -983,18 +990,6 @@ grep_is_positive () {
 
 
 # FUNCTION
-# TODO:
-# Caller does this
-# set -- <grass cmd name> param1=... param1=... -flag_1 -flag_2 ...
-# This function then passes "$@" (in quotes) to an exec call and handles
-# error catching, displaying an error message passed as "$1"
-run_grass_cmd () {
-	#TODO
-	echo "TODO."
-}
-
-
-# FUNCTION
 # check_setup: Check system setup (required external programs available?).
 check_setup () {	
 	message="Failed to run required program: "	
@@ -1029,21 +1024,9 @@ check_environment () {
 
 # FUNCTION
 # check_input: Check input data for validity. ORDER MATTERS!
-check_input () {	
+check_input () {
 	
 	# Check 'initial' links map (if specified).
-	# TODO: We must ALSO check that:
-	#		- contains all required attribute fields
-	#		  'cost' field is optional:
-	#				* if it exists then we run in cost-based mode!
-	#				* if does not exist, but we have "costmap=", then we add 'cost' and compute its values!
-	#		- all attributes have the required types
-	#		- all attributes contain data
-	#		- all attribute data is within required ranges
-	#   	- to/from atts must match node IDs and must have the same types
-	#     	- to/from pairs must be unique
-	#   	- make sure that 'cat' exists, is INTEGER and unique for all lines
-	#		--> ALL OF THESE MUST BE IN LAYER 1!!!
 	if [ -n "${GIS_OPT_INITIAL}" ] ; then
 		eval `v.info -e map="${GIS_OPT_INITIAL}" | ${GREP} "num_dblinks="`
 		if [ -z ${num_dblinks} ] ; then
@@ -1723,6 +1706,13 @@ preprocess () {
 		new_ewres="$AWK_VALUE"		
 		g.region nsres="${new_nsres}" ewres="${new_ewres}"	
 		check_error "Failed to increase GRASS region resolution."
+		# Create a new version of the original cost input raster, in wich every
+		# cell value is the original value divided by the resampling factor.
+		# This is to ensure that the maximum costs of links do not grow when
+		# using resampled cost rasters, which would be counter-intuitive!
+		r.mapcalc expression="${TMP_RAST_COST_RSP}=( ${GIS_OPT_COSTMAP} / ${GIS_OPT_COSTRES} )" --overwrite
+		# Swap original cost raster for resampled one:  
+		GIS_OPT_COSTMAP="${TMP_RAST_COST_RSP}"
 	fi
 	
 	# Add random error (noise) to cost surface?
@@ -1734,7 +1724,7 @@ preprocess () {
 		 check_error "Failed to create random error/noise raster (option 'costerr=')."
 		 # Add error and compress to normalized range +/-100% with e.g. PERC=0.2 for a +/-20% error margin:
 		 g.message -i "Normalizing random error/noise raster..."
-		 r.mapcalc ${EXPR}="${TMP_RAST_COST_NRM}=( ${GIS_OPT_COSTMAP} * (1.0 + (100.0-${TMP_RAST_COST_ERR}) / (10000.0/${GIS_OPT_COSTERR})) )" --overwrite
+		 r.mapcalc expression="${TMP_RAST_COST_NRM}=( ${GIS_OPT_COSTMAP} * (1.0 + (100.0-${TMP_RAST_COST_ERR}) / (10000.0/${GIS_OPT_COSTERR})) )" --overwrite
 		 check_error "Failed to create normalized random error/noise raster (option 'costerr=')."
 		 # Assign cost surface with error as new cost surface!
 		 GIS_OPT_COSTMAP="${TMP_RAST_COST_NRM}"
@@ -3985,4 +3975,3 @@ g.message -i "Completed: ${END}"
 
 # Exit with status "OK"
 exit ${EXIT_OK}
-
