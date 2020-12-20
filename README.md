@@ -38,7 +38,7 @@ For use via the QGIS Processing plug-in:
 1. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled.
 2. Copy the file "v.net.models" to the scripts "subdirectory" of the GRASS installation used by QGIS.
 3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-4. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7" of your QGIS installation (the exact location of this subdirectory depends on your Linux distribution; on Arch Linux it is "/usr/share/qgis/python/plugins/processing/algs/grass7").
+4. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS installation (the exact location of this subdirectory depends on your Linux distribution; on Arch Linux it is "/usr/share/qgis/python/plugins/processing/algs/grass7/description").
 5. Restart QGIS.
 6. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
 
@@ -58,7 +58,7 @@ For use via the QGIS Processing plug-in:
 2. Browse the QGIS App folder using Finder (or "cd" into the "QGIS.Application" folder using the command line) and locate the subfolder "apps/grass/scripts".
 3. Copy the file "v.net.models" into the QGIS App subfolder "apps/grass/scripts".
 3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-4. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7" of your QGIS App bundle.
+4. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS App bundle.
 5. Restart QGIS.
 6. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
 
