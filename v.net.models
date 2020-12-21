@@ -8,7 +8,7 @@
 #             	by adding lines (links) between all or a subset of them. Links 
 #				are added according to the chosen connectivity model.
 #				Connection costs between nodes are computed as euclidean (default)
-#				or Manhatten distances. For more realism, connection costs and
+#				distances. For more realism, connection costs and
 #				actual link shapes can be modeled as least-cost paths
 #				between nodes (requires an isotropic rast cost surface as
 #				additional input).
