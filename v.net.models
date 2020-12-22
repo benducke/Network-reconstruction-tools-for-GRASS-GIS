@@ -8,7 +8,7 @@
 #             	by adding lines (links) between all or a subset of them. Links 
 #				are added according to the chosen connectivity model.
 #				Connection costs between nodes are computed as euclidean (default)
-#				distances. For more realism, connection costs and
+#				For more realism, connection costs and
 #				actual link shapes can be modeled as least-cost paths
 #				between nodes (requires an isotropic rast cost surface as
 #				additional input).
@@ -91,10 +91,14 @@
 #% keywords: vector, points, lines, network, reconstruction
 #%End
 
+#TODO: IMPLEMENT ME!
 ##%Flag
 ##%  key: c
 ##%  description: Connect distant nodes to links if reachable
 ##%End
+#DELETE ME: This is only so that the shell tests don't freak out
+#if the variable is not defined.
+GIS_FLAG_C=0
 
 #%Flag
 #%  key: d
@@ -116,10 +120,14 @@
 #%  description: Reduce input points to those in current region
 #%End
 
+#TODO: IMPLEMENT ME!
 ##%Flag
 ##%  key: s
 ##%  description: Smooth paths of least-cost links
 ##%End
+#DELETE ME: This is only so that the shell tests don't freak out
+#if the variable is not defined.
+GIS_FLAG_S=0
 
 #%Option
 #% key: input
@@ -303,6 +311,7 @@
 #% answer: 0.000001
 #%End
 
+#TODO: IMPLEMENT ME!
 ##%Option
 ##% key: threads
 ##% type: integer
@@ -313,6 +322,9 @@
 ##% options: 1-1024
 ##% answer: 2
 ##%End
+#DELETE ME: This is only so that the shell tests don't freak out
+#if the variable is not defined.
+GIS_OPT_THREADS=2
 
 # System setup: Modify if needed.
 if [ -n "$MSYSPATH" ] ; then
@@ -3068,13 +3080,13 @@ model_delaunay () {
 	#   (upload start and end coordinates to delaunay lines, then compare with
 	#    those uploaded to set of complete links)
 	g.message -i "Reducing network using connectivity model 'DELAUNAY':"
-	# NOTE: Current version of v.delaunay (GRASS 7.8.3) is botched: When using its '-l'
+	# NOTE: Current version of v.delaunay (GRASS 7.8.4) is botched: When using its '-l'
 	# flag to produce lines, it produces a faulty geometry structure that prevents adding
-	# valid categories (cats) using v.db.addtable or v.category to the features.
-	# As work-around, we use create polygonal delaunay output and then use  
-	# the rather awful v.to.lines, which is a Python script around v.edit & Co.
+	# valid categories (cats), using v.db.addtable or v.category, to the features.
+	# As work-around, we create polygonal delaunay output and then use  
+	# the rather clumsy v.to.lines, which is a Python script around v.edit & Co.,
 	# that polutes the console with useless messages and also adds an attribute table
-	# to layer 2, while expecting an attributes table to be present in layer 1.
+	# to layer 2, while expecting an attribute table to be present in layer 1.
 	# We'll need to clean up all that mess to get something useful, then use v.to.db
 	# to upload delaunay line start/end node coords to the attribute table in layer 1...
 	v.delaunay input="${GIS_OPT_INPUT}" output="${TMP_VECT_LINKS_DELAUNAY_P}" --o --quiet
@@ -3091,10 +3103,12 @@ model_delaunay () {
 	check_error "Failed to upload line start coordinates to temporary map with Delaunay triangulation."
 	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="end" columns="${fld_to_x},${fld_to_y}" units="meters" --o --quiet
 	check_error "Failed to upload line end coordinates to temporary map with Delaunay triangulation."
+	
 	# DEBUG
 	#v.info ${TMP_VECT_LINKS_DELAUNAY_L}
 	#v.db.select ${TMP_VECT_LINKS_DELAUNAY_L}
 	#v.db.select ${GIS_OPT_LINKS}
+	
 	# Store name of original links output map (we might modify it).
 	links_org="${GIS_OPT_LINKS}"
 	# Step through all links and use v.edit to delete every link that is not also a Delaunay link	
