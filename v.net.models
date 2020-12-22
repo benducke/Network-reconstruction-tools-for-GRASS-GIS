@@ -27,20 +27,23 @@
 #############################################################################
 
 # REQUIRED INPUT:
-# - vector map with at least two points:
-#   - points can be filtered by using cats= or where= option
+# - Vector map with at least two points:
+#   - points can be filtered by using cats= or where= option;
 #   - if no cost map is provided, processing is done for all (filtered) points
-#     in the input map
-# - if a cost map is provided, processing is done only for points in the
+#     in the input map.
+# - If a cost map is provided, processing is done only for points in the
 #   current region and there must be at least two points in the current region
-# - if a cost map is provided, then it must have at least some non-NULL cells in
-#   the current region [Do not zoom into selected points to closely!] 
+# - If a cost map is provided, then it must have at least some non-NULL cells in
+#   the current region. 
 #
-# NOTES:
+# NOTES ON PERFORMANCE:
 # To keep computational complexity manageable, this program will always
 # create a fully connected network first, at the expense of O = n(n - 1) / 2.
 # In a second step, the links are then reduced to the ones that match the
-# constraints of the chosen model.
+# constraints of the chosen model. Thus, it is possible to first compute the
+# fully connected model, store it and then load it as an initial model
+# (option initial=), so that this step must not be repeated every time
+# another type of model is computed.
 #
 # REQUIRED EXTERNAL PROGRAMS:
 # - grep
@@ -49,42 +52,27 @@
 # - date
 #
 # HINTS:
-# - Noise generator for raster cost input: r.random.surface can be used for that.
 # - NULL values in input cost map will be excluded from least-cost path computations.
 #
 # CAVEATS:
-# - when running in cost-based and multi-threaded mode, this program can consume
-#   large amount of storage space for temporary raster maps.
-# - some required external programs
-# - the underlying cost model is isotropic, i.e. there is no
+# - When running in cost-based mode, this program will consume large
+#	amount of storage space for temporary raster maps. This space will
+#   only be freed, once the program has completed or has been aborted
+#   by the user.
+# - The underlying cost model is isotropic, i.e. there is no
 #   (relevant) difference between travelling A->B or B->A in terms
 #   of distance and/or cost; there is also no possibility to include
 #   global directional factors, e.g. that it is much easier to cross
 #   the open sea N-S then E-W or local effects, e.g. wind and current
-#   patterns influencing movement cost depending on direction
-# - when fitting a priori links and adjusting the network constraints
+#   patterns influencing movement cost depending on direction.
+# - When fitting a priori links and adjusting the network constraints
 #   accordingly, user has to decide whether this should be done
 #   by relaxing distance threshold or increasing size coefficient
-#   (in case of a hierarchical network)
-# - least-cost path computations suffer from edge effect:
+#   (in case of a hierarchical network).
+# - Least-cost path computations suffer from edge effect:
 #   if a lower cost past exists through a "hinterland" that is
-#   not part of the current region, then it will not be found
-# - there is no modelling of "by-the-road" sites, i.e. the models
-#   only includes links of sites to other sites, not so merely
-#   road segments
-# - currently, GRASS' r.path reference the nodes of its output vector
-#   path to the cell boundaries of the current GRASS region!
-#   This means that they can be offset from the original
-#   start/end points locations up tp 1/2 cell size in each direction!
-#   Unfortunately, all of GRASS' snapping tolls (v.edit, v.clean, v.net)
-#   will move points to snap to line nodes, never the other way around.
-#   The end nodes of the least cost paths will be adjusted to match the
-#   locations of the original input nodes as accurately as possible, but
-#   there may still be minute differences. It is recommended to use
-#   a GRASS points snapping tool, such as 'v.clean' or 'v.net' to
-#   slightly adjust the network nodes. Nodes output by this program
-#   (option 'nodes=') will automatically be adjusted accordingly.
-#                     
+#   not part of the current region, then it will not be found.
+
 
 #%Module
 #% description: Performs model-based reconstruction of network links from input points.
