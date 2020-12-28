@@ -23,5 +23,5 @@ QgsProcessingParameterVectorDestination|links|Output vector map for reconstructe
 QgsProcessingParameterVectorDestination|nodes|Output vector map for attributed network nodes (points)
 QgsProcessingParameterBoolean|-d|Drop unconnected nodes from output map|False
 *QgsProcessingParameterBoolean|-g|Output global network statistics in shell script style|False
-QgsProcessingParameterBoolean|-m|Assume 'maxdist' to be meters (only if 'costmap' is provided)|False
+QgsProcessingParameterBoolean|-m|Links count as meters instead of costs (if 'costmap' is provided)|False
 *QgsProcessingParameterBoolean|-r|Reduce input points to those in GRASS region (set below)|False
