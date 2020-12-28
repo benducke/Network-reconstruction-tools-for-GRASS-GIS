@@ -26,24 +26,6 @@
 #
 #############################################################################
 
-# REQUIRED INPUT:
-# - Vector map with at least two points:
-#   - points can be filtered by using cats= or where= option;
-#   - if no cost map is provided, processing is done for all (filtered) points
-#     in the input map.
-# - If a cost map is provided, processing is done only for points in the
-#   current region and there must be at least two points in the current region
-# - If a cost map is provided, then it must have at least some non-NULL cells in
-#   the current region. 
-#
-# NOTES ON PERFORMANCE:
-# To keep computational complexity manageable, this program will always
-# create a fully connected network first, at the expense of O = n(n - 1) / 2.
-# In a second step, the links are then reduced to the ones that match the
-# constraints of the chosen model. Thus, it is possible to first compute the
-# fully connected model, store it and then load it as an initial model
-# (option initial=), so that this step must not be repeated every time
-# another type of model is computed.
 #
 # REQUIRED EXTERNAL PROGRAMS:
 # - grep
@@ -51,27 +33,6 @@
 # - expr
 # - date
 #
-# HINTS:
-# - NULL values in input cost map will be excluded from least-cost path computations.
-#
-# CAVEATS:
-# - When running in cost-based mode, this program will consume large
-#	amount of storage space for temporary raster maps. This space will
-#   only be freed, once the program has completed or has been aborted
-#   by the user.
-# - The underlying cost model is isotropic, i.e. there is no
-#   (relevant) difference between travelling A->B or B->A in terms
-#   of distance and/or cost; there is also no possibility to include
-#   global directional factors, e.g. that it is much easier to cross
-#   the open sea N-S then E-W or local effects, e.g. wind and current
-#   patterns influencing movement cost depending on direction.
-# - When fitting a priori links and adjusting the network constraints
-#   accordingly, user has to decide whether this should be done
-#   by relaxing distance threshold or increasing size coefficient
-#   (in case of a hierarchical network).
-# - Least-cost path computations suffer from edge effect:
-#   if a lower cost past exists through a "hinterland" that is
-#   not part of the current region, then it will not be found.
 
 
 #%Module
@@ -100,7 +61,7 @@ GIS_FLAG_C=0
 
 #%Flag
 #%  key: m
-#%  description: Assume 'maxdist' to be meters (only if 'costmap' is provided)
+#%  description: Links count as meters instead of costs (if 'costmap' is provided)
 #%End
 
 #%Flag
@@ -3167,11 +3128,7 @@ model_delaunay () {
 #					This model type is never called directly by the user!
 #					Instead, it is run as an additional model, every time the option
 #					'maxdist=' is given.
-model_linkdist () {		
-	if [ ${GIS_FLAG_M} -eq 1 ] ; then
-		distfld=${fld_length_m} # Force distance units to be meters if '-m' flag is given
-		units="m"
-	fi
+model_linkdist () {	
 	g.message -i "Maximum linking distance set to '${GIS_OPT_MAXDIST}' (${units})."	
 	g.message -i "Reducing network:"
 	# Store name of original links output map (we might modify it).
@@ -3550,8 +3507,14 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 	# Copy initial map as (preliminary) links output map:
 	g.copy vector="${GIS_OPT_INITIAL},${GIS_OPT_LINKS}" --overwrite --quiet
 	check_error "Failed to copy initial links map as preliminary links output map."
-	# TODO: To run in cost-based mode (if attr 'cost' exists), we now need to set
-	# "GIS_OPT_COSTMAP" to some dummy value!
+	# TODO: TRIGGER COST-BASED MODE HERE IF "COST" ATTRIBUTE IS PRESENT!
+	# TODO: 1. Check for presence and type of field "cost".
+	# TODO: 2. Content completeness of field "cost" must be checker earlier: in check_input!
+	# TODO  3. "cost" field and contents must be generated adhoc, if it does not exist but "costmap=" is specified!
+	# TODO: 4. Set global var "COST_MODE" to "TRUE" if appropriate.
+	# TODO: 5. Only model_complete() must ever read $GIS_OPT_COSTMAP!	
+	# TODO:    All other tests for $GIS_OPT_COSTMAP must be replaced with $COST_MODE
+	# TODO: 6. model_complete() must also set COST_MODE as required!
 else
 	# Complete model needs to be computed.
 	model_complete
@@ -3567,6 +3530,10 @@ if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 	distfld=${fld_cost} # Default if costmap is provided
 	units="cost"		
 fi
+if [ ${GIS_FLAG_M} -eq 1 ] ; then
+	distfld=${fld_length_m} # Force distance units to be meters if '-m' flag is given
+	units="m"
+fi
 
 # Compute selected reduced model (if any).
 if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
@@ -3575,12 +3542,6 @@ fi
 if [ "${GIS_OPT_MODEL}" = "delaunay" ] ; then
 	model_delaunay
 fi
-# We don't call 'linkdist' explicitly. It is semantically
-# the same as using model 'complete' plus specifying "maxdist="
-#if [ "${GIS_OPT_MODEL}" = "linkdist" ] ; then	
-#	model_complete
-#	model_linkdist
-#fi
 if [ "${GIS_OPT_MODEL}" = "nn" ] ; then
 	model_nn
 fi
@@ -3977,3 +3938,4 @@ g.message -i "Completed: ${END}"
 
 # Exit with status "OK"
 exit ${EXIT_OK}
+
