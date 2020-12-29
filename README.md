@@ -1,5 +1,5 @@
 # v.net.models
-This program is a nodes-based network model generator for GRASS GIS 7.x (can also be used via the QGIS Processing plug-in: see instructions below).
+This program is a nodes-based network model generator and research tool for GRASS GIS 7.x (can also be used via the QGIS Processing plug-in: see instructions below). Its intended uses are for reconstructing (hypothetical) network links from nodes alone, and for generating baseline models for comparison with more advanced reconstructions (computed with other tools).
 
 It takes a vector points layer as input and produces a new vector lines layer that represents the links of the reconstructed network.
 Several connectivity models have been implemented.
