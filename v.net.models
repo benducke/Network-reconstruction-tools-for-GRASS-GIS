@@ -143,7 +143,7 @@ GIS_FLAG_S=0
 #%Option G_OPT_DB_COLUMN
 #% key: key
 #% required: yes
-#% description: Name of numeric key field in input points' attribute table
+#% description: Name of integer key field in input points' attribute table
 #% gisprompt: old,dbcolumn,dbcolumn
 #%End
 
@@ -1226,16 +1226,16 @@ check_input () {
 	if [ ${points} -ne ${num_keys} ] ; then
 		exit_error "Number of primary key records (option 'key=') does not match number of input points (${num_keys} vs ${num_points})."
 	fi
-	# - must be of type, integer or double
+	# - must be of type INTEGER
 	KEY_TYPE="UNKNOWN"
 	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "INTEGER|${GIS_OPT_KEY}" -w -c`
 	if [ ${result} -eq 1 ] ; then
 		KEY_TYPE="INTEGER"
 	fi
-	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${GIS_OPT_KEY}" -w -c`
-	if [ ${result} -eq 1 ] ; then
-		KEY_TYPE="DOUBLE PRECISION"
-	fi
+	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${GIS_OPT_KEY}" -w -c`
+	#if [ ${result} -eq 1 ] ; then
+	#		KEY_TYPE="DOUBLE PRECISION"
+	#fi
 	#UPDATE: We now accept only numeric primary keys, since this makes a lot of data ops tighter.
 	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "CHARACTER|${GIS_OPT_KEY}" -w -c`
 	#if [ ${result} -eq 1 ] ; then
@@ -1246,7 +1246,7 @@ check_input () {
 	#	KEY_TYPE="TEXT"
 	#fi
 	if [ "${KEY_TYPE}" = "UNKNOWN" ] ; then
-		exit_error "Type of 'key' field in input points layer is not numeric (option 'key=')."
+		exit_error "Type of 'key' field in input points layer is not integer (option 'key=')."
 	fi	
 	# - must be unique for each feature
 	KEYS=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$'`
@@ -3938,4 +3938,3 @@ g.message -i "Completed: ${END}"
 
 # Exit with status "OK"
 exit ${EXIT_OK}
-
