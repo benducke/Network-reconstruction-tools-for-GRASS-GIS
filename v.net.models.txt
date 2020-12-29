@@ -22,6 +22,6 @@ QgsProcessingParameterNumber|costres|Costmap resampling factor (requires 'costma
 QgsProcessingParameterVectorDestination|links|Output vector map for reconstructed network links (lines)
 QgsProcessingParameterVectorDestination|nodes|Output vector map for attributed network nodes (points)
 QgsProcessingParameterBoolean|-d|Drop unconnected nodes from output map|False
-*QgsProcessingParameterBoolean|-g|Output global network statistics in shell script style|False
-QgsProcessingParameterBoolean|-m|Links count as meters instead of costs (if 'costmap' is provided)|False
+*QgsProcessingParameterBoolean|-g|Global network statistics output in shell script style|False
+QgsProcessingParameterBoolean|-m|Measure least-cost paths in meters instead of costs|False
 *QgsProcessingParameterBoolean|-r|Reduce input points to those in GRASS region (set below)|False
