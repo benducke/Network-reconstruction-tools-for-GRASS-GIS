@@ -56,12 +56,12 @@ GIS_FLAG_C=0
 
 #%Flag
 #%  key: g
-#%  description: Output global network statistics in shell script style
+#%  description: Global network statistics output in shell script style
 #%End
 
 #%Flag
 #%  key: m
-#%  description: Links count as meters instead of costs (if 'costmap' is provided)
+#%  description: Measure least-cost paths in meters instead of costs
 #%End
 
 #%Flag
