@@ -91,10 +91,13 @@ For use via the QGIS Processing plug-in:
 4. Copy "v.net.models" (no file extension!) to QGIS subfolder "apps\grass\grass78\scripts"
 5. Quit and restart QGIS using the "QGIS Desktop with GRASS 7"(!) launcher.
 
-Windows notes: 
+# Notes and caveats
+
+## Running v.net.models via QGIS Processing
+This works well in general, with a few quirks:
+* Some options (such as "cats=" and "layer=") do not apply in QGIS. They have been hidden from the interface.
+* It is not possible (at least not using QGIS 3.10.x) to restrict attribute field choices to only fields of type integer. This means that it will be possible to select a double type (aka floating point) field for the "key=" option, which will lead to an error message ("key=" must be set to a field of type integer).
+
+## Use on Windows OS
 * GRASS modules might only be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher.
 * The current GRASS plug-in for QGIS is not very good at monitoring continuous status messages that come from GRASS modules. There is too much buffering going on (this is a general problem with text output on Windows consoles), which means that status output by CPU and/or I/O expensive operations will be delayed until it is basically useless. Be patient: Even if no progress is visible in the QGIS status monitor, v.net.models will eventually complete.
-
-
-
-
