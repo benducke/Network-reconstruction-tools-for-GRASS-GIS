@@ -20,7 +20,7 @@ Tested with:
 
 GRASS GIS 7.8.3 & QGIS 3.10.12
 
-This script requires a working installation of GRASS 7 (confirmed to work with GRASS), the Bourne Shell (alternatively: BASH or another sh-compatible Shell) and a set of support tools (GNU awk, expr and grep are strictly required). Linux and macOS users will already have the latter on their systems. Windows users must install an additional software package (MSYS2).
+At a minimum, running this script requires a working installation of GRASS 7, the Bourne Shell (alternatively: BASH or another sh-compatible Shell) and a set of support tools (GNU awk, expr and grep are strictly required). Linux and macOS users will already have the latter on their systems. Windows users must install an additional software package (MSYS2). For a more user-friendly interface, install QGIS, as well.
 
 Installation details vary depending on operating system.
 
