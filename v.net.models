@@ -984,6 +984,140 @@ check_environment () {
 
 
 # FUNCTION
+# check_field: Checks attribute field validity.
+#
+# Number of tests depends on number of arguments provided.
+# Arguments are positional:
+# 	$1 - Name of map for which to test attribute field
+#	$2 - Name of attribute field to test (case sensitive)
+#   $3 - Field type to test for. Can be one of (case matters!):
+#       "INTEGER"
+#       "DOUBLE"
+#       "NUMERIC"
+#       "TEXT"
+#		"ANY"
+#   $4 - All field contents must be non-empty? Can be one of (case matters!):
+#		"TRUE"
+#		"FALSE"
+#   $5 - Field contents must be unique? Can be one of (case matters!):
+#		"TRUE"
+#		"FALSE"
+#
+# It is always assumed that the name of the attribute table is identical
+# with the name of the map in $1, and that the table is connected as layer 1.
+#
+# This function will quit the entire program, if an error occurs
+# while querying the field or its contents!
+#
+# Return value is stored in FLD_TEST as a string:
+#   == field name ($2): ok (all tests passed)
+#   != field name ($2): not all tests passed (return string contains descr of first failed test) 
+#   empty = unknown error
+#
+check_field () {
+	
+	# Initialize return value:	
+	FLD_TEST=""
+	
+	# 1. Check if field exists (always run)
+	fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "|${2}" -o`
+	check_error "Failed to check map '$1' for field '$2'."
+	if [ "${fld_test_result}" != "|${2}" ] ; then
+		FLD_TEST="Field '$2' does not exist in attribute table of map '$1'."
+		return
+	fi
+	
+	# 2. Check for given field type (run if at least 3 arguments given)
+	if [ $# -gt 2 ] then
+		fld_test_key_type="UNKNOWN"
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "INTEGER|${2}" -w -c`
+		check_error "Failed to query map '$1' for type information on field '$2'."
+		if [ ${fld_test_result} -eq 1 ] ; then
+			$FLD_TEST_KEY_TYPE="INTEGER"
+			if [ "$3" != "INTEGER" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
+				FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+				return
+			fi
+		fi
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "DOUBLE PRECISION|${2}" -w -c`
+		check_error "Failed to query map '$1' for type information on field '$2'."
+		if [ ${fld_test_result} -eq 1 ] ; then
+			$FLD_TEST_KEY_TYPE="DOUBLE"
+			if [ "$3" != "DOUBLE" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
+				FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+				return
+			fi
+		fi
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "CHARACTER|${2}" -w -c`
+		check_error "Failed to query map '$1' for type information on field '$2'."
+		if [ ${fld_test_result} -eq 1 ] ; then
+			$FLD_TEST_KEY_TYPE="CHARACTER"
+			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
+				FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+				return
+			fi
+		fi
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "TEXT|${2}" -w -c`
+		check_error "Failed to query map '$1' for type information on field '$2'."
+		if [ ${fld_test_result} -eq 1 ] ; then
+			$FLD_TEST_KEY_TYPE="TEXT"
+			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
+				FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+				return
+			fi
+		fi
+		# ANY != UNKNOWN
+		if [ "${fld_test_key_type}" = "UNKNOWN" ] ; then
+			FLD_TEST="Field '$2' in attribute table of map '$1' has unknown type."
+			return
+		fi
+	fi
+	
+	# 3. Check for non-empty contents (run if at least 4 arguments given) 
+	if [ $# -gt 3 ] then
+		if [ "$4" == "TRUE" ] ; then
+			# Get number of features in map
+			fld_test_points_old=${points} # This is a sensitive var that might already be set!
+			eval `v.info -t map="${1}" layer=1`
+			check_error "Failed to query map '$1' for feature count."
+			fld_test_num_keys=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
+			check_error "Failed to query map '$1' for contents of field '$2'."
+			if [ ${fld_test_points} -ne ${fld_test_num_keys} ] ; then
+				FLD_TEST="Field '$2' in attribute table of map '$1' is empty in one or more instances."
+				points=${fld_test_points_old}
+				return
+			fi
+			points=${fld_test_points_old}
+		fi
+	fi
+	
+	# 4. Check for uniqueness (run if at least 5 arguments given) 
+	if [ $# -gt 4 ] then
+		if [ "$5" == "TRUE" ] ; then
+			FLD_TEST_KEYS=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | ${GREP} -v -e '^$'`
+			check_error "Failed to query map '$1' for contents of field '$2'."
+			for fld_test_key in ${FLD_TEST_KEYS} ; do
+				if [ "${FLD_TEST_KEY_TYPE}" = "CHARACTER" ] || [ "${FLD_TEST_KEY_TYPE}" = "TEXT" ] ; then
+					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}='$fld_test_key'" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
+					check_error "Failed to query map '$1' for contents of field '$2'."
+				else
+					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}=$fld_test_key" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
+					check_error "Failed to query map '$1' for contents of field '$2'."
+				fi
+				if [ ${num_matches} -ne 1 ] ; then
+					FLD_TEST="Value '$fld_test_key' is not unique for field '$2' (${fld_test_num_matches} occurrences in attribute table of map '$1')."
+					return
+				fi
+			done
+		fi
+	fi	
+	
+	# All ok
+	FLD_TEST="$2"
+}
+
+
+# FUNCTION
 # check_input: Check input data for validity. ORDER MATTERS!
 check_input () {
 	
