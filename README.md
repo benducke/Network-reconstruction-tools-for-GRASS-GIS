@@ -30,17 +30,20 @@ Linux-based operating systems have all required shell scripting tools.
 
 To use v.net.models in GRASS GIS:
 1. Copy the file "v.net.models" into the "scripts" subdirectory of your GRASS installation (use "sudo" if required).
-2. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-
 (Alternatively: copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session: "sh <path_to_script>/v.net.models")
+2. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
+3. Copy the manual page "description.html" to the "docs" subdirectory of your GRASS installation, and rename it to "v.net.models.html".
+4. Also copy all ".png" files (they are the illustrations for the manual page) into "docs".
 
 For use via the QGIS Processing plug-in:
 1. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled.
 2. Copy the file "v.net.models" to the scripts "subdirectory" of the GRASS installation used by QGIS.
 3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-4. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS installation (the exact location of this subdirectory depends on your Linux distribution; on Arch Linux it is "/usr/share/qgis/python/plugins/processing/algs/grass7/description").
-5. Restart QGIS.
-6. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
+4. Copy the manual page "description.html" to the "docs" subdirectory of your GRASS installation (the one used by QGIS), and rename it to "v.net.models.html".
+5. Also copy all ".png" files (they are the illustrations for the manual page) into "docs".
+6. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS installation (the exact location of this subdirectory depends on your Linux distribution; on Arch Linux it is "/usr/share/qgis/python/plugins/processing/algs/grass7/description").
+7. Restart QGIS.
+8. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
 
 ## macOS
 
@@ -48,19 +51,22 @@ On macOS operating systems, all required shell scripting tools should be in plac
 
 To use v.net.models in GRASS GIS:
 1. Browse the GRASS App folder using Finder (or "cd" into the "GRASS.Application" folder using the command line) and locate the subfolder "scripts".
-2. Copy the file "v.net.models" into the "Contents/Resources/scripts" subdirectory of your GRASS Application bundle (use "sudo" if required).
-3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-
 (Alternatively: copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session: "bash <path_to_script>/v.net.models")
+2. Copy the file "v.net.models" into the "Contents/Resources/scripts" subfolder of your GRASS Application bundle (use "sudo" if required).
+3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
+4. Copy the manual page "description.html" to the "Contents/Resources/docs" subfolder of your GRASS Application bundle, and rename it to "v.net.models.html".
+5. Also copy all ".png" files (they are the illustrations for the manual page) into "Contents/Resources/docs".
 
 For use via the QGIS Processing plug-in:
 1. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled.
 2. Browse the QGIS App folder using Finder (or "cd" into the "QGIS.Application" folder using the command line) and locate the subfolder "apps/grass/scripts".
 3. Copy the file "v.net.models" into the QGIS App subfolder "apps/grass/scripts".
-3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-4. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS App bundle.
-5. Restart QGIS.
-6. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
+4. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
+5. Copy the manual page "description.html" into the QGIS App subfolder "apps/grass/docs", and rename it to "v.net.models.html".
+6. Also copy all ".png" files (they are the illustrations for the manual page) into "apps/grass/docs".
+7. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS App bundle.
+8. Restart QGIS.
+9. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
 
 ## Windows
 
@@ -83,13 +89,17 @@ To use v.net.models in GRASS GIS:
 1. Make sure that you have installed MSYS2, as explained above.
 2. Copy the file "v.net.models" into the "scripts" subdirectory of your GRASS installation (you might need an admin password).
 3. Copy the file "v.net.models.bat" into the "bin" subdirectory of your GRASS installation.
+5. Copy the manual page "description.html" into the "docs" subdirectory of your GRASS installation, and rename it to "v.net.models.html".
+6. Also copy all ".png" files (they are the illustrations for the manual page) into "docs".
 
 For use via the QGIS Processing plug-in:
 1. Make sure that you have installed MSYS2, as explained above.
-2. Copy "v.net.models.txt" to QGIS subfolder "apps\qgis-ltr\python\plugins\processing\algs\grass7\description"
-3. Copy "v.net.models.bat" to QGIS subfolder "apps\grass\grass78\bin"
-4. Copy "v.net.models" (no file extension!) to QGIS subfolder "apps\grass\grass78\scripts"
-5. Quit and restart QGIS using the "QGIS Desktop with GRASS 7"(!) launcher.
+2. Copy "v.net.models.txt" into QGIS subfolder "apps\qgis-ltr\python\plugins\processing\algs\grass7\description"
+3. Copy "v.net.models.bat" into QGIS subfolder "apps\grass\grass78\bin"
+4. Copy "v.net.models" (no file extension!) into QGIS subfolder "apps\grass\grass78\scripts"
+5. Copy the manual page "description.html" into QGIS subfolder "apps\grass\grass78\docs", and rename it to "v.net.models.html".
+6. Also copy all ".png" files (they are the illustrations for the manual page) into "apps\grass\grass78\docs".
+7. Quit and restart QGIS using the "QGIS Desktop with GRASS 7"(!) launcher.
 
 # Notes and caveats
 
@@ -99,5 +109,5 @@ This works well in general, with a few quirks:
 * It is not possible (at least not using QGIS 3.10.x) to restrict attribute field choices to only fields of type integer. This means that it will be possible to select a double type (aka floating point) field for the "key=" option, which will lead to an error message ("key=" must be set to a field of type integer).
 
 ## Use on Windows OS
-* GRASS modules might only be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher.
+* GRASS modules might only be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher (This seems to be a problem specific to QGIS 3.10.x).
 * The current GRASS plug-in for QGIS is not very good at monitoring continuous status messages that come from GRASS modules. There is too much buffering going on (this is a general problem with text output on Windows consoles), which means that status output by CPU and/or I/O expensive operations will be delayed until it is basically useless. Be patient: Even if no progress is visible in the QGIS status monitor, v.net.models will eventually complete.
