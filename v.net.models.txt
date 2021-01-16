@@ -17,7 +17,7 @@ QgsProcessingParameterNumber|k|Linear distance weight 'k' (model 'xtent')|QgsPro
 QgsProcessingParameterEnum|avg|Distance averaging function (model 'xtent')|mean;median|False|0|False
 QgsProcessingParameterNumber|costerr|Costmap error margin (+/-) in percent (requires 'costmap')|QgsProcessingParameterNumber.Double|0.0|True|0.0|100.0
 QgsProcessingParameterNumber|costres|Costmap resampling factor (requires 'costmap' and 'costerr')|QgsProcessingParameterNumber.Integer|1|True|1|10
-*QgsProcessingParameterNumber|threshold|Threshold distance for detecting input point duplicates|QgsProcessingParameterNumber.Double|0.000001|True|0.0|100000000
+*QgsProcessingParameterNumber|threshold|Threshold distance for topology tests|QgsProcessingParameterNumber.Double|0.000001|True|0.0|100000000
 QgsProcessingParameterVectorDestination|links|Output vector map for reconstructed network links (lines)
 QgsProcessingParameterVectorDestination|nodes|Output vector map for attributed network nodes (points)
 QgsProcessingParameterBoolean|-d|Drop unconnected nodes from output map|False
