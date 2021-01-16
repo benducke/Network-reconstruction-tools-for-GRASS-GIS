@@ -271,9 +271,12 @@ least-cost path, if the <em>-m</em> flag is also set.
 <div id="h3_using_an_initial_links_map"></div>
 <h3>Using an initial links map</h3>
 - using initial=
+- several strict tests on the map and its attribute table schema are performed
 - can also be used to test applicability of built-in models given externally created links!  
 - must have all required attributes
-- length_m/km and cost can be computed on-the-fly
+- length_m/km will be computed on-the-fly if they are missing
+- if map has no cost field, it will be added and its data computed if "cost=" is also provided
+- providing both "cost=" and an initial links map with a cost attribute is ambiguous and will produce an error
 - if any missing attributes are added, they will be added to an internal copy of the initial links map; the original data will never be touched.
 - to keep an amended version of an initial links input map, run a "complete" model with a "maxdist=" setting that exceeds the length of any of the links in the map. 
 - attribute-stored coordinates from/to x/y can also be computed on-the-fly, but ONLY PAIRWISE
@@ -422,7 +425,7 @@ Note: Mandatory parameters are marked with an asterisk ("*") in the list below.
 	<dd>options: 0.0-100.0</dd>
 	<dt><em>costres</em> [Costmap resampling factor (requires 'costmap' and 'costerr'; default: 1)]</dt>
 	<dd>options: 1-10</dd>
-	<dt><em>threshold</em> [Threshold distance for detecting input point duplicates; default: 0.000001]</dt>	
+	<dt><em>threshold</em> [Threshold distance for topology tests; default: 0.000001]</dt>	
 	<dd></dd>
 </dl>
 
