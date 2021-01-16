@@ -255,7 +255,7 @@ GIS_FLAG_S=0
 #% required: no
 #% multiple: no
 #% key_desc: value
-#% description: Threshold distance for detecting input point duplicates
+#% description: Threshold distance for topology tests
 #% options: 0.0-100000000
 #% answer: 0.000001
 #%End
@@ -316,11 +316,14 @@ fi
 MODULE_NAME="v_net_models"
 MODULE_VERSION="0.9.1"
 
-# Global state variables.
+# Exit status variables.
 EXIT_OK="0"
 EXIT_ERROR="-1"
 EXIT_CTRL_C="1"
 EXIT_TERMINATED="2"
+
+# Processing states.
+RUNMODE_COST="FALSE" # Cost-based processing mode
 
 # Basic sanity checks.
 if [ -z "$GISBASE" ] ; then
@@ -362,6 +365,7 @@ TMP_VECT_LINKS_DELAUNAY_L="${TMP_PREFIX}_v_delaunay_l" 	# Delaunay mesh (lines)
 TMP_VECT_NODES_DROPROW_1="${TMP_PREFIX}_v_n_droprow_1" 	# Nodes with row dropped from table
 TMP_VECT_NODES_DROPROW_2="${TMP_PREFIX}_v_n_droprow_2"	# Nodes with row dropped from table (swapped)
 TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 			# BASE name of one vector map patch for model_complete
+TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 			# BASE name of one vector map patch for model_complete
 
 # Names of temporary maps (RASTER)
 TMP_RAST_COST_RSP="${TMP_PREFIX}_r_cost_rsp" # Resampled version of original cost raster map
@@ -392,7 +396,6 @@ LINKS_FLD_STRENGTH="strength"	# Link strength (number of similarities: will only
 # Reserved names of attribute table fields that will be added to NODES output map
 NODES_FLD_COORD_X="coordx" 		# Input node X coordinate
 NODES_FLD_COORD_Y="coordy" 		# Input node Y coordinate
-NODES_FLD_COORD_Z="coordz" 		# Input node Z coordinate
 NODES_FLD_LINKS="links" 			# Number of links connected to node
 NODES_FLD_LEN_SUM="len_sum" 		# Sum of lengths of links connected to node
 NODES_FLD_LEN_AVG="len_mean" 		# Mean length of links connected to node
@@ -834,8 +837,70 @@ list_get () {
 # awk_calc:		Uses AWK to calculate an expression and returns the result
 #				in 'AWK_VALUE', e.g.:
 #				awk_calc "((1+(2^3.4))/9)-2"
+#
+#				Result will be returned in variable 'AWK_VALUE'
 awk_calc () {
 	AWK_VALUE=`${AWK} "BEGIN{ print $* }"`
+}
+
+
+# FUNCTION
+# awk_equal:	Uses AWK to test whether two numbers are equal.
+#				The two numbers must be passed as $1 as $2.
+#				Result will be returned in variable 'AWK_VALUE':
+#					1 = equal
+#					0 = not equal
+awk_equal () {
+	AWK_VALUE=`${AWK} "BEGIN{ print $1==$2 }"`
+}
+
+
+# FUNCTION
+# awk_smaller:	Uses AWK to test whether $1 is smaller than $2
+#				Result will be returned in variable 'AWK_VALUE':
+#					1 = $1 < $2
+#					0 = $1 >= $2
+awk_smaller () {
+	AWK_VALUE=`${AWK} "BEGIN{ print $1<$2 }"`
+}
+
+
+# FUNCTION
+# awk_smaller_eq:	Uses AWK to test whether $1 is smaller or equal $2
+#					Result will be returned in variable 'AWK_VALUE':
+#					1 = $1 <= $2
+#					0 = $1 > $2
+awk_smaller_eq () {
+	AWK_VALUE=`${AWK} "BEGIN{ print $1<=$2 }"`
+}
+
+
+# FUNCTION
+# awk_larger:	Uses AWK to test whether $1 is larger than $2
+#				Result will be returned in variable 'AWK_VALUE':
+#					1 = $1 > $2
+#					0 = $1 <= $2
+awk_larger () {
+	AWK_VALUE=`${AWK} "BEGIN{ print $1>$2 }"`
+}
+
+
+# FUNCTION
+# awk_larger_eq:	Uses AWK to test whether $1 is larger or equal $2
+#					Result will be returned in variable 'AWK_VALUE':
+#					1 = $1 >= $2
+#					0 = $1 < $2
+awk_larger_eq () {
+	AWK_VALUE=`${AWK} "BEGIN{ print $1>=$2 }"`
+}
+
+
+# FUNCTION
+# awk_abs:		Uses AWK to calculate the absolute difference between two numbers.
+#				The two numbers must be passed as $1 as $2.
+#				Result will be returned in variable 'AWK_VALUE'
+awk_abs () {
+	AWK_VALUE=`${AWK} 'BEGIN{x = $1-$2; print x < 0 ? -x : x}'`
 }
 
 
@@ -1220,9 +1285,6 @@ check_input () {
 		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_COORD_Y}" ] ; then
 			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_COORD_Y}'."
 		fi
-		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_COORD_Z}" ] ; then
-			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_COORD_Z}'."
-		fi
 		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_LINKS}" ] ; then
 			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_LINKS}'."
 		fi
@@ -1253,10 +1315,6 @@ check_input () {
 	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_COORD_Y}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_COORD_Y}' in input points map."
-	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_COORD_Z}"`
-	if [ -n "${fld}" ] ; then
-		g.message -w "Found attribute with reserved field name '${NODES_FLD_COORD_Z}' in input points map."
 	fi
 	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_LINKS}"`
 	if [ -n "${fld}" ] ; then
@@ -1520,7 +1578,7 @@ check_input () {
 	# i.e. with full control over its structure and content; consequently, much
 	# of the program logics make very strong assumptions about this map. 
 	if [ -n "${GIS_OPT_INITIAL}" ] ; then
-		g.message -i "Verifying validity of initial links map (option 'initial='):"
+		g.message -i "Verifying validity of initial links map (option 'initial=')..."
 		#
 		# 1. Test basic map properties: attribute table exists and only points present?
 		#
@@ -1687,15 +1745,20 @@ check_input () {
 			fi					
 		fi
 		# [cost] -> ad hoc (if cost raster provided) 
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then # There is a cost map
 			check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_COST}"
 			if [ "${RET_FLD_TEST}" == "${LINKS_FLD_COST}" ] ; then
 				# Field exists: Check if it is ok.
 				check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_COST}" 	"DOUBLE PRECISION" 	"TRUE"	"FALSE"
 				if [ "${RET_FLD_TEST}" != "${LINKS_FLD_COST}" ] ; then
 					g.message -e "Attribute field '${LINKS_FLD_COST}' has wrong type or incomplete data."
-					g.message -e "Please fix manually or delete field from initial links map to rebuild automatically."
+					g.message -e "Please fix manually or delete field from initial links map and provide 'cost=' to rebuild automatically."
 					exit_error "${RET_FLD_TEST}"
+				else
+					# 'cost' attribute exists and has complete data, but we also have a costmap: ERROR
+					g.message -e "Initial links map '${GIS_OPT_INITIAL}' has a valid field '${LINKS_FLD_COST}' with cost data."
+					g.message -e "But a cost raster ('${GIS_OPT_COSTMAP}') has also been provided via option 'cost='."
+					exit_error "Ambiguous cost data sources. Choose one or the other."
 				fi
 				TRIGGER_ATTR_COST="FALSE"
 			else
@@ -1703,6 +1766,23 @@ check_input () {
 				g.message -w "Attribute field '${LINKS_FLD_COST}' is missing from initial map '${GIS_OPT_INITIAL}'."
 				g.message -w "It will be added and its contents computed automatically."
 				TRIGGER_ATTR_COST="TRUE"
+			fi
+		else # no cost map, but maybe still a cost field in initial map
+			RUNMODE_COST="FALSE" # default if no cost raster provided
+			check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_COST}"
+			if [ "${RET_FLD_TEST}" == "${LINKS_FLD_COST}" ] ; then
+				# Field exists: Check if it is ok.
+				check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_COST}" 	"DOUBLE PRECISION" 	"TRUE"	"FALSE"
+				if [ "${RET_FLD_TEST}" != "${LINKS_FLD_COST}" ] ; then
+					g.message -e "Attribute field '${LINKS_FLD_COST}' has wrong type or incomplete data."
+					g.message -e "Please fix manually or delete field from initial links map and provide 'cost=' to rebuild automatically."
+					exit_error "${RET_FLD_TEST}"
+				else
+					RUNMODE_COST="TRUE" # We have a valid 'cost' field and can switch into cost-based mode now.
+					TRIGGER_ATTR_COST="FALSE" # Data in field is fine: No need to trigger rebuilding.
+				fi
+			else
+				TRIGGER_ATTR_COST="FALSE" # No cost field: No need to trigger rebuilding.
 			fi
 		fi
 		#
@@ -1763,6 +1843,11 @@ check_params () {
 	if [ -n "${GIS_OPT_WHERE}" ] && [ -n "${GIS_OPT_CATS}" ] ; then
 		g.message -e "Options 'where=' and 'cats=' are mutually exclusive."
 		exit ${EXIT_ERROR}
+	fi
+	
+	# Turn on cost-based mode if "cost" raster is provided 
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		RUNMODE_COST="TRUE" # default if cost raster provided
 	fi
 	
 	# Option "costerr" is only meaningful if "costmap" is also provided.
@@ -1972,11 +2057,6 @@ preprocess () {
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COORD_Y}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_COORD_Y}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_COORD_Z}"`
-	if [ -n "${fld}" ] ; then
-		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COORD_Z}" --quiet
-		check_error "Failed to remove reserved attribute '${NODES_FLD_COORD_Z}' from copy of input points map."
-	fi
 	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_LINKS}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_LINKS}" --quiet
@@ -2011,7 +2091,7 @@ preprocess () {
 	fi
 	
 	# Add coordinate fields to copy of input points map
-	v.to.db map="${GIS_OPT_INPUT}" layer="1" option="coor" columns="${NODES_FLD_COORD_X},${NODES_FLD_COORD_Y},${NODES_FLD_COORD_Z}" --o --quiet
+	v.to.db map="${GIS_OPT_INPUT}" layer="1" option="coor" columns="${NODES_FLD_COORD_X},${NODES_FLD_COORD_Y}" --o --quiet
 	check_error "Failed to add coordinate attribute fields to copy of input points map."
 	# Add links counter field to copy of input points map
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_INPUT}" layer="1" columns="${NODES_FLD_LINKS} INTEGER"
@@ -2072,101 +2152,100 @@ preprocess () {
 # the network links.
 links_adjust_nodes ()
 {
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-		# Temporary attribute field names
-		adj_fld_key="cat" # Default GRASS primary key.
-		adj_fld_startxold="${NODES_FLD_COORD_X}"
-		adj_fld_startyold="${NODES_FLD_COORD_Y}"
-		adj_fld_endxold="${NODES_FLD_COORD_X}"
-		adj_fld_endyold="${NODES_FLD_COORD_Y}"
-		adj_fld_startxnew="startxnew"
-		adj_fld_startynew="startynew"
-		adj_fld_endxnew="endxnew"
-		adj_fld_endynew="endynew"
-		# The start/stop vertices (called "nodes" by GRASS) of each path
-		# produced by 'r.path' are no longer
-		# located exactly at the input points. We move/snap them to correct that
-		# problem and retain a topologically correct network of nodes that lie
-		# exactly on the first and last vertex of each link!
-		# Store original starting point coordinates.
-		adj_endxold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endxold}"`
-		check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endxold}')."
-		adj_endyold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endyold}"`
-		check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endyold}')."
-		# Attach attribute table to links map of this iteration, so we can
-		# easily loop over all links, fixing each one in turn:	
-		${V_DB_ADDTABLE} map="$1" layer="1" key="${adj_fld_key}" --quiet
-		check_error "Failed to attach attribute table to temporary links map."
-		#DEBUG: Enable additional columns to store old node coordinates in attribute table
-		  #${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_startxold} DOUBLE PRECISION, ${fld_startyold} DOUBLE PRECISION"
-		  #${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_endxold} DOUBLE PRECISION, ${fld_endyold} DOUBLE PRECISION"
-		#END DEBUG
-		# Upload current node coordinates to each link's table:
-		v.to.db map="$1" layer="1" type="line" option="start" columns="${adj_fld_startxnew},${adj_fld_startynew}" --quiet
-		check_error "Failed to upload start node coordinates to temporary links map."
-		v.to.db map="$1" layer="1" type="line" option="end" columns="${adj_fld_endxnew},${adj_fld_endynew}" --quiet
-		check_error "Failed to upload end node coordinates to temporary links map."
-		adj_step_inner=1
-		adj_cat_inner=1				
-		while [ ${adj_step_inner} -lt ${NUM_LINKS} ] ; do
-			#echo "${adj_fld_key}=${adj_cat_inner}"
-			adj_val=`v.db.select -c map="$1" column="${adj_fld_key}" where="${adj_fld_key}=${adj_cat_inner}"`
-			check_error "Failed to query attribute table of partial links map (iteration ${adj_step_inner})."
-			if [ -n "${adj_val}" ] ; then # Feature exists! Process it:					
-				# Upload original node coordinates to current link:
-				#DEBUG: Store coordinates of original end node in attribute table
-				  #echo "Feature ${adj_step_inner} has ${adj_fld_key}=${adj_cat_inner}."
-				  #${V_DB_UPDATE} map="$1" layer="1" column="${adj_fld_endxold}" value="${adj_endxold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-				  #${V_DB_UPDATE} map="$1" layer="1" column="${adj_fld_endyold}" value="${adj_endyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-				#END DEBUG
-				adj_startxold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startxold}" where="${adj_fld_key}=${adj_cat_inner}"`
-				check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startxold}')."
-				adj_startyold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startyold}" where="${adj_fld_key}=${adj_cat_inner}"`
-				check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startyold}')."
-				#DEBUG: Store coordinates of original start node in attribute table
-				  #${V_DB_UPDATE} map="$1" layer="1" column="${adj_startxold}" value="${adj_startxold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-				  #${V_DB_UPDATE} map="$1" layer="1" column="${adj_startyold}" value="${adj_startyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-				#END DEBUG
-				# Compute translation factors for moving vertices:
-				# Start vertex:
-				adj_startxnew=`v.db.select -c map="$1" column="${adj_fld_startxnew}" where="${adj_fld_key}=${adj_cat_inner}"`				
-				adj_startynew=`v.db.select -c map="$1" column="${adj_fld_startynew}" where="${adj_fld_key}=${adj_cat_inner}"`
-				adj_d_startxnew=`echo ${adj_startxold} ${adj_startxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
-				adj_d_startynew=`echo ${adj_startyold} ${adj_startynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
-				# End vertex:
-				adj_endxnew=`v.db.select -c map="$1" column="${adj_fld_endxnew}" where="${adj_fld_key}=${adj_cat_inner}"`
-				adj_endynew=`v.db.select -c map="$1" column="${adj_fld_endynew}" where="${adj_fld_key}=${adj_cat_inner}"`
-				adj_d_endxnew=`echo ${adj_endxold} ${adj_endxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
-				adj_d_endynew=`echo ${adj_endyold} ${adj_endynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
-				#DEBUG: Show node coordinates as stored in attribute table of current link 
-				  #v.db.select map="$1" layer="1" where="${adj_fld_key}=${adj_cat_inner}"
-				#END DEBUG
-				#DEBUG: Print deltas.
-				  #echo "  adj_d_startxnew=${adj_d_startxnew}"
-				  #echo "  adj_d_startynew=${adj_d_startynew}"
-				  #echo "  adj_d_endxnew=${adj_d_endxnew}"
-				  #echo "  adj_d_endynew=${adj_d_endynew}"
-				#END DEBUG
-				# Use v.edit to correct node positions now!
-				# TODO: set threshold="0.00000001"
-				v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_startxnew},${adj_startynew}" move="${adj_d_startxnew},${adj_d_startynew},0" cats="${adj_cat_inner}" --quiet
-				v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_endxnew},${adj_endynew}" move="${adj_d_endxnew},${adj_d_endynew},0" cats="${adj_cat_inner}" --quiet
-				# Move on to next link:
-				adj_step_inner=`${EXPR} ${adj_step_inner} + 1`
-			fi
-			# Try next category value:
-			adj_cat_inner=`${EXPR} ${adj_cat_inner} + 1`
-			#TODO: Guard against endless loop
-			#if [ ${adj_cat_inner -gt ${MAXCAT} ] ; then # ERROR! Category index out of bounds!
-			#ERROR: ABORT!
-			#fi					
-		done				
-		# Since we extract one node per run, we need to do one pass less
-		# through the inner loop each time we look at another set of links.
-		NUM_LINKS=`${EXPR} ${NUM_LINKS} - 1`
-		# Drop attribute table from temporary links map.				
-		${V_DB_DROPTABLE} map="$1" layer="1" -f --quiet		
-	fi
+	# Temporary attribute field names
+	adj_fld_key="cat" # Default GRASS primary key.
+	adj_fld_startxold="${NODES_FLD_COORD_X}"
+	adj_fld_startyold="${NODES_FLD_COORD_Y}"
+	adj_fld_endxold="${NODES_FLD_COORD_X}"
+	adj_fld_endyold="${NODES_FLD_COORD_Y}"
+	adj_fld_startxnew="startxnew"
+	adj_fld_startynew="startynew"
+	adj_fld_endxnew="endxnew"
+	adj_fld_endynew="endynew"
+	# The start/stop vertices (called "nodes" by GRASS) of each path
+	# produced by 'r.path' are no longer
+	# located exactly at the input points. We move/snap them to correct that
+	# problem and retain a topologically correct network of nodes that lie
+	# exactly on the first and last vertex of each link!
+	# Store original starting point coordinates.
+	adj_endxold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endxold}"`
+	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endxold}')."
+	adj_endyold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endyold}"`
+	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endyold}')."
+	# Attach attribute table to links map of this iteration, so we can
+	# easily loop over all links, fixing each one in turn:	
+	${V_DB_ADDTABLE} map="$1" layer="1" key="${adj_fld_key}" --quiet
+	check_error "Failed to attach attribute table to temporary links map."
+	#DEBUG: Enable additional columns to store old node coordinates in attribute table
+	#${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_startxold} DOUBLE PRECISION, ${fld_startyold} DOUBLE PRECISION"
+	#${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_endxold} DOUBLE PRECISION, ${fld_endyold} DOUBLE PRECISION"
+	#END DEBUG
+	# Upload current node coordinates to each link's table:
+	v.to.db map="$1" layer="1" type="line" option="start" columns="${adj_fld_startxnew},${adj_fld_startynew}" --quiet
+	check_error "Failed to upload start node coordinates to temporary links map."
+	v.to.db map="$1" layer="1" type="line" option="end" columns="${adj_fld_endxnew},${adj_fld_endynew}" --quiet
+	check_error "Failed to upload end node coordinates to temporary links map."
+	adj_step_inner=1
+	adj_cat_inner=1				
+	while [ ${adj_step_inner} -lt ${NUM_LINKS} ] ; do
+		#echo "${adj_fld_key}=${adj_cat_inner}"
+		adj_val=`v.db.select -c map="$1" column="${adj_fld_key}" where="${adj_fld_key}=${adj_cat_inner}"`
+		check_error "Failed to query attribute table of partial links map (iteration ${adj_step_inner})."
+		if [ -n "${adj_val}" ] ; then # Feature exists! Process it:					
+			# Upload original node coordinates to current link:
+			#DEBUG: Store coordinates of original end node in attribute table
+			#echo "Feature ${adj_step_inner} has ${adj_fld_key}=${adj_cat_inner}."
+			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_fld_endxold}" value="${adj_endxold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
+			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_fld_endyold}" value="${adj_endyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
+			#END DEBUG
+			adj_startxold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startxold}" where="${adj_fld_key}=${adj_cat_inner}"`
+			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startxold}')."
+			adj_startyold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startyold}" where="${adj_fld_key}=${adj_cat_inner}"`
+			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startyold}')."
+			#DEBUG: Store coordinates of original start node in attribute table
+			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_startxold}" value="${adj_startxold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
+			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_startyold}" value="${adj_startyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
+			#END DEBUG
+			# Compute translation factors for moving vertices:
+			# Start vertex:
+			adj_startxnew=`v.db.select -c map="$1" column="${adj_fld_startxnew}" where="${adj_fld_key}=${adj_cat_inner}"`				
+			adj_startynew=`v.db.select -c map="$1" column="${adj_fld_startynew}" where="${adj_fld_key}=${adj_cat_inner}"`
+			adj_d_startxnew=`echo ${adj_startxold} ${adj_startxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+			adj_d_startynew=`echo ${adj_startyold} ${adj_startynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+			# End vertex:
+			adj_endxnew=`v.db.select -c map="$1" column="${adj_fld_endxnew}" where="${adj_fld_key}=${adj_cat_inner}"`
+			adj_endynew=`v.db.select -c map="$1" column="${adj_fld_endynew}" where="${adj_fld_key}=${adj_cat_inner}"`
+			adj_d_endxnew=`echo ${adj_endxold} ${adj_endxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+			adj_d_endynew=`echo ${adj_endyold} ${adj_endynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+			#DEBUG: Show node coordinates as stored in attribute table of current link 
+			#v.db.select map="$1" layer="1" where="${adj_fld_key}=${adj_cat_inner}"
+			#END DEBUG
+			#DEBUG: Print deltas.
+			#echo "  adj_d_startxnew=${adj_d_startxnew}"
+			#echo "  adj_d_startynew=${adj_d_startynew}"
+			#echo "  adj_d_endxnew=${adj_d_endxnew}"
+			#echo "  adj_d_endynew=${adj_d_endynew}"
+			#END DEBUG
+			# Use v.edit to correct node positions now!
+			# TODO: set threshold="0.00000001"
+			v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_startxnew},${adj_startynew}" move="${adj_d_startxnew},${adj_d_startynew},0" cats="${adj_cat_inner}" --quiet
+			v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_endxnew},${adj_endynew}" move="${adj_d_endxnew},${adj_d_endynew},0" cats="${adj_cat_inner}" --quiet
+			# Move on to next link:
+			adj_step_inner=`${EXPR} ${adj_step_inner} + 1`
+		fi
+		# Try next category value:
+		adj_cat_inner=`${EXPR} ${adj_cat_inner} + 1`
+		#TODO: Guard against endless loop
+		#if [ ${adj_cat_inner -gt ${MAXCAT} ] ; then # ERROR! Category index out of bounds!
+		#ERROR: ABORT!
+		#fi					
+	done				
+	# Since we extract one node per run, we need to do one pass less
+	# through the inner loop each time we look at another set of links.
+	NUM_LINKS=`${EXPR} ${NUM_LINKS} - 1`
+	# Drop attribute table from temporary links map.				
+	${V_DB_DROPTABLE} map="$1" layer="1" -f --quiet		
+
 }
 
 
@@ -2282,7 +2361,7 @@ stats_unreduced () {
 		max_len="${AWK_VALUE}"
 		awk_calc "$total_len+$len"
 		total_len=${AWK_VALUE}
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
 			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (cat='${cat}')"
 			awk_min "${min_cost}" "${cost}"
@@ -2300,7 +2379,7 @@ stats_unreduced () {
 	net_len_unreduced=${total_len}
 	net_len_min_unreduced="${min_len}"
 	net_len_max_unreduced="${max_len}"
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		net_cost_unreduced=${total_cost}
 		net_cost_min_unreduced="${min_cost}"
 		net_cost_max_unreduced="${max_cost}"
@@ -2310,7 +2389,7 @@ stats_unreduced () {
 	net_cons_mean_unreduced=${AWK_VALUE}
 	awk_calc "$total_len/$lines"
 	net_len_mean_unreduced=${AWK_VALUE}
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		awk_calc "$total_cost/$lines"
 		net_cost_mean_unreduced=${AWK_VALUE}
 	fi
@@ -2322,7 +2401,7 @@ stats_unreduced () {
 		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
 	fi
 	net_len_median_unreduced=${AWK_VALUE}
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" -c`
 		check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GIS_OPT_LINKS})."
 		awk_median "$costs"	
@@ -2335,7 +2414,7 @@ stats_unreduced () {
 
 
 # FUNCTION
-# model_complete: Create a network where nodes are connected if they have common
+# model_attsim: Create a network where nodes are connected if they have common
 #				   attribute values.
 model_attsim () {
 	# Check_input() has already made sure that the fields listed in 'attributes=' all exist!
@@ -2469,6 +2548,9 @@ model_attsim () {
 
 # FUNCTION
 # model_complete: Create a network where every node is connected to every other node.
+# NOTE that this model is the ONLY one that reads "${GIS_OPT_COSTMAP}" directly!
+# All other models MUST rely on RUNMODE_COST ["TRUE"|"FALSE"] and read link costs from
+# the associated 'cost' attribute field!
 model_complete () {
 	g.message -i "Creating network using connectivity model 'COMPLETE':"	
 	# CACHING:
@@ -2921,7 +3003,7 @@ ${tmp_vect_links}
 		done
 	fi
 
-	# We add the path length metrics at the very end (not earlier!), because the links are now properly adjusted and ordered! 
+	# We add the path length metrics at the very end (not earlier!), because the links are now properly adjusted and ordered!
 	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="end" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y}" --quiet
 	check_error "Failed to add attribute fields '${LINKS_FLD_FROM_X}' & '${LINKS_FLD_FROM_Y}' to links output vector map."
 	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="start" columns="${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y}" --quiet
@@ -3301,14 +3383,14 @@ model_xtent () {
 		awk_calc "${GIS_OPT_K}*${distance}"
 		dist="${AWK_VALUE}" # weighted distance
 		# 'davg' is the _average_ length of links in complete network; by default, this is the arithmetic mean
-		if [ -z ${GIS_OPT_COSTMAP} ] ; then
+		if [ "${RUNMODE_COST}" != "TRUE" ] ; then
 			davg=${net_len_mean_unreduced} # Default
 		else
 			davg=${net_cost_mean_unreduced} # Default
 		fi		
 		if [ "${GIS_OPT_AVG}" = "median" ] ; then
 			# Choice: Use median
-			if [ -z ${GIS_OPT_COSTMAP} ] ; then			
+			if [ "${RUNMODE_COST}" != "TRUE" ] ; then			
 				davg=${net_len_median_unreduced}
 			else				
 				davg=${net_cost_median_unreduced}
@@ -3398,24 +3480,106 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 	# Copy initial map as (preliminary) links output map:
 	g.copy vector="${GIS_OPT_INITIAL},${GIS_OPT_LINKS}" --overwrite --quiet
 	check_error "Failed to copy initial links map as preliminary links output map."
-	#
-	# TODO: TRIGGER COST-BASED MODE HERE IF "COST" ATTRIBUTE IS PRESENT!
-	# TRIGGER_ATTR_LENGTH="TRUE" -> rebuild BOTH 'length_m' and 'length_km'
-	# TRIGGER_ATTR_COST="TRUE" -> rebuild 'cost'
-	# TRIGGER_ATTR_COORDINATES -> FIRST SNAP initial links to nodes:
-	#     modify links_adjust_nodes () so that it takes a links map as argument
-	#   THEN REBUILD ALL FOUR coordinate fields.
-	# --> IF ANY TRIGGERS need to run, then we need to make a temporary copy of
-	#     the initial links map, apply all necessary modifications to it, and use that
-	#	  from this point forward. We never modify original input data! 
-	#
-	# TODO: If "initial=" is provided: CHECK: 
-	#     that from/to x/y attributes of INITIAL links EXACTLY match ATTRIBUTE coordinates of the input nodes.
-	#     --> If the above test fails: TOPOLOGY ERROR -> EXIT (cannot trust provided coord fields!)	
-	#
-	# TODO: 5. Only model_complete() must ever read $GIS_OPT_COSTMAP!	
-	# TODO:    All other tests for $GIS_OPT_COSTMAP must be replaced with $COST_MODE
-	# TODO: 6. model_complete() must also set COST_MODE as required! 
+
+	# There are some attributes that might be missing from the initial links map and	
+	# that can be added automatically now. Note that we work on GIS_OPT_INITIAL which
+	# (at this point) is just a copy of the original initial links map, so it's ok to modify!
+	if [ ${TRIGGER_ATTR_LENGTH} == "TRUE" ] || [ ${TRIGGER_ATTR_COST} == "TRUE" ] || [ ${TRIGGER_ATTR_COORDINATES} == TRUE ] ; then
+		if [ ${TRIGGER_ATTR_LENGTH} == "TRUE" ] ; then
+			# We always rebuild both "length_m" and "length_km", so the two are sure to
+			# be in sync!
+			g.message -i "Adding length to attributes of 'initial' links map..."
+			v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="length" columns="${LINKS_FLD_LEN_M}" units="meters" --quiet
+			check_error "Failed to add attribute field '${LINKS_FLD_LEN_M}' to copy of initial links map."
+			v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="length" columns="${LINKS_FLD_LEN_KM}" units="kilometers" --quiet
+			check_error "Failed to add attribute field '${LINKS_FLD_LEN_KM}' to copy of initial links map."
+		fi
+		if [ ${TRIGGER_ATTR_COORDINATES} == TRUE ] ; then
+			# We need to rebuild the from/to coordinate pairs for all links. These are
+			# the extreme vertices of the links. The tricky part is: If these are user-supplied
+			# line geometries, then we cannot trust that they lie EXACTLY at the coordinates
+			# of any input nodes. However, this is a requirement, since some models match
+			# links with their connected nodes via the coordinates stored in the attribute table!
+			# So we try some snapping and hope for the best...
+			g.message -i "Snapping start/end vertices of 'initial' links map to nodes..."			
+			links_adjust_nodes "${GIS_OPT_LINKS}"
+			# Now add coordinates of extreme line vertices to attribute table.
+			g.message -i "Adding start/end coordinates to attributes of 'initial' links map..."
+			v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="end" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y}" --quiet
+			check_error "Failed to add attribute fields '${LINKS_FLD_FROM_X}' & '${LINKS_FLD_FROM_Y}' to copy of initial links map."
+			v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="start" columns="${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y}" --quiet
+			check_error "Failed to add attribute fields '${LINKS_FLD_TO_X}' & '${LINKS_FLD_TO_Y}' to copy of initial links map."
+			# Now check that the stored coordinates EXACTLY match those of the associated nodes.
+			g.message -i "Validating start/end coordinates to attributes of 'initial' links map..."			
+			#  
+			# Now check that from/to x/y attributes of INITIAL links EXACTLY match ATTRIBUTE coordinates of the input nodes.     
+			#     --> If the difference is < $GIS_OPT_THRESHOLD then WARN and copy the coordinate values from the nodes!
+			#     --> If the difference is larger: TOPOLOGY ERROR -> EXIT (cannot trust provided coord fields!)
+			# Get all primary keys for initial links input map:
+			get_primary_keys "${GIS_OPT_LINKS}"
+			# Store them for later:
+			SECONDARY_KEYS=${PRIMARY_KEYS}
+			# Get all primary keys for nodes input map: 
+			get_primary_keys "${GIS_OPT_INPUT}"
+			# Primary loop steps through all nodes in GIS_OPT_INPUT:
+			step=1 # For progress reporting
+			for pkey in $PRIMARY_KEYS ; do
+				# Secondary loop steps through all nodes in GIS_OPT_LINKS:
+				for skey in $SECONDARY_KEYS ; do
+					# TODO: This inner loop and one-by-one SQL querying are not exactly efficient!
+					# Extract "from_id" and "to_id" values for current primary key:
+					val_from_id=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_FROM_ID}" where="${GIS_OPT_KEY}=${pkey}" -c`
+					check_error "Failed to read attribute field '${LINKS_FLD_FROM_ID}' from copy of initial links map."
+					val_to_id=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_TO_ID}" where="${GIS_OPT_KEY}=${pkey}" -c`
+					check_error "Failed to read attribute field '${LINKS_FLD_TO_ID}' from copy of initial links map."
+					# Get node coordinates if required:
+					if [ ${val_from_id} -eq ${pkey} ] || [ ${val_to_id} -eq ${pkey} ] ; then
+						val_coord_x_node=`v.db.select map="${GIS_OPT_INPUT}" column="${NODES_FLD_COORD_X}" where="${GIS_OPT_KEY}=${pkey}" -c`
+						check_error "Failed to read attribute field '${NODES_FLD_COORD_X}' from copy of nodes input map."
+						val_coord_y_node=`v.db.select map="${GIS_OPT_INPUT}" column="${NODES_FLD_COORD_Y}" where="${GIS_OPT_KEY}=${pkey}" -c`
+						check_error "Failed to read attribute field '${NODES_FLD_COORD_Y}' from copy of nodes input map."
+					fi
+					# Check if from/to matches current primary key:
+					if [ ${val_from_id} -eq ${pkey} ] ; then
+						# Check accuracy of "from" coordinates.
+						val_from_x_link=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_FROM_X}" where="${GIS_OPT_KEY}=${pkey}" -c`
+						check_error "Failed to read attribute field '${LINKS_FLD_FROM_X}' from copy of initial links map."						
+						# Check if both coordinates are exactly equal:						
+						awk_equal "$val_from_x" "$val_coord_x_node"
+						if [ $AWK_VALUE -ne 1 ] ; then
+							# There is a difference!
+							# Get absolute difference between node coordinate and link coordinate:						
+							awk_abs "$val_from_x" "$val_coord_x_node"
+							diff="$AWK_VALUE"
+							# Let's check if abs diff is within the allowed threshold!
+							awk_smaller_eq "$diff" "${GIS_OPT_THRESHOLD}" 
+							if [ $AWK_VALUE -ne 1 ] ; then
+								# CONTINUE HERE
+								# TODO: Error -> exit
+							else
+								# TODO: Warn and copy coord value
+							fi
+						fi
+						# TODO check "from_y"
+						# ...
+					fi
+					if [ ${val_to_id} -eq ${pkey} ] ; then
+						# Check accuracy of "to" coordinates.
+						# TODO
+						# ...
+					fi
+				done
+				# Progress update
+				g.message -p "${step} ${points} 1"
+				step=`${EXPR} ${step} + 1`
+			done
+		fi
+		if [ ${TRIGGER_ATTR_COST} == "TRUE" ] ; then
+			g.message -i "Computing costs of links/LCPs in 'initial' links map..."
+			# TODO
+			RUNMODE_COST="TRUE" # cost attribute exists now
+		fi
+	fi
 else
 	# Complete model needs to be computed.
 	model_complete
@@ -3426,7 +3590,7 @@ stats_unreduced
 # Decide which attribute field to read for distance threshold
 FLD_DIST=${LINKS_FLD_LEN_M} # Default
 UNITS_DIST="m"
-if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+f [ "${RUNMODE_COST}" == "TRUE" ] ; then
 	FLD_DIST=${LINKS_FLD_COST} # Default if costmap is provided
 	UNITS_DIST="cost"		
 fi
@@ -3480,7 +3644,7 @@ ${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="\"${NODES_FLD_LEN_SU
 check_error "Failed to add attribute field '${NODES_FLD_LEN_SUM}' to nodes output vector map."
 ${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="\"${NODES_FLD_LEN_AVG}\" DOUBLE PRECISION" --quiet
 check_error "Failed to add attribute field '${NODES_FLD_LEN_AVG}' to nodes output vector map."
-if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="\"${NODES_FLD_COST_SUM}\" DOUBLE PRECISION" --quiet
 	check_error "Failed to add attribute field '${NODES_FLD_COST_SUM}' to nodes output vector map."
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="\"${NODES_FLD_COST_AVG}\" DOUBLE PRECISION" --quiet
@@ -3505,6 +3669,8 @@ for key in $PRIMARY_KEYS ; do
 	# key is stored in either the "from_id" or "to_id" field.
 	# NOTE: Since the SQL WHERE clauses used below may return an empty result and thus
 	# an error value from grep, we CANNOT CHECK for errors and abort here!
+	# TODO: We do not allow types != INTEGER for ${GIS_OPT_KEYS} any more, so type checks
+	#       like the below (i.e. anything that checks ${KEY_TYPE}) can be removed!
 	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
 		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
 			NLIST=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID='$key' OR $LINKS_FLD_TO_ID='$key'" columns="${LINKS_FLD_STRENGTH}" -c`
@@ -3520,7 +3686,7 @@ for key in $PRIMARY_KEYS ; do
 		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID='$key'" -c | ${GREP} "${key}" -c`
 		from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_FROM_ID='$key'" -c`
 		to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_TO_ID='$key'" -c`
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			from_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_FROM_ID='$key'" -c`
 			to_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_TO_ID='$key'" -c`
 		fi
@@ -3539,7 +3705,7 @@ for key in $PRIMARY_KEYS ; do
 		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID=$key" -c | ${GREP} "${key}" -c`
 		from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_FROM_ID=$key" -c`
 		to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_TO_ID=$key" -c`
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			from_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_FROM_ID=$key" -c`
 			to_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_TO_ID=$key" -c`
 		fi
@@ -3570,7 +3736,7 @@ for key in $PRIMARY_KEYS ; do
 		awk_calc "$total_len/$num_links"
 		avg_len=${AWK_VALUE}
 	fi
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		for i in $from_cost ; do
 			awk_calc "$total_cost+$i"
 			total_cost=${AWK_VALUE}
@@ -3600,7 +3766,7 @@ for key in $PRIMARY_KEYS ; do
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
 	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_AVG}" value="${avg_len}" where="${WHERE}"
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_SUM}" value="${total_cost}" where="${WHERE}"
 		check_error "Failed to write links count into attribute field '${NODES_FLD_COST_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
 		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_AVG}" value="${avg_cost}" where="${WHERE}"
@@ -3658,7 +3824,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		max_len="${AWK_VALUE}"
 		awk_calc "$total_len+$len"
 		total_len=${AWK_VALUE}
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
 			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (where cat='${cat}')"
 			awk_min "${min_cost}" "${cost}"
@@ -3675,7 +3841,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	net_len_reduced=${total_len}
 	net_len_min_reduced="${min_len}"
 	net_len_max_reduced="${max_len}"
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		net_cost_reduced=${total_cost}
 		net_cost_min_reduced="${min_cost}"
 		net_cost_max_reduced="${max_cost}"
@@ -3685,7 +3851,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	net_cons_mean_reduced=${AWK_VALUE}
 	awk_calc "$total_len/$lines"
 	net_len_mean_reduced=${AWK_VALUE}
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		awk_calc "$total_cost/$lines"
 		net_cost_mean_reduced=${AWK_VALUE}
 	fi
@@ -3697,7 +3863,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
 	fi
 	net_len_median_reduced=${AWK_VALUE}
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" -c`
 		check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GIS_OPT_LINKS})."
 		awk_median "$costs"	
@@ -3715,7 +3881,7 @@ if [ ${GIS_FLAG_G} -eq 1 ] ; then
 	echo "net_nodes_unreduced=${net_nodes_undreduced}"
 	echo "net_links_unreduced=${net_links_unreduced}"	
 	echo "net_len_unreduced=${net_len_unreduced}"
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		echo "net_cost_unreduced=${net_cost_unreduced}"
 	fi
 	echo "net_cons_mean_unreduced=${net_cons_mean_unreduced}"
@@ -3723,7 +3889,7 @@ if [ ${GIS_FLAG_G} -eq 1 ] ; then
 	echo "net_len_max_unreduced=${net_len_max_unreduced}"	
 	echo "net_len_mean_unreduced=${net_len_mean_unreduced}"
 	echo "net_len_median_unreduced=${net_len_median_unreduced}"
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then		
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		echo "net_cost_min_unreduced=${net_cost_min_unreduced}"
 		echo "net_cost_max_unreduced=${net_cost_max_unreduced}"
 		echo "net_cost_mean_unreduced=${net_cost_mean_unreduced}"
@@ -3734,7 +3900,7 @@ else
 	g.message -i "Nodes: ${net_nodes_undreduced}"
 	g.message -i "Links: ${net_links_unreduced}"
 	g.message -i "Total network length(m): ${net_len_unreduced}"
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		g.message -i "Total network cost: ${net_cost_unreduced}"
 	fi		
 	g.message -i "Mean connections/node: ${net_cons_mean_unreduced}"
@@ -3742,7 +3908,7 @@ else
 	g.message -i "Max. link length: ${net_len_max_unreduced}"
 	g.message -i "Mean link length: ${net_len_mean_unreduced}"
 	g.message -i "Median link length: ${net_len_median_unreduced}"	
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		g.message -i "Min. link cost: ${net_cost_min_unreduced}"
 		g.message -i "Max. link cost: ${net_cost_max_unreduced}"
 		g.message -i "Mean link cost: ${net_cost_mean_unreduced}"
@@ -3770,7 +3936,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		echo "net_nodes_reduced=${net_nodes_reduced}"
 		echo "net_links_reduced=${net_links_reduced}"	
 		echo "net_len_reduced=${net_len_reduced}"
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			echo "net_cost_reduced=${net_cost_reduced}"
 		fi
 		if [ -n "${net_cons_min_reduced}" ] ; then
@@ -3782,7 +3948,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		echo "net_len_max_reduced=${net_len_max_reduced}"
 		echo "net_len_mean_reduced=${net_len_mean_reduced}"
 		echo "net_len_median_reduced=${net_len_median_reduced}"
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			echo "net_cost_min_reduced=${net_cost_min_reduced}"
 			echo "net_cost_max_reduced=${net_cost_max_reduced}"
 			echo "net_cost_mean_reduced=${net_cost_mean_reduced}"
@@ -3793,7 +3959,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		g.message -i "Nodes: ${net_nodes_reduced}"
 		g.message -i "Links: ${net_links_reduced}"
 		g.message -i "Total length(m): ${net_len_reduced}"	
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			g.message -i "Cost: ${net_cost_reduced}"
 		fi
 		if [ -n "${net_cons_min_reduced}" ] ; then
@@ -3805,7 +3971,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		g.message -i "Max. link length: ${net_len_max_reduced}"
 		g.message -i "Mean link length: ${net_len_mean_reduced}"
 		g.message -i "Median link length: ${net_len_median_reduced}"
-		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			g.message -i "Min. link cost: ${net_cost_min_reduced}"
 			g.message -i "Max. link cost: ${net_cost_max_reduced}"
 			g.message -i "Mean link cost: ${net_cost_mean_reduced}"
@@ -3838,3 +4004,4 @@ g.message -i "Completed: ${END}"
 
 # Exit with status "OK"
 exit ${EXIT_OK}
+
