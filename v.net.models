@@ -373,7 +373,8 @@ TMP_RAST_COST_MIN="${TMP_PREFIX}_r_cost_min" # Minimum cost output of r.cost
 TMP_RAST_COST_DIR="${TMP_PREFIX}_r_cost_dir" # Directional surface output r.cost
 TMP_RAST_COST_RES="${TMP_PREFIX}_r_cost_res" # Directional surface output r.cost (resampled)
 TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost (random error)
-TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error) 
+TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
+TMP_RAST_RSTLINKS="${TMP_PREFIX}_r_rstlinks" # Rasterized link from map supplied via "initial="
 
 # Names of temporary regions
 TMP_GEN_REGION_ORG="${TMP_PREFIX}_g_region_org" # Original region settings
@@ -558,6 +559,12 @@ clean_up () {
 	fi
 	# Directional surface output of r.cost (normalized random error)
 	elem="${TMP_RAST_COST_NRM}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	 # Rasterized link from map supplied via "initial="
+	elem="${TMP_RAST_RSTLINKS}"
 	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
@@ -3443,6 +3450,63 @@ model_xtent () {
 
 
 # FUNCTION
+# clean_initial_coords:	Helper function for checking coordinate values stored
+#						 	in the attribute table of the initial links map (option 'initial=').
+#							The challenge here is that it is possible to specify an initial links map
+#							which does not contain the from/to x/y coordinate fields. However, the
+#							values in those fields are used by some models to match input nodes with
+#							links. This means that they must be _exact_ matches to the x/y coordinates
+#							of input nodes. But we cannot trust this to be so, since the links map
+#							might not be of perfect topological quality. So this function is called
+#							after initial links start/end vertex snapping in the main program body,
+#							to make sure that all is fine and dandy.
+#
+# 							Arguments:
+#			 				$1 - (node) coordinate value to test against
+#							$2 - name of attribute table in links map that stores the same coordinate
+#							$3 - primary key value to match up link and node coordinates.
+#
+clean_initial_coords () {
+	# Set node coordinate for comparison:
+	val_coord_node="$1"
+	# Set coordinate to read from link attribute field:
+	fld_link_coord="$2"
+	# Set primary key:
+	clean_ic_pkey="$3"
+	# Coordinate from link map's attribute field:
+	val_coord_link=`v.db.select map="${GIS_OPT_LINKS}" column="${fld_link_coord}" where="${GIS_OPT_KEY}=${clean_ic_pkey}" -c`												
+	check_error "Failed to read attribute field '${fld_link_coord}' from copy of initial links map."						
+	# Check if both coordinates are exactly equal:						
+	awk_equal "${val_coord_link}" "${val_coord_node}"
+	if [ ${AWK_VALUE} -ne 1 ] ; then
+		# There is a difference!
+		# Get absolute difference between node coordinate and link coordinate:						
+		awk_abs "${val_coord_link}" "${val_coord_node}"
+		diff="$AWK_VALUE"
+		# Let's check if abs diff is within the allowed threshold!
+		awk_smaller_eq "${diff}" "${GIS_OPT_THRESHOLD}" 
+		if [ ${AWK_VALUE} -ne 1 ] ; then
+			# Difference too large: throw error and exit!
+			g.message -e "Difference between coordinate '${fld_link_coord}' of link with ID '${GIS_OPT_KEY}=${clean_ic_pkey}'"
+			g.message -e "and coordinate of input point (node) with the same ID is too large (${val_coord_link} vs ${val_coord_node})!"
+			g.message -e "Please check that the links provided in map 'initial=${GIS_OPT_INITIAL}' really"
+			g.message -e "connect with points in map 'input=${GIS_OPT_INPUT}'. "
+			g.message -e "Automatic correction failed with 'threshold=${GIS_OPT_THRESHOLD}'."
+			exit_error "Topology error."
+		else
+			# Warn about difference.
+			g.message -e "Difference between coordinate '${fld_link_coord}' of link with ID '${GIS_OPT_KEY}=${clean_ic_pkey}'"
+			g.message -e "and coordinate of input point (node) with the same ID detected (${val_coord_link} vs ${val_coord_node})."
+			# Copy node coordinate to link coordinate (field to field):
+			${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_link_coord}" value="${val_coord_node}" --quiet
+			check_error "Failed to update field '${fld_link_coord}' in copy of initial links map."
+			g.message -w "Automatic correction succeeded with 'threshold=${GIS_OPT_THRESHOLD}'."								
+		fi
+	fi
+}
+
+
+# FUNCTION
 # MAIN():	This is a bogus function. It exists only so that text
 #			editors will find this as a mark when parsing the source
 #		   	code in SH mode, and it will be added to the document outline. 
@@ -3541,32 +3605,16 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 					fi
 					# Check if from/to matches current primary key:
 					if [ ${val_from_id} -eq ${pkey} ] ; then
-						# Check accuracy of "from" coordinates.
-						val_from_x_link=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_FROM_X}" where="${GIS_OPT_KEY}=${pkey}" -c`
-						check_error "Failed to read attribute field '${LINKS_FLD_FROM_X}' from copy of initial links map."						
-						# Check if both coordinates are exactly equal:						
-						awk_equal "$val_from_x" "$val_coord_x_node"
-						if [ $AWK_VALUE -ne 1 ] ; then
-							# There is a difference!
-							# Get absolute difference between node coordinate and link coordinate:						
-							awk_abs "$val_from_x" "$val_coord_x_node"
-							diff="$AWK_VALUE"
-							# Let's check if abs diff is within the allowed threshold!
-							awk_smaller_eq "$diff" "${GIS_OPT_THRESHOLD}" 
-							if [ $AWK_VALUE -ne 1 ] ; then
-								# CONTINUE HERE
-								# TODO: Error -> exit
-							else
-								# TODO: Warn and copy coord value
-							fi
-						fi
-						# TODO check "from_y"
-						# ...
+						# Check/fix FROM_X
+						clean_initial_coords "${val_coord_x_node}" "${LINKS_FLD_FROM_X}" "${pkey}"
+						# Check/fix FROM_Y
+						clean_initial_coords "${val_coord_y_node}" "${LINKS_FLD_FROM_Y}" "${pkey}"
 					fi
 					if [ ${val_to_id} -eq ${pkey} ] ; then
-						# Check accuracy of "to" coordinates.
-						# TODO
-						# ...
+						# Check/fix TO_X
+						clean_initial_coords "${val_coord_x_node}" "${LINKS_FLD_TO_X}" "${pkey}"
+						# Check/fix TO_Y
+						clean_initial_coords "${val_coord_y_node}" "${LINKS_FLD_TO_Y}" "${pkey}"
 					fi
 				done
 				# Progress update
@@ -3575,8 +3623,36 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			done
 		fi
 		if [ ${TRIGGER_ATTR_COST} == "TRUE" ] ; then
-			g.message -i "Computing costs of links/LCPs in 'initial' links map..."
-			# TODO
+			g.message -i "Computing costs of links in 'initial' links map..."
+			# Add 'cost' values to attribute table.
+			# This one is tricky, because the links provided
+			# in 'initial' might _not_ be identical with LCPs! So what we do is:
+			#   1. Step through all links, and for each link do:
+			#     a) rasterize the link with 'v.to.rast'
+			#     b) run eval `r.univar map=rasterized_link" -g --quiet`
+			#     c) read the sum of costs in all cells crossed by link from ${sum} and upload!
+			g.message -i "Adding link costs to attribute table of inital links map..."
+			# Add 'cost' field to attribute table:
+			${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST} DOUBLE PRECISION"
+			check_error "Failed to add attribute field '${LINKS_FLD_COST}' (double) to copy of initial links map."
+			# Process all links.
+			get_primary_keys "${GIS_OPT_LINKS}"
+			# Primary loop steps through all nodes in GIS_OPT_LINKS:
+			step=1 # For progress reporting
+			for pkey in $PRIMARY_KEYS ; do
+				# Rasterize current link:
+				v.to.rast input="${GIS_OPT_LINKS}" output="${TMP_RAST_RSTLINKS}" type="line" use="val" value="1" where="${GIS_OPT_KEY}=${pkey}" --quiet --overwrite
+				check_error "Failed to rasterize link with ID '${GIS_OPT_KEY}=${pkey}' from copy of initial links map."
+				# Get univariate statistics for rasterized link:
+				eval `r.univar map="${TMP_RAST_RSTLINKS}" -g --quiet`
+				check_error "Failed to compute statistics for link with ID '${GIS_OPT_KEY}=${pkey}' from copy of initial links map."
+				# Upload cost value for current link:
+				${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${sum}" where="${GIS_OPT_KEY}=${pkey}" --quiet
+				check_error "Failed to update field '${LINKS_FLD_COST}' in copy of initial links map."
+				# Progress update
+				g.message -p "${step} ${points} 1"
+				step=`${EXPR} ${step} + 1`
+			done
 			RUNMODE_COST="TRUE" # cost attribute exists now
 		fi
 	fi
@@ -3756,20 +3832,20 @@ for key in $PRIMARY_KEYS ; do
 
 	# Upload subnet metrics:
 	get_where_clause "${key}"
-	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LINKS}" value="${num_links}" where="${WHERE}"
+	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LINKS}" value="${num_links}" where="${WHERE}" --quiet
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LINKS}' of output nodes maps ('${GIS_OPT_NODES}')."
 	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_NSTRENGTH}" value="${n_strength}" where="${WHERE}"
+		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_NSTRENGTH}" value="${n_strength}" where="${WHERE}" --quiet
 		check_error "Failed to write 'node strength' into attribute field '${NODES_FLD_NSTRENGTH}' of output nodes maps ('${GIS_OPT_NODES}')."
 	fi		
-	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_SUM}" value="${total_len}" where="${WHERE}"
+	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_SUM}" value="${total_len}" where="${WHERE}" --quiet
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
-	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_AVG}" value="${avg_len}" where="${WHERE}"
+	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_AVG}" value="${avg_len}" where="${WHERE}" --quiet
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_SUM}" value="${total_cost}" where="${WHERE}"
+		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_SUM}" value="${total_cost}" where="${WHERE}" --quiet
 		check_error "Failed to write links count into attribute field '${NODES_FLD_COST_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
-		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_AVG}" value="${avg_cost}" where="${WHERE}"
+		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_AVG}" value="${avg_cost}" where="${WHERE}" --quiet
 		check_error "Failed to write links count into attribute field '${NODES_FLD_COST_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
 	fi
 	# Delete nodes with zero connections?
@@ -4004,4 +4080,3 @@ g.message -i "Completed: ${END}"
 
 # Exit with status "OK"
 exit ${EXIT_OK}
-
