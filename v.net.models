@@ -276,7 +276,7 @@ GIS_FLAG_S=0
 GIS_OPT_THREADS=2
 
 # System setup: Modify if needed.
-if [ -n "$MSYSPATH" ] ; then
+if [ -n "${MSYSPATH}" ] ; then
 	# "MSYSPATH" was set by the Windows ".bat" script that called
 	# this script. It contains the path to the "bin" folder of
 	# the local MSYS(2) installation, using Linux style "/" separators
@@ -288,7 +288,7 @@ if [ -n "$MSYSPATH" ] ; then
 	GREP="${MSYSPATH}/grep"
 	EXPR="${MSYSPATH}/expr"
 	DATE="${MSYSPATH}/date"
-	# Some GRASS commands require ".bat" extension or else "sh.exe" won't find them!
+	# Some GRASS commands require ".bat" extensions, or else "sh.exe" won't find them!
 	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
 	V_DB_ADDTABLE="v.db.addtable.bat"
 	V_DB_DROPCOLUMN="v.db.dropcolumn.bat"
@@ -314,7 +314,7 @@ fi
 # Basic module setup.
 
 MODULE_NAME="v_net_models"
-MODULE_VERSION="0.9.1"
+MODULE_VERSION="1.0.0"
 
 # Exit status variables.
 EXIT_OK="0"
@@ -375,6 +375,7 @@ TMP_RAST_COST_RES="${TMP_PREFIX}_r_cost_res" # Directional surface output r.cost
 TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost (random error)
 TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
 TMP_RAST_RSTLINKS="${TMP_PREFIX}_r_rstlinks" # Rasterized link from map supplied via "initial="
+TMP_RAST_MAPCALC1="${TMP_PREFIX}_r_mapcalc1"   # Temporary output of an r.mapcalc run (1)
 
 # Names of temporary regions
 TMP_GEN_REGION_ORG="${TMP_PREFIX}_g_region_org" # Original region settings
@@ -569,6 +570,12 @@ clean_up () {
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
+	 # Temporary output of an r.mapcalc run (1)
+	elem="${TMP_RAST_MAPCALC1}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi   
 	
 	# Temporary REGIONS
 	type="region"
@@ -1108,46 +1115,41 @@ check_field () {
 	
 	# 1. Check if field exists (always run)
 	fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "|${2}" -o`
-	check_error "Failed to check map '$1' for field '$2'."
 	if [ "${fld_test_result}" != "|${2}" ] ; then
 		RET_FLD_TEST="Field '$2' does not exist in attribute table of map '$1'."
 		return
 	fi
 	
 	# 2. Check for given field type (run if at least 3 arguments given)
-	if [ $# -gt 2 ] then
+	if [ $# -gt 2 ] ; then
 		fld_test_key_type="UNKNOWN"
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "INTEGER|${2}" -w -c`
-		check_error "Failed to query map '$1' for type information on field '$2'."
 		if [ ${fld_test_result} -eq 1 ] ; then
-			$FLD_TEST_KEY_TYPE="INTEGER"
+			fld_test_key_type="INTEGER"
 			if [ "$3" != "INTEGER" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
 				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
 				return
 			fi
 		fi
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "DOUBLE PRECISION|${2}" -w -c`
-		check_error "Failed to query map '$1' for type information on field '$2'."
 		if [ ${fld_test_result} -eq 1 ] ; then
-			$FLD_TEST_KEY_TYPE="DOUBLE PRECISION"
+			fld_test_key_type="DOUBLE PRECISION"
 			if [ "$3" != "DOUBLE PRECISION" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
 				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
 				return
 			fi
 		fi
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "CHARACTER|${2}" -w -c`
-		check_error "Failed to query map '$1' for type information on field '$2'."
 		if [ ${fld_test_result} -eq 1 ] ; then
-			$FLD_TEST_KEY_TYPE="CHARACTER"
+			fld_test_key_type="CHARACTER"
 			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
 				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
 				return
 			fi
 		fi
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "TEXT|${2}" -w -c`
-		check_error "Failed to query map '$1' for type information on field '$2'."
 		if [ ${fld_test_result} -eq 1 ] ; then
-			$FLD_TEST_KEY_TYPE="TEXT"
+			fld_test_key_type="TEXT"
 			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
 				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
 				return
@@ -1161,28 +1163,45 @@ check_field () {
 	fi
 	
 	# 3. Check for non-empty contents (run if at least 4 arguments given) 
-	if [ $# -gt 3 ] then
+	if [ $# -gt 3 ] ; then
 		if [ "$4" == "TRUE" ] ; then
-			# Get number of features in map
-			fld_test_points_old=${points} # This is a sensitive var that might already be set!
+			# Get number of features in map:
+			# We compare the number of (typical) geometries that can have
+			# attributes attached with the total number of attributes
+			# returned by a v.db.select query.
+			# The below are all sensitive vars that might already be set!
+			fld_test_points_old=${points}
+			fld_test_lines_old=${lines}
+			fld_test_areas_old=${areas}
+			#DEBUG
+			#echo "FLD = ${2}"
 			eval `v.info -t map="${1}" layer=1`
 			check_error "Failed to query map '$1' for feature count."
 			fld_test_num_keys=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
 			check_error "Failed to query map '$1' for contents of field '$2'."
-			if [ ${fld_test_points} -ne ${fld_test_num_keys} ] ; then
+			fld_test_num_geoms=`${EXPR} ${points} + ${lines} + ${areas}`
+			#DEBUG			
+			#echo "  NUM_GEOMS = ${fld_test_num_geoms}"
+			#echo "  NUM_KEY = ${fld_test_num_keys}"
+			if [ ${fld_test_num_geoms} -gt ${fld_test_num_keys} ] ; then
 				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is empty in one or more instances."
+				# Restore previous geometry data:
 				points=${fld_test_points_old}
+				lines=${fld_test_lines_old}
+				areas=${fld_test_areas_old}
 				return
 			fi
+			# Restore previous geometry data:
 			points=${fld_test_points_old}
+			lines=${fld_test_lines_old}
+			areas=${fld_test_areas_old}
 		fi
 	fi
 	
 	# 4. Check for uniqueness (run if at least 5 arguments given) 
-	if [ $# -gt 4 ] then
+	if [ $# -gt 4 ] ; then
 		if [ "$5" == "TRUE" ] ; then
 			FLD_TEST_KEYS=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | ${GREP} -v -e '^$'`
-			check_error "Failed to query map '$1' for contents of field '$2'."
 			for fld_test_key in ${FLD_TEST_KEYS} ; do
 				if [ "${FLD_TEST_KEY_TYPE}" = "CHARACTER" ] || [ "${FLD_TEST_KEY_TYPE}" = "TEXT" ] ; then
 					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}='$fld_test_key'" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
@@ -1191,7 +1210,7 @@ check_field () {
 					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}=$fld_test_key" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
 					check_error "Failed to query map '$1' for contents of field '$2'."
 				fi
-				if [ ${num_matches} -ne 1 ] ; then
+				if [ ${fld_test_num_matches} -ne 1 ] ; then
 					RET_FLD_TEST="Value '$fld_test_key' is not unique for field '$2' (${fld_test_num_matches} occurrences in attribute table of map '$1')."
 					return
 				fi
@@ -1604,20 +1623,22 @@ check_input () {
 		if [ ${lines} -lt 1 ] ; then
 			exit_error "Vector input map 'initial' must contain at least one line geometry."
 		fi
+		# TODO: DELETE BELOW TESTS.
+		# Initial links map does not have key or label fields identical with nodes input map!
 		#
 		# 2. Test attribute table schema: does it contain all required fields and
 		#    are the fields valid?
 		#
 		# Primary key field (must be same as {GIS_OPT_INPUT}):
-		check_field "${GIS_OPT_INITIAL}"	"${GIS_OPT_KEY}"		"INTEGER" 			"TRUE"	"TRUE"
-		if [ "${RET_FLD_TEST}" != "${GIS_OPT_KEY}" ] ; then
-			exit_error "${RET_FLD_TEST}"
-		fi		
+		#check_field "${GIS_OPT_INITIAL}"	"${GIS_OPT_KEY}"		"INTEGER" 			"TRUE"	"TRUE"
+		#if [ "${RET_FLD_TEST}" != "${GIS_OPT_KEY}" ] ; then
+		#	exit_error "${RET_FLD_TEST}"
+		#fi		
 		# Label field (must be same as {GIS_OPT_INPUT}):
-		check_field "${GIS_OPT_INITIAL}"	"${GIS_OPT_LABEL}" 		"${LABEL_TYPE}" 	"TRUE"	"FALSE"
-		if [ "${RET_FLD_TEST}" != "${GIS_OPT_LABEL}" ] ; then
-			exit_error "${RET_FLD_TEST}"
-		fi
+		#check_field "${GIS_OPT_INITIAL}"	"${GIS_OPT_LABEL}" 		"${LABEL_TYPE}" 	"TRUE"	"FALSE"
+		#if [ "${RET_FLD_TEST}" != "${GIS_OPT_LABEL}" ] ; then
+		#	exit_error "${RET_FLD_TEST}"
+		#fi
 		# "from_id"
 		check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_FROM_ID}" "INTEGER" 			"TRUE"	"FALSE"
 		if [ "${RET_FLD_TEST}" != "${LINKS_FLD_FROM_ID}" ] ; then
@@ -1656,7 +1677,7 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=0=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
 			fi
 		fi
 		# from_x
@@ -1670,7 +1691,7 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=0=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
 			fi
 		fi		
 		# to_x
@@ -1684,7 +1705,7 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=0=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
 			fi
 		fi
 		# to_y
@@ -1698,23 +1719,25 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=0=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
 			fi
 		fi
 		#
 		# Make sure that ALL FOUR coordinate fields are valid or trigger auto-computation:
-		if [ num_init_valid_coord_flds -eq 0 ] ; then
+		if [ ${num_init_valid_coord_flds} -eq 0 ] ; then
 			# No coordinate fields present: trigger
 			g.message -w "Coordinate attribute fields are missing from initial map '${GIS_OPT_INITIAL}'."
 			g.message -w "They will be added and their contents computed automatically."
 			g.message -w "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 			TRIGGER_ATTR_COORDINATES="TRUE"
 		else
-			# At least one coord field present, but less than four valid fields: error
-			g.message -e "Not all coordinate fields present or invalid coordinate field(s) found."
-			g.message -e "Please fix manually or delete ALL coordinate fields from initial links map to rebuild automatically."
-			g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
-			exit ${EXIT_ERROR}
+			if [ ${num_init_valid_coord_flds} -lt 4 ] ; then
+				# At least one coord field present, but less than four valid fields: error
+				g.message -e "Not all coordinate fields present or invalid coordinate field(s) found."
+				g.message -e "Please fix manually or delete ALL coordinate fields from initial links map to rebuild automatically."
+				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
+				exit ${EXIT_ERROR}
+			fi
 		fi			
 		# length_km: If this exists, then it must have the right type, and it must be complete!
 		# NOTE: If it does not exist, then it will be rebuild automatically ONLY if 'length_m' is also missing!
@@ -1793,41 +1816,78 @@ check_input () {
 			fi
 		fi
 		#
-		# 3. Check that INITIAL AND INPUT contain the same KEY sets (i.e. it will not be
-		#    possible to use an INITIAL map computed for a different set of INPUT points)
-		#
-		# Check for complete intersection of keys in ${GIS_OPT_INPUT} and ${GIS_OPT_INITIAL}:
-		# initial -> input
-		INIT_KEY_LIST=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" columns="${GIS_OPT_KEY}" -c --quiet`
-		check_error "Failed to retrieve values for key field ('${GIS_OPT_KEY}') from 'initial' links input map."
-		for init_key in ${INIT_KEY_LIST} ; do			
-			num_init_keys=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${GIS_OPT_KEY}=${init_key}" -c | ${GREP} "${key}" -c`
-			if [ $num_init_keys -ne 1 ] ; then
-				exit_error "Primary keys (field '${GIS_OPT_KEY}') in 'initial' (links) and 'input' (nodes) maps differ."
-			fi			
+		# 3. Check that INITIAL AND INPUT links/nodes MATCH. The aimis to prevent users from
+		#    using an initial links map computed for a different set of input nodes.
+		#   
+		# First check that all nodes in $GIS_OPT_INPUT are connected to at least
+		# one link in $GIS_OPT_INITIAL via the from_id/to_id fields.
+		# If not, then we issue a warning, since the presence of unconnected nodes
+		# is not harmful.
+		get_primary_keys "${GIS_OPT_INPUT}"
+		for key in ${PRIMARY_KEYS} ; do
+			# Step through all input nodes and count number of connections:
+			num_connections_from=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${key}" column="${LINKS_FLD_FROM_ID}" -c | ${GREP} "${key}" -c`
+			if [ -z "${num_connections_from}" ] ; then
+				num_connections_from=0
+			fi
+			num_connections_to=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_TO_ID}=${key}" column="${LINKS_FLD_TO_ID}" -c | ${GREP} "${key}" -c`
+			if [ -z "${num_connections_to}" ] ; then
+				num_connections_to=0
+			fi
+			num_connections_total=`${EXPR} ${num_connections_from} + ${num_connections_to}`
+			#DEBUG
+			#echo "KEY=${key}"
+			#echo "CONNS=${num_connections_total}"
+			if [ ${num_connections_total} -lt 1 ] ; then				
+				#exit_error "Node with primary key '${GIS_OPT_KEY}=${key}' is unconnected in 'initial' links map."
+				g.message -w "Node with primary key '${GIS_OPT_KEY}=${key}' is unconnected in 'initial' links map."
+			fi
 		done
-		# input -> initial
-		INPUT_KEY_LIST=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_KEY}" -c --quiet`
-		check_error "Failed to retrieve values for key field ('${GIS_OPT_KEY}') from 'input' nodes map."
-		for input_key in ${INPUT_KEY_LIST} ; do			
-			num_input_keys=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GIS_OPT_KEY}=${input_key}" -c | ${GREP} "${key}" -c`
-			if [ $num_input_keys -ne 1 ] ; then
-				exit_error "Primary keys (field '${GIS_OPT_KEY}') in 'input' (nodes) and 'initial'(links) maps differ."
-			fi			
-		done
+		# Now the other way around: we traverse all from/to ID fields in initial links map
+		# and check if there are two corresponding nodes in GIS_OPT_INPUT.
+		# If NOT, then we have a FATAL ERROR.
+		get_grass_cats "${GIS_OPT_INITIAL}"
+		# Check all from_id fields:
+		for cat in ${GRASS_CATS} ; do
+			# Get value of 'from_id' for this link:
+			init_from_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_FROM_ID}" -c`
+			check_error "Failed to retrieve value of field ('${LINKS_FLD_FROM_ID}') from 'initial' links input map ('${GRASS_PKEY}=${cat}')."
+			# Check if 'from_id' occurs as primary key of any input node:
+			num_connections_from=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${GIS_OPT_KEY}=${init_from_id}" column="${GIS_OPT_KEY}" -c | ${GREP} "${init_from_id}" -c`
+			if [ -z "${num_connections_from}" ] ; then
+				num_connections_from=0
+			fi
+			# Get value of 'to_id' for this link:
+			init_to_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_TO_ID}" -c`
+			check_error "Failed to retrieve value of field ('${LINKS_FLD_TO_ID}') from 'initial' links input map ('${GRASS_PKEY}=${cat}')."
+			# Check if 'to_id' occurs as primary key of any input node:
+			num_connections_to=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${GIS_OPT_KEY}=${init_to_id}" column="${GIS_OPT_KEY}" -c | ${GREP} "${init_to_id}" -c`
+			if [ -z "${num_connections_to}" ] ; then
+				num_connections_to=0
+			fi
+			num_connections_total=`${EXPR} ${num_connections_from} + ${num_connections_to}`
+			#DEBUG
+			#echo "KEY=${cat}"
+			#echo "CONNS=${num_connections_total}"
+			if [ ${num_connections_total} -lt 2 ] ; then				
+				exit_error "Initial link with primary key '${GRASS_PKEY}=${cat}' is not connected to two nodes in input map."				
+			fi
+		done		
 		#
 		# 4. Check that the same two nodes are not linked more than once in INITIAL:
 		#
-		INIT_KEY_LIST=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" columns="${GIS_OPT_KEY}" -c --quiet`
-		for init_key in ${INIT_KEY_LIST} ; do
-			init_from_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GIS_OPT_KEY}=${init_key}" column="${LINKS_FLD_FROM_ID}" -c`
+		#INIT_KEY_LIST=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" columns="${GIS_OPT_KEY}" -c --quiet`
+		get_grass_cats "${GIS_OPT_INITIAL}"
+		#for cat in ${INIT_KEY_LIST} ; do
+		for cat in ${GRASS_CATS} ; do
+			init_from_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_FROM_ID}" -c`
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_FROM_ID}') from 'initial' links input map."
-			init_to_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GIS_OPT_KEY}=${init_key}" column="${LINKS_FLD_TO_ID}" -c`
+			init_to_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_TO_ID}" -c`
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_TO_ID}') from 'initial' links input map."
 			# Check for occurrences of this from/to pair:
-			num_init_pairs_ft=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id}" column="${GIS_OPT_KEY}" -c | ${GREP} "${key}" -c`			
+			num_init_pairs_ft=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id}" column="${init_from_id}" -c | ${GREP} "${init_from_id}" -c`			
 			# Check for occurrences of this to/from pair:
-			num_init_pairs_tf=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_TO_ID}=${init_to_id} AND ${LINKS_FLD_FROM_ID}=${init_from_id}" column="${GIS_OPT_KEY}" -c | ${GREP} "${key}" -c`
+			num_init_pairs_tf=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id}" column="${init_from_id}" -c | ${GREP} "${init_from_id}" -c`
 			num_init_pairs=`${EXPR} ${num_init_pairs_ft} + ${num_init_pairs_tf}`
 			if [ $num_init_pairs -gt 1 ] ; then
 				exit_error "At least one pair of nodes connected by more than one link in initial links map."
@@ -2155,12 +2215,32 @@ preprocess () {
 # of each path with the current region's cell system, not with the original start/end
 # points!
 #
-# The only argument to this function ($1) is the name of the map that holds
-# the network links.
+# Using this function is a little tricky, because it has been optimized to process the
+# particular subsets of network LCPs generated in the main loop of 'model_complete':
+# It is assumed that the links to adjust are LCP bundles that consist of one starting
+# node that is connected by LCPs to any number of stopping nodes (the 'while' loop
+# in this function iterates through these LCPs). However, this function can also be
+# used to process a single link by providing a start node in $1, a map with just
+# one link in $2 and '1' in $3.
+#
+# Arguments:
+# 	$1 - map that holds the network links to adjust (DANGER: see below!)
+#   $2 - the start node (normally one point extracted from $GIS_OPT_INPUT)
+#   $3 - number of links to adjust
+# 
+# DANGER: This function will drop and completely re-write the attribute table
+#         of the map passed in $1! Therefore, only pass TEMPORARY maps to
+#         this function that have no valuable data in the attribute table!
+#
+# CAVEAT 1: It is assumed that the map passed in $1 has no attribute table!
+#
+# CAVEAT 2: It is assumed that the links to adjust are in a map with an unbroken
+#         sequence of GRASS primary keys (normally 'cat'), starting at "1"!
 links_adjust_nodes ()
-{
-	# Temporary attribute field names
+{	
+	# Temporary attribute field names	
 	adj_fld_key="cat" # Default GRASS primary key.
+	#adj_fld_key="${GRASS_PKEY}" # Default GRASS primary key.
 	adj_fld_startxold="${NODES_FLD_COORD_X}"
 	adj_fld_startyold="${NODES_FLD_COORD_Y}"
 	adj_fld_endxold="${NODES_FLD_COORD_X}"
@@ -2175,9 +2255,11 @@ links_adjust_nodes ()
 	# problem and retain a topologically correct network of nodes that lie
 	# exactly on the first and last vertex of each link!
 	# Store original starting point coordinates.
-	adj_endxold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endxold}"`
+	#adj_endxold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endxold}"`
+	adj_endxold=`v.db.select -c map="${2}" column="${adj_fld_endxold}"`
 	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endxold}')."
-	adj_endyold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endyold}"`
+	#adj_endyold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endyold}"`
+	adj_endyold=`v.db.select -c map="${2}" column="${adj_fld_endyold}"`
 	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endyold}')."
 	# Attach attribute table to links map of this iteration, so we can
 	# easily loop over all links, fixing each one in turn:	
@@ -2194,7 +2276,8 @@ links_adjust_nodes ()
 	check_error "Failed to upload end node coordinates to temporary links map."
 	adj_step_inner=1
 	adj_cat_inner=1				
-	while [ ${adj_step_inner} -lt ${NUM_LINKS} ] ; do
+	#while [ ${adj_step_inner} -lt ${NUM_LINKS} ] ; do
+	while [ ${adj_step_inner} -lt ${3} ] ; do
 		#echo "${adj_fld_key}=${adj_cat_inner}"
 		adj_val=`v.db.select -c map="$1" column="${adj_fld_key}" where="${adj_fld_key}=${adj_cat_inner}"`
 		check_error "Failed to query attribute table of partial links map (iteration ${adj_step_inner})."
@@ -2249,7 +2332,7 @@ links_adjust_nodes ()
 	done				
 	# Since we extract one node per run, we need to do one pass less
 	# through the inner loop each time we look at another set of links.
-	NUM_LINKS=`${EXPR} ${NUM_LINKS} - 1`
+	#NUM_LINKS=`${EXPR} ${NUM_LINKS} - 1`
 	# Drop attribute table from temporary links map.				
 	${V_DB_DROPTABLE} map="$1" layer="1" -f --quiet		
 
@@ -2359,9 +2442,9 @@ stats_unreduced () {
 	max_cost=""
 	step=1 # This one is just for progress reporting.
 	# Compute simple metrics
-	for cat in $GRASS_CATS ; do
+	for cat in ${GRASS_CATS} ; do
 		len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (cat='${cat}')"
+		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GRASS_PKEY}='${cat}')"
 		awk_min "${min_len}" "${len}"
 		min_len="${AWK_VALUE}"
 		awk_max "${max_len}" "${len}"
@@ -2370,7 +2453,7 @@ stats_unreduced () {
 		total_len=${AWK_VALUE}
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (cat='${cat}')"
+			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GRASS_PKEY}='${cat}')"
 			awk_min "${min_cost}" "${cost}"
 			min_cost="${AWK_VALUE}"
 			awk_max "${max_cost}" "${cost}"
@@ -2524,17 +2607,17 @@ model_attsim () {
 	links_org="${GIS_OPT_LINKS}"
 	# Get GRASS primary keys for links map and step through them:
 	get_grass_cats "${GIS_OPT_LINKS}"	
-	for cat in $GRASS_CATS ; do
+	for cat in ${GRASS_CATS} ; do
 		# Get strength of link:
 		strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_STRENGTH}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-		check_error "Failed to read from attribute field '${LINKS_FLD_STRENGTH}' of link with cat='$cat' in output vector map."
+		check_error "Failed to read from attribute field '${LINKS_FLD_STRENGTH}' of link with ${GRASS_PKEY}='${cat}' in output vector map."
 		if [ ${strength} -lt 1 ] ; then
 			# Strength is '0': DELETE
 			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
 			#		There is no way to make v.edit delete an attribute table row itself. 
 			#       'v.db.select -f' can be used to select only rows that are still linked to features...
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			check_error "Failed to delete link with ${GRASS_PKEY}='${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
 			links_droprow ${cat}
 		fi
@@ -2589,7 +2672,8 @@ model_complete () {
 	# This loop steps through number of input nodes MINUS ONE(!).
 	# The reason for this is that the last node will already be part
 	# of the fully connected network when the loop reaches its index.
-	NUM_LINKS=${NUM_INPUT_NODES} # Number of links at current processing step: Needed by links_adjust_nodes()!
+	#NUM_LINKS=${NUM_INPUT_NODES} # Number of links at current processing step: Needed by links_adjust_nodes()!
+	num_links_to_adjust=${NUM_INPUT_NODES} # Number of links at current processing step: Needed by links_adjust_nodes()!
 	get_primary_keys "${GIS_OPT_INPUT}"
 	# This list is where we keep the names of the temporary vector maps
 	# with subnetworks that we patch together in one go, after the main loop has completed.
@@ -2621,7 +2705,9 @@ model_complete () {
 	
 	#############
 	# MAIN LOOP #
-	#############
+	#############	
+	#DEBUG
+	#echo "STEPS=$NUM_INPUT_NODES"	
 	for key in $PRIMARY_KEYS ; do
 		if [ -z "${no_data}" ] ; then
 			# 'no data' has not yet been set: We do so now.
@@ -2704,7 +2790,7 @@ ${tmp_vect_links}
 				else
 					# We are running in straight-line links (Euclidean) mode:
 					v.distance from="${GIS_OPT_INPUT}" from_layer="1" from_type="point" to="${TMP_VECT_EXTRACT}" to_layer="1" to_type="point" output="${tmp_vect_links}" --overwrite --quiet
-					check_error "Failed to connect point with primary key value '${key}' to all other points of input vector map."						 
+					check_error "Failed to connect point with primary key value '${key}' to all other points of input vector map."
 				fi									
 				# Smooth output path '-s' flag given (we do this before adjusting link nodes to original points!):
 				if [ ${GIS_FLAG_S} -eq 1 ] ; then
@@ -2715,8 +2801,15 @@ ${tmp_vect_links}
 					check_error "Failed to copy smoothed network links map (${step} of ${NUM_INPUT_NODES})."
 					g.remove type="vector" name="${TMP_VECT_LINKS_SMOOTH}" -f --quiet
 				fi
-				# Adjust node coordinates of least cost paths (if required)					
-				links_adjust_nodes "${tmp_vect_links}"
+				# Adjust node coordinates of least cost paths (if required)
+				if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+					#links_adjust_nodes "${tmp_vect_links}"
+					links_adjust_nodes "${tmp_vect_links}" "${TMP_VECT_EXTRACT}" ${num_links_to_adjust}
+					# Since we extract one node per run, we need to adjust one link less
+					# each time we adjust another subset of links (LCPs)!
+					num_links_to_adjust=`${EXPR} ${num_links_to_adjust} - 1`
+					#NUM_LINKS=`${EXPR} ${NUM_LINKS} - 1`
+				fi
 				
 				#DELETE: Obsolete code (implemented sequentical patching below)
 				# Add new links to existing ones
@@ -2856,7 +2949,7 @@ ${tmp_vect_links}
 				#echo "  From Label = '${LABEL}'"				
 				target=`${EXPR} ${cat} + ${links} - 1`
 				#echo "  cat range  = ${cat} to ${target}"
-				while [ $cat -le $target ] ; do
+				while [ ${cat} -le ${target} ] ; do
 					# Inner loop: We transfer a FROM/TO pair in every pass through this loop. 
 					# The FROM key is constant here,
 					# while the TO key becomes, in turn, every entry on the list of
@@ -2865,7 +2958,7 @@ ${tmp_vect_links}
 					get_label "${GIS_OPT_INPUT}" "${key}"
 					from_lbl="${LABEL}"
 					for cur in $PRIMARY_KEYS ; do
-						res=`echo "${previous}" | ${GREP} " $cur " -c`						
+						res=`echo "${previous}" | ${GREP} " ${cur} " -c`						
 						if [ $res -eq 0 ] ; then # Key not found on list of previously transfered keys: Transfer as new TO key in FROM/TO pair.
 							#echo "PREV='$previous'"
 							#echo -e "cur='$cur'\n"
@@ -2905,7 +2998,7 @@ ${tmp_vect_links}
 		check_error "Failed to add attribute field '${LINKS_FLD_COST}' to links output vector map."
 		get_grass_cats "${GIS_OPT_LINKS}"
 		step=1 # This one is just for progress reporting.
-		for cat in $GRASS_CATS ; do
+		for cat in ${GRASS_CATS} ; do
 			#from_coor_x=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_X}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
 			#check_error "Failed to retrieve attribute '${LINKS_FLD_FROM_X}' from links output vector map."
 			#from_coor_y=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_Y}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
@@ -2973,15 +3066,15 @@ ${tmp_vect_links}
 			num_cats=0
 			for line in $RECS ; do
 				num_cats=`${EXPR} ${num_cats} + 1`
-				max_cat=$line
+				max_cat=${line}
 			done
 			max_cat=`${EXPR} ${max_cat} + 1`
 			offset=1
 			for line in $RECS ; do
 				new_cat=`${EXPR} ${max_cat} - ${offset}`
 				#echo "{$key}: ${line}=$new_cat"
-				if [ $new_cat -ne $line ] ; then
-					if [ $new_cat -eq $line_old ] && [ $line -eq $new_cat_old ] ; then
+				if [ ${new_cat} -ne ${line} ] ; then
+					if [ ${new_cat} -eq ${line_old} ] && [ ${line} -eq ${new_cat_old} ] ; then
 						# Reached the symmetry element of an even number of records: Done with this set.
 						break
 					fi
@@ -3065,7 +3158,7 @@ model_delaunay () {
 	# Step through all links and use v.edit to delete every link that is not also a Delaunay link	
 	get_grass_cats "${GIS_OPT_LINKS}"
 	step=1 # This one is just for progress reporting.
-	for cat in $GRASS_CATS ; do		
+	for cat in ${GRASS_CATS} ; do		
 		preserve="false"
 		# Get node coordinates of current link in completely connected network:
 		from_x_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_X}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
@@ -3101,7 +3194,7 @@ model_delaunay () {
 			#		There is no way to make v.edit delete an attribute table row itself. 
 			#       'v.db.select -f' can be used to select only rows that are still linked to features...
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
 			links_droprow ${cat}
 		fi
@@ -3138,16 +3231,16 @@ model_linkdist () {
 	# Step through all links and use v.edit to delete every link that is longer than 'maxdist'	
 	get_grass_cats "${GIS_OPT_LINKS}"
 	step=1 # This one is just for progress reporting.
-	for cat in $GRASS_CATS ; do				
+	for cat in ${GRASS_CATS} ; do				
 		# This will produce a non-empty result only if the current link's length exceeds the threshold:
 		length=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="\"${GRASS_PKEY}\"=${cat} AND \"${FLD_DIST}\" > ${GIS_OPT_MAXDIST}" -c --quiet`
-		check_error "Failed to retrieve attribute '${FLD_DIST}' from links output vector map (cat='$cat')."
+		check_error "Failed to retrieve attribute '${FLD_DIST}' from links output vector map ('${GRASS_PKEY}=$cat')."
 		if [ -n "${length}" ] ; then
 			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
 			#		There is no way to make v.edit delete an attribute table row itself. 
 			#       'v.db.select -f' can be used to select only rows that are still linked to features...
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			check_error "Failed to delete link with '${GRASS_PKEY}=${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
 			links_droprow ${cat}
 		fi
@@ -3249,15 +3342,15 @@ ${lengths_to}"
 				check_error "Failed to query field '${LINKS_FLD_TO_ID}' of links output map (key='${key}')."
 CATS="${CATS_FROM}
 ${CATS_TO}"
-				if [ -n "$CATS" ] ; then
+				if [ -n "${CATS}" ] ; then
 					#echo "$CATS"
 					connected=0 # Count of neighbors connected to this node
-					for cat in $CATS ; do
+					for cat in ${CATS} ; do
 						preserve="false" # If not 'true' by the end of this loop, link will be deleted!
 						if [ $connected -lt ${GIS_OPT_NEIGHBORS} ] ; then
 							# We are still looking to connect at least one more!
 							len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="cat=${cat}" -c`
-							check_error "Failed to query links output map for field '${FLD_DIST}' (cat='${cat}')."
+							check_error "Failed to query links output map for field '${FLD_DIST}' ('cat=${cat}')."
 							# Step through sorted list of distances and see if we can get a match
 							# in the first n items!
 							neighbor=0;
@@ -3268,7 +3361,7 @@ ${CATS_TO}"
 										#echo "connected: $cat ($neighbor) = $len"
 										# Mark this link as "keep":
 										${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="1" where="cat=${cat}" --quiet
-										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for cat='${cat}'."										
+										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."										
 									fi
 								fi
 								neighbor=`${EXPR} ${neighbor} + 1` # Advance to next neighbor.
@@ -3285,13 +3378,13 @@ ${CATS_TO}"
 	# Now we delete all the links that are not marked "keep=1"
 	CATS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_keep}=0" -c`
 	check_error "Failed to query field '${fld_keep}' of links output map ('${GIS_OPT_LINKS}')."
-	for cat in $CATS ; do
+	for cat in ${CATS} ; do
 		# DELETE!
 		# NOTE:	This will delete the geometry, but leave the attribute table row intact!
 		#		There is no way to make v.edit delete an attribute table row itself. 
 		#       'v.db.select -f' can be used to select only rows that are still linked to features...
 		v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-		check_error "Failed to delete link with cat='$cat' from links output vector map ."
+		check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
 		# Drop associated row of attribute table from links map:
 		links_droprow ${cat}
 	done
@@ -3349,36 +3442,36 @@ model_xtent () {
 	# or is longer than 'maxdist' (if applicable)
 	get_grass_cats "${GIS_OPT_LINKS}"
 	step=1 # This one is just for progress reporting.
-	for cat in $GRASS_CATS ; do
+	for cat in ${GRASS_CATS} ; do
 		# Get size of "from node"
 		from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-		check_error "Failed to query field '${LINKS_FLD_FROM_ID}' of output nodes map (cat='$cat')."
+		check_error "Failed to query field '${LINKS_FLD_FROM_ID}' of output nodes map (cat='${cat}')."
 		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
 			from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"='${from_id}'" -c --quiet`
 		else
 			from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"=${from_id}" -c --quiet`			
 		fi
-		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map (cat='$cat')."
+		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		grep_is_positive ${from_size}
 		if [ -z ${GREP_VALUE} ] ; then
 			exit_error "Invalid 'size' for input point with 'key'='${from_id}': Must be larger than '0'."
 		fi
 		# Get size of "to node"
 		to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-		check_error "Failed to query field '${LINKS_FLD_TO_ID}' of output nodes map (cat='$cat')."
+		check_error "Failed to query field '${LINKS_FLD_TO_ID}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
 			to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"='${to_id}'" -c --quiet`
-			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map (cat='$cat')."
+			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		else
 			to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="\"${GIS_OPT_KEY}\"=${to_id}" -c --quiet`
-			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map (cat='$cat')."
+			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		fi
 		grep_is_positive ${to_size}
 		if [ -z ${GREP_VALUE} ] ; then
 			exit_error "Invalid 'size' for input point with 'key'='${to_id}': Must be larger than '0'."
 		fi		
 		distance=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-		check_error "Failed to query field '${FLD_DIST}' of output nodes map (cat='$cat')."
+		check_error "Failed to query field '${FLD_DIST}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		#awk_calc "((${from_size}^${GIS_OPT_A})+(${to_size}^${GIS_OPT_A}))-(${GIS_OPT_K}*${distance})"
 		#awk_calc "(((${from_size}^${GIS_OPT_A})+(${to_size}^${GIS_OPT_A}))*${distance})-(${GIS_OPT_K}*${distance})"
 		awk_calc "${from_size}^${GIS_OPT_A}"
@@ -3428,7 +3521,7 @@ model_xtent () {
 			#		There is no way to make v.edit delete an attribute table row itself. 
 			#       'v.db.select -f' can be used to select only rows that are still linked to features...
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with cat='$cat' from links output vector map ."
+			check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
 			links_droprow ${cat}
 		fi
@@ -3462,19 +3555,25 @@ model_xtent () {
 #							to make sure that all is fine and dandy.
 #
 # 							Arguments:
-#			 				$1 - (node) coordinate value to test against
-#							$2 - name of attribute table in links map that stores the same coordinate
-#							$3 - primary key value to match up link and node coordinates.
+#						    $1 - name of map that contains initial links
+#			 				$2 - node coordinate value to test against
+#							$3 - name of attribute field in initial links map that stores the same coordinate
+#							$4 - name of primary key field in initial links map
+#							$5 - primary key value to get correct record from initial links map.
 #
 clean_initial_coords () {
+	# Set map to work on:
+	map_init_links="$1"
 	# Set node coordinate for comparison:
-	val_coord_node="$1"
+	val_coord_node="$2"
 	# Set coordinate to read from link attribute field:
-	fld_link_coord="$2"
-	# Set primary key:
-	clean_ic_pkey="$3"
+	fld_link_coord="$3"
+	# Set primary key name:
+	clean_id_pkey_fld="$4"
+	# Set primary key value:
+	clean_id_pkey_val="$5"
 	# Coordinate from link map's attribute field:
-	val_coord_link=`v.db.select map="${GIS_OPT_LINKS}" column="${fld_link_coord}" where="${GIS_OPT_KEY}=${clean_ic_pkey}" -c`												
+	val_coord_link=`v.db.select map="${map_init_links}" column="${fld_link_coord}" where="${clean_id_pkey_fld}=${clean_id_pkey_val}" -c`												
 	check_error "Failed to read attribute field '${fld_link_coord}' from copy of initial links map."						
 	# Check if both coordinates are exactly equal:						
 	awk_equal "${val_coord_link}" "${val_coord_node}"
@@ -3482,12 +3581,12 @@ clean_initial_coords () {
 		# There is a difference!
 		# Get absolute difference between node coordinate and link coordinate:						
 		awk_abs "${val_coord_link}" "${val_coord_node}"
-		diff="$AWK_VALUE"
+		diff="${AWK_VALUE}"
 		# Let's check if abs diff is within the allowed threshold!
 		awk_smaller_eq "${diff}" "${GIS_OPT_THRESHOLD}" 
 		if [ ${AWK_VALUE} -ne 1 ] ; then
 			# Difference too large: throw error and exit!
-			g.message -e "Difference between coordinate '${fld_link_coord}' of link with ID '${GIS_OPT_KEY}=${clean_ic_pkey}'"
+			g.message -e "Difference between coordinate '${fld_link_coord}' of initial link with '${clean_id_pkey_fld}=${clean_id_pkey_val}'"
 			g.message -e "and coordinate of input point (node) with the same ID is too large (${val_coord_link} vs ${val_coord_node})!"
 			g.message -e "Please check that the links provided in map 'initial=${GIS_OPT_INITIAL}' really"
 			g.message -e "connect with points in map 'input=${GIS_OPT_INPUT}'. "
@@ -3495,10 +3594,10 @@ clean_initial_coords () {
 			exit_error "Topology error."
 		else
 			# Warn about difference.
-			g.message -e "Difference between coordinate '${fld_link_coord}' of link with ID '${GIS_OPT_KEY}=${clean_ic_pkey}'"
+			g.message -e "Difference between coordinate '${fld_link_coord}' of initial link with '${clean_id_pkey_fld}=${clean_id_pkey_val}'"
 			g.message -e "and coordinate of input point (node) with the same ID detected (${val_coord_link} vs ${val_coord_node})."
 			# Copy node coordinate to link coordinate (field to field):
-			${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_link_coord}" value="${val_coord_node}" --quiet
+			${V_DB_UPDATE} map="${map_init_links}" layer="1" column="${fld_link_coord}" value="${val_coord_node}" --quiet
 			check_error "Failed to update field '${fld_link_coord}' in copy of initial links map."
 			g.message -w "Automatic correction succeeded with 'threshold=${GIS_OPT_THRESHOLD}'."								
 		fi
@@ -3565,8 +3664,16 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			# of any input nodes. However, this is a requirement, since some models match
 			# links with their connected nodes via the coordinates stored in the attribute table!
 			# So we try some snapping and hope for the best...
-			g.message -i "Snapping start/end vertices of 'initial' links map to nodes..."			
-			links_adjust_nodes "${GIS_OPT_LINKS}"
+			#
+			#TODO: Adjusting the links by snapping using 'links_adjust_nodes' will NOT WORK!
+			#TODO: The reason is that that function has been written to specifically to deal
+			#TODO: with the data structure produced by 'model_complete'. For now, we just need
+			#TODO: to rely on the user providing data with proper topology!
+			#TODO: Proper snapping to nodes would be a good feature for a later version.
+			#TODO: This should be doable by using 'links_adjust_nodes' as a template.
+			#g.message -i "Snapping start/end vertices of 'initial' links map to nodes..."			
+			#links_adjust_nodes "${GIS_OPT_LINKS}"
+			#
 			# Now add coordinates of extreme line vertices to attribute table.
 			g.message -i "Adding start/end coordinates to attributes of 'initial' links map..."
 			v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="end" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y}" --quiet
@@ -3579,46 +3686,49 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			# Now check that from/to x/y attributes of INITIAL links EXACTLY match ATTRIBUTE coordinates of the input nodes.     
 			#     --> If the difference is < $GIS_OPT_THRESHOLD then WARN and copy the coordinate values from the nodes!
 			#     --> If the difference is larger: TOPOLOGY ERROR -> EXIT (cannot trust provided coord fields!)
-			# Get all primary keys for initial links input map:
-			get_primary_keys "${GIS_OPT_LINKS}"
-			# Store them for later:
-			SECONDARY_KEYS=${PRIMARY_KEYS}
-			# Get all primary keys for nodes input map: 
+			# Get all GRASS primary keys ('cats') for initial links input map:
+			get_grass_cats "${GIS_OPT_LINKS}"
+			# Get all primary keys (GIS_OPT_KEY) for nodes input map:						
 			get_primary_keys "${GIS_OPT_INPUT}"
-			# Primary loop steps through all nodes in GIS_OPT_INPUT:
+			# Primary loop steps through all nodes in GIS_OPT_INPUT via 'key':
 			step=1 # For progress reporting
-			for pkey in $PRIMARY_KEYS ; do
-				# Secondary loop steps through all nodes in GIS_OPT_LINKS:
-				for skey in $SECONDARY_KEYS ; do
+			for key in ${PRIMARY_KEYS} ; do
+				# Secondary loop steps through all nodes in GIS_OPT_LINKS via 'cat':
+				for cat in ${GRASS_CATS} ; do
 					# TODO: This inner loop and one-by-one SQL querying are not exactly efficient!
-					# Extract "from_id" and "to_id" values for current primary key:
-					val_from_id=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_FROM_ID}" where="${GIS_OPT_KEY}=${pkey}" -c`
-					check_error "Failed to read attribute field '${LINKS_FLD_FROM_ID}' from copy of initial links map."
-					val_to_id=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_TO_ID}" where="${GIS_OPT_KEY}=${pkey}" -c`
-					check_error "Failed to read attribute field '${LINKS_FLD_TO_ID}' from copy of initial links map."
-					# Get node coordinates if required:
-					if [ ${val_from_id} -eq ${pkey} ] || [ ${val_to_id} -eq ${pkey} ] ; then
-						val_coord_x_node=`v.db.select map="${GIS_OPT_INPUT}" column="${NODES_FLD_COORD_X}" where="${GIS_OPT_KEY}=${pkey}" -c`
+					# Extract "from_id" and "to_id" values for current 'cat':
+					val_from_id=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_FROM_ID}" where="${GRASS_PKEY}=${cat}" -c`
+					check_error "Failed to read attribute field '${LINKS_FLD_FROM_ID}' from copy of initial links map ('${GRASS_PKEY}=${cat}')."
+					val_to_id=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_TO_ID}" where="${GRASS_PKEY}=${cat}" -c`
+					check_error "Failed to read attribute field '${LINKS_FLD_TO_ID}' from copy of initial links map ('${GRASS_PKEY}=${cat}')."
+					# Get node coordinates if required (i.e. if current 'key' from nodes map matches a 'from' or 'to' ID from links map):
+					if [ ${val_from_id} -eq ${key} ] || [ ${val_to_id} -eq ${key} ] ; then
+						val_coord_x_node=`v.db.select map="${GIS_OPT_INPUT}" column="${NODES_FLD_COORD_X}" where="${GIS_OPT_KEY}=${key}" -c`
 						check_error "Failed to read attribute field '${NODES_FLD_COORD_X}' from copy of nodes input map."
-						val_coord_y_node=`v.db.select map="${GIS_OPT_INPUT}" column="${NODES_FLD_COORD_Y}" where="${GIS_OPT_KEY}=${pkey}" -c`
+						val_coord_y_node=`v.db.select map="${GIS_OPT_INPUT}" column="${NODES_FLD_COORD_Y}" where="${GIS_OPT_KEY}=${key}" -c`
 						check_error "Failed to read attribute field '${NODES_FLD_COORD_Y}' from copy of nodes input map."
 					fi
-					# Check if from/to matches current primary key:
-					if [ ${val_from_id} -eq ${pkey} ] ; then
+					# Check if from/to matches current primary key. We pass to 'clean_initial_coords':
+					# $1 - name of map that contains initial links
+					# $2 - node coordinate value to test against
+					# $3 - name of attribute field in initial links map that stores the same coordinate
+					# $4 - name of primary key field in initial links map
+					# $5 - primary key value to get correct record from initial links map.
+					if [ ${val_from_id} -eq ${key} ] ; then
 						# Check/fix FROM_X
-						clean_initial_coords "${val_coord_x_node}" "${LINKS_FLD_FROM_X}" "${pkey}"
+						clean_initial_coords "${GIS_OPT_LINKS}" "${val_coord_x_node}" "${LINKS_FLD_FROM_X}" "${GRASS_PKEY}" "${cat}"
 						# Check/fix FROM_Y
-						clean_initial_coords "${val_coord_y_node}" "${LINKS_FLD_FROM_Y}" "${pkey}"
+						clean_initial_coords "${GIS_OPT_LINKS}" "${val_coord_y_node}" "${LINKS_FLD_FROM_Y}" "${GRASS_PKEY}" "${cat}"
 					fi
-					if [ ${val_to_id} -eq ${pkey} ] ; then
+					if [ ${val_to_id} -eq ${key} ] ; then
 						# Check/fix TO_X
-						clean_initial_coords "${val_coord_x_node}" "${LINKS_FLD_TO_X}" "${pkey}"
+						clean_initial_coords "${GIS_OPT_LINKS}" "${val_coord_x_node}" "${LINKS_FLD_TO_X}" "${GRASS_PKEY}" "${cat}"
 						# Check/fix TO_Y
-						clean_initial_coords "${val_coord_y_node}" "${LINKS_FLD_TO_Y}" "${pkey}"
+						clean_initial_coords "${GIS_OPT_LINKS}" "${val_coord_y_node}" "${LINKS_FLD_TO_Y}" "${GRASS_PKEY}" "${cat}"
 					fi
 				done
 				# Progress update
-				g.message -p "${step} ${points} 1"
+				g.message -p "${step} ${NUM_INPUT_NODES} 1"
 				step=`${EXPR} ${step} + 1`
 			done
 		fi
@@ -3632,22 +3742,25 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			#     b) run eval `r.univar map=rasterized_link" -g --quiet`
 			#     c) read the sum of costs in all cells crossed by link from ${sum} and upload!
 			g.message -i "Adding link costs to attribute table of inital links map..."
+			g.message -w "Reconstructed costs are not 100% accurate (lower; depending on LCP length)."
 			# Add 'cost' field to attribute table:
 			${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST} DOUBLE PRECISION"
 			check_error "Failed to add attribute field '${LINKS_FLD_COST}' (double) to copy of initial links map."
 			# Process all links.
-			get_primary_keys "${GIS_OPT_LINKS}"
+			get_grass_cats "${GIS_OPT_LINKS}"
 			# Primary loop steps through all nodes in GIS_OPT_LINKS:
 			step=1 # For progress reporting
-			for pkey in $PRIMARY_KEYS ; do
+			for cat in ${GRASS_CATS} ; do
 				# Rasterize current link:
-				v.to.rast input="${GIS_OPT_LINKS}" output="${TMP_RAST_RSTLINKS}" type="line" use="val" value="1" where="${GIS_OPT_KEY}=${pkey}" --quiet --overwrite
-				check_error "Failed to rasterize link with ID '${GIS_OPT_KEY}=${pkey}' from copy of initial links map."
+				v.to.rast input="${GIS_OPT_LINKS}" output="${TMP_RAST_RSTLINKS}" type="line" use="val" value="1" where="${GRASS_PKEY}=${cat}" --quiet --overwrite
+				check_error "Failed to rasterize link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."
+				# Create a new raster that contains cost cells only where it intersects with the rasterize LCP path: 
+				r.mapcalc expression="${TMP_RAST_MAPCALC1}=if(${TMP_RAST_RSTLINKS},${GIS_OPT_COSTMAP},null())" --overwrite
 				# Get univariate statistics for rasterized link:
-				eval `r.univar map="${TMP_RAST_RSTLINKS}" -g --quiet`
-				check_error "Failed to compute statistics for link with ID '${GIS_OPT_KEY}=${pkey}' from copy of initial links map."
+				eval `r.univar map="${TMP_RAST_MAPCALC1}" -g --quiet`
+				check_error "Failed to compute statistics for link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."
 				# Upload cost value for current link:
-				${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${sum}" where="${GIS_OPT_KEY}=${pkey}" --quiet
+				${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${sum}" where="${GRASS_PKEY}=${cat}" --quiet
 				check_error "Failed to update field '${LINKS_FLD_COST}' in copy of initial links map."
 				# Progress update
 				g.message -p "${step} ${points} 1"
@@ -3666,7 +3779,7 @@ stats_unreduced
 # Decide which attribute field to read for distance threshold
 FLD_DIST=${LINKS_FLD_LEN_M} # Default
 UNITS_DIST="m"
-f [ "${RUNMODE_COST}" == "TRUE" ] ; then
+if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 	FLD_DIST=${LINKS_FLD_COST} # Default if costmap is provided
 	UNITS_DIST="cost"		
 fi
@@ -3740,7 +3853,7 @@ g.message -i "Writing output nodes map:"
 # Start looping through nodes by user-defined key
 get_primary_keys "${GIS_OPT_NODES}"
 step=1 # For progress reporting
-for key in $PRIMARY_KEYS ; do
+for key in ${PRIMARY_KEYS} ; do
 	# Step through all input points and count the number of times that the current node's
 	# key is stored in either the "from_id" or "to_id" field.
 	# NOTE: Since the SQL WHERE clauses used below may return an empty result and thus
@@ -3858,7 +3971,7 @@ for key in $PRIMARY_KEYS ; do
 			# There is no way to make v.edit delete an attribute table row itself. 
 			# 'v.db.select -f' can be used to select only rows that are still linked to features...				
 			v.edit map="${GIS_OPT_NODES}" layer="1" type="point" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete node with cat='$cat' from nodes output vector map ."
+			check_error "Failed to delete node with 'cat=${cat}' from nodes output vector map ."
 			# Drop associated row of attribute table from nodes map:
 			nodes_droprow ${cat}
 		fi			
@@ -3891,9 +4004,9 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	max_cons=""
 	step=1 # This one is just for progress reporting.
 	# Compute simple metrics
-	for cat in $GRASS_CATS ; do
+	for cat in ${GRASS_CATS} ; do
 		len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (where cat='${cat}')"
+		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (where '${GRASS_PKEY}=${cat}')"
 		awk_min "${min_len}" "${len}"
 		min_len="${AWK_VALUE}"
 		awk_max "${max_len}" "${len}"
@@ -3902,7 +4015,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		total_len=${AWK_VALUE}
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="\"${GRASS_PKEY}\"=${cat}" -c --quiet`
-			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (where cat='${cat}')"
+			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (where '${GRASS_PKEY}=${cat}')"
 			awk_min "${min_cost}" "${cost}"
 			min_cost="${AWK_VALUE}"
 			awk_max "${max_cost}" "${cost}"
