@@ -374,7 +374,8 @@ TMP_RAST_COST_DIR="${TMP_PREFIX}_r_cost_dir" # Directional surface output r.cost
 TMP_RAST_COST_RES="${TMP_PREFIX}_r_cost_res" # Directional surface output r.cost (resampled)
 TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost (random error)
 TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
-TMP_RAST_RSTLINKS="${TMP_PREFIX}_r_rstlinks" # Rasterized link from map supplied via "initial="
+TMP_RAST_RSTLNKS1="${TMP_PREFIX}_r_rstlnks1" # Rasterized link from map supplied via "initial="
+TMP_RAST_RSTLNKS2="${TMP_PREFIX}_r_rstlnks2" # Rasterized link from map supplied via "initial=" (version 2)
 TMP_RAST_MAPCALC1="${TMP_PREFIX}_r_mapcalc1"   # Temporary output of an r.mapcalc run (1)
 
 # Names of temporary regions
@@ -565,7 +566,13 @@ clean_up () {
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	 # Rasterized link from map supplied via "initial="
-	elem="${TMP_RAST_RSTLINKS}"
+	elem="${TMP_RAST_RSTLNKS1}"
+	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q
+	fi
+	# Rasterized link from map supplied via "initial=" (2nd version)
+	elem="${TMP_RAST_RSTLNKS2}"
 	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
@@ -3742,7 +3749,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			#     b) run eval `r.univar map=rasterized_link" -g --quiet`
 			#     c) read the sum of costs in all cells crossed by link from ${sum} and upload!
 			g.message -i "Adding link costs to attribute table of inital links map..."
-			g.message -w "Reconstructed costs are not 100% accurate (lower; depending on LCP length)."
+			g.message -w "Reconstructed costs are less accurate than results for model 'complete'."
 			# Add 'cost' field to attribute table:
 			${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST} DOUBLE PRECISION"
 			check_error "Failed to add attribute field '${LINKS_FLD_COST}' (double) to copy of initial links map."
@@ -3751,11 +3758,40 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			# Primary loop steps through all nodes in GIS_OPT_LINKS:
 			step=1 # For progress reporting
 			for cat in ${GRASS_CATS} ; do
-				# Rasterize current link:
-				v.to.rast input="${GIS_OPT_LINKS}" output="${TMP_RAST_RSTLINKS}" type="line" use="val" value="1" where="${GRASS_PKEY}=${cat}" --quiet --overwrite
-				check_error "Failed to rasterize link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."
-				# Create a new raster that contains cost cells only where it intersects with the rasterize LCP path: 
-				r.mapcalc expression="${TMP_RAST_MAPCALC1}=if(${TMP_RAST_RSTLINKS},${GIS_OPT_COSTMAP},null())" --overwrite
+				# Rasterize current link ("thin"):
+				v.to.rast input="${GIS_OPT_LINKS}" output="${TMP_RAST_RSTLNKS1}" type="line" use="val" value="1" where="${GRASS_PKEY}=${cat}" --quiet --overwrite
+				check_error "Failed to rasterize ('thin') link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."
+				# Rasterize a second version, but this time we also rasterize cells between (-d)iagonal cells that are on the path ("thick"): 
+				v.to.rast input="${GIS_OPT_LINKS}" output="${TMP_RAST_RSTLNKS2}" -d type="line" use="val" value="1" where="${GRASS_PKEY}=${cat}" --quiet --overwrite
+				check_error "Failed to rasterize ('thick') link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."				
+				# Diagonal movement weight:	
+				# TODO: adjust depending on region's cell dimensions, just like r.cost does
+				# TODO: r.cost uses a very accurate weighting scheme, that applies 'DIAG_fac'
+				#		(by multiplication with cost) to NW, SE, etc. movements, and 'V|H_DIAG_fac' to ESE, etc.
+				#		There is no way we will be able to replicate this _exactly_, but we can compute 'DIAG_fac'
+				#		and use it for 'diagonal_cost' (below).
+				#
+				#		This is from r.cost/main.d:
+				#
+				#		/* Find north-south, east_west and diagonal factors */
+				#		EW_fac = 1.0;
+				#		NS_fac = window.ns_res / window.ew_res;
+				#		DIAG_fac = (double)sqrt((double)(NS_fac * NS_fac + EW_fac * EW_fac));
+				#		V_DIAG_fac = (double)sqrt((double)(4 * NS_fac * NS_fac + EW_fac * EW_fac));							
+				#		H_DIAG_fac = (double)sqrt((double)(NS_fac * NS_fac + 4 * EW_fac * EW_fac));
+				#		EW_fac /= 2.0;
+				#		NS_fac /= 2.0;
+				#		DIAG_fac /= 2.0;
+				#		V_DIAG_fac /= 4.0;
+				#		H_DIAG_fac /= 4.0;
+				# This weight gives 'close-enough' results for square cells, on average:
+				DIAG_fac="0.188"
+				# Compute total costs of LCP path.
+				# Explanation: All cells on the rasterized path will be:
+				#              = cost surface value (where intersected by the 'thin' (and by definition also the 'thick') rasterized path)
+				#              = cost surface value * diagonal_cost (where intersected by _only_ the 'thick' rasterized path)
+				#				= NULL (where intersected by _neither_ rasterized paths)
+				r.mapcalc expression="${TMP_RAST_MAPCALC1}=if(!isnull(${TMP_RAST_RSTLNKS1}),${GIS_OPT_COSTMAP},${TMP_RAST_RSTLNKS2}*${GIS_OPT_COSTMAP}*${DIAG_fac})" --overwrite --quiet
 				# Get univariate statistics for rasterized link:
 				eval `r.univar map="${TMP_RAST_MAPCALC1}" -g --quiet`
 				check_error "Failed to compute statistics for link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."
