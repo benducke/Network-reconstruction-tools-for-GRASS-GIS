@@ -9,10 +9,10 @@
 <h2>DESCRIPTION</h2>
 
 This program (<em>v.net.models</em>) performs model-based generation/reconstruction of
-network edges (links), given an input map with network nodes.  
+network links (lines), given an input map with network nodes (points).
 <p>
 Its intended purpose is to serve as a research tool: Using a number of simple connectivity
-models, <em>v.net.models</em> will generate maps of network links that serve as a baseline
+models, <em>v.net.models</em> will generate maps of network links (=edges) that serve as a baseline
 for exploring alternative network structures or comparing against the results of more complex reconstruction and
 simulation models. One possible application area is the reconstruction of historical networks
 given solely the locations of known places that can be assumed to have been part of the
@@ -20,7 +20,8 @@ same network.
 <p>
 To produce more realistic models, a raster cost map can be provided as additional input, in
 which case the reconstructed network links will represent least-cost paths rather than straight-line
-distances.
+distances (albeit the interpretation of "cost" in this case might not be straight-forward: 
+see <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a>. ).
 <p>
 A very basic "social space" connectivity model, based on similarities of attribute field contents,
 is also available. This is intended solely for comparison with the "physical space"
@@ -268,42 +269,178 @@ least-cost path, if the <em>-m</em> flag is also set.
 <div id="h2_further_usage_notes"></div>
 <h2>FURTHER USAGE NOTES</h2>
 
-<div id="h3_using_an_initial_links_map"></div>
-<h3>Using an initial links map</h3>
-- using initial=
-- several strict tests on the map and its attribute table schema are performed
-- can also be used to test applicability of built-in models given externally created links!  
-- must have all required attributes
-- length_m/km will be computed on-the-fly if they are missing
-- if map has no cost field, it will be added and its data computed if "cost=" is also provided
-- providing both "cost=" and an initial links map with a cost attribute is ambiguous and will produce an error
-- if any missing attributes are added, they will be added to an internal copy of the initial links map; the original data will never be touched.
-- to keep an amended version of an initial links input map, run a "complete" model with a "maxdist=" setting that exceeds the length of any of the links in the map. 
-- attribute-stored coordinates from/to x/y can also be computed on-the-fly, but ONLY PAIRWISE
-- if distance and coordinate atts exist, then they must be valid: Some models (delaunay!) depend on comparing coordinates!
-    Initial links will first be snapped to input nodes, then coordinate fields will be updated
-- initial links must match input nodes!
-
+Since <em>v.net.models</em> is a very flexible program, understanding all of its functionality, and
+how options and flags interact, can be a challenge. This section offers some in-depths explanations
+of the more complex program features. Also make sure to study the <a href="#h2_usage_examples">usage examples</a>
+at the end of this document.
 
 <div id="h3_notes_on_cost-based_operation"></div>
 <h3>Notes on cost-based operation</h3>
-- costmap/costerr/costres
-- least-cost paths
-- -m flag
-- cost units do not have to relate to real physical units 
+
+The basic task that <em>v.net.models</em> performs is to test each link in a network, to decide
+whether to remove or retain it (based on the chosen value of option <em>model=</em>).
+These tests can be based on one of three distance metrics:
+<ol>
+<li>Euclidean (straight-line) distance,</li>
+<li>path (on-the-ground) distance or</li>
+<li>cost (effort-based) distance.</li>
+</ol>
+By default, (i.e. when option <em>"cost="</em> nor <em>"initial="</em> is specified)
+<em>v.net.modes</em> uses the first (Euclidean, straight-line) metric to assert the lengths of links between nodes.
+Obviously, this is the least realistic of the three metrics above.
+<p>
+More realistic results can be obtained by:
+<ol>
+<li>providing a raster cost surface as additional input (option <em>cost=</em>),</li>
+<li>providing an initial links map (option <em>initial=</em>) that has a "cost" attribute field.</li>
+</ol>
+In the first case (option <em>cost=</em>), <em>v.net.models</em> will assess each link between two connected nodes based on the
+accumulated cost expenditure that occurs on the least-cost path (LCP) between the two nodes. The actual shape and cost of each LCP 
+are computed by running <em><a href="r.cost">r.cost</a></em> (see its manual page for details). Consequently, the output map specified
+by <em>links=</em> will no longer contain links in the shapes of simple straight lines, but potentially complex LCP line geometries.
+<p>
+The second case (option <em>initial=</em>) is handled a little differently and will not be describe here: Refer to 
+<a href="#h3_using_an_initial_links_map">using an initial links map</a> for details.
+<p>
+In both cases, the <em>-m</em> flag can be set to use the accurate on-the-ground length (measured in meters) of links instead
+of their costs.
+<p>
+On the subject of what constitutes a valid cost surface raster, it must be noted that <em>v.net.models</em> makes no
+assumptions regarding plausibility, "correctness" or even any relation to physical units (such as caloric expenditure).
+It is completely up to the user to decide what the raster map passed via <em>cost=</em> should encode in its cell values.
+This, of course, means that is also completely up to the user to interpret what these values mean in the context of
+a network analysis (the cost of constructing links, moving across them, maintaining them...).
+<p>  
+As mentioned, <em>v.net.models</em> employs <em><a href="r.cost">r.cost</a></em> to do the actual work of finding the
+least cost path between each pair of network nodes and computing the accumulated cost. This is done at great accuracy,
+but if the input cost surface is of low resolution and/or contains a relatively small number of unique values, then
+quantization effects will be unavoidable and result in "jagged" or "stepped" line geometries. A simple way of compensating
+for this is by introducing an error margin via <em>costerr=</em>, the value of which is interpreted as "+/- % random error".
+Additionally, <em>costres=</em> can be used to increase the resolution of the cost surface by a factor of up to "10" before
+applying the random error values. In any case,the internal cost model of <em>v.net.models</em> is <em>isotropic</em>,
+meaning that the cost of a link from node <em>A</em> to <em>B</em> is assumed to be identical with the cost from
+<em>B</em> to <em>A</em> (see <a href="#h2_caveats">caveats</a>).
+
+
+<div id="h3_using_an_initial_links_map"></div>
+<h3>Using an initial links map</h3>
+Using option "<em>initial=</em>" makes it possible to supply the links of an initial network
+(instead of having them computed explicitly using "<em>mode=complete</em>", or implicitly using any other <em>"mode="</em>).
+This serves several important purposes:
+
+<ul>
+<li>Performance: provides a caching mechanism by allowing to load the output of a previous run with "<em>mode=complete</em>" as initial network,
+thus avoiding a potentially time-consuming re-computation for later runs <em>with identical input nodes</em>.</li>
+<li>Iteration: by running <em>v.net.models</em> successively, with the output links of one run being the input links of the next, 
+it is possible to add a degree of "network evolution" to the analysis.</li>
+<li>Flexibility: the cost-based operation (see <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a>) of <em>v.net.models</em> </li>
+might not be flexible enough for some purposes. But <em>"initial="</em>allows to use externally computed (or constructed!) links for which neither
+straight lines nor the the simple cost model supported by this program are appropriate to define their shapes.
+<li>Validation: if the initial links represent those of an observed network, then the more of them that remain after a run with
+a specific <em>mode=</em> setting, the better the chosen model explains the observed reality.</li>
+</ul>
+
+There are some significant limitations to the use of <em>initial=</em>. Most notably, the geometries and attributes of the initial links map
+must fulfil a number of criteria:
+
+<ul>
+<li>The map must contain only line geometries (and at least one such geometry).</li>
+<li>The attribute table must contain two integer type attributes named "from_id" and "to_id" (case matters), 
+which contain the IDs of the two nodes that are connected by each link.</li>
+<li>The attribute table must contain two further attributes, of numeric or text type, named "from_lbl" and "to_lbl" (case matters), 
+which contain the labels of the two nodes that are connected by each link.</li>
+<li>All required attributes must be complete, i.e. no <em>null</em> or empty fields are allowed.</li>
+<li>All required attributes must be present in layer 1.</li>
+<li>The initial links must match the input nodes (option <em>"input="</em>): no initial link must be connected to a node
+that is not in the (filtered if applicable: see <a href="#h3_notes_on_performance">notes on performance</a>) nodes input map
+(note that it is allowed for nodes to be entirely unconnected in the initial links map).</li>
+<li>The initial links must not contain redundant connections between nodes, i.e. one pair of nodes must not be connected by more than one link.</li>
+</ul>
+ 
+When in doubt, take a look at the output of <em>links=</em> as produced by a successful run of <em>v.net.models</em>: It is
+guaranteed to be valid data for <em>initial=</em> and can serve as a template. 
+
+In addition to the fields listed above, the initial links map has further attribute fields that describe the
+geometric properties of its links:
+<ul>
+<li>Two fields, of double precision (floating point) type, named "length_m" and "length_km" 
+    store the length of each link in meters and (for convenience) kilometers.</li>
+<li>Four fields, of double precision (floating point) type, named "from_x", "from_y" and "to_x", "to_y"
+    store the coordinates of the start and end points of each link, respectively.</li>
+<li>Optionally, another field of type double precision, "cost" stores the cost of each link.</li>
+</ul>
+
+However, if any of these fields ("length_m/km", "from/to x/y", "cost") are missing from the input data,
+they will be added and their contents computed automatically.
+<p> 
+If either "length_m" or "length_km" is missing, both will be recomputed.
+<p>
+In the case of the "cost" attribute, program behaviour is more complex. Essentially, if a "cost" attribute
+field exists in the initial links map (and is of type double and contains complete data), then <em>v.net.models</em>
+will run in cost-based mode  (see <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a>). 
+If "cost" is not present, then <em>v.net.models</em> will run in "path distance" mode, reading link lengths
+from attribute field "length_m", <em>unless</em> a cost surface is provided using option <em>"cost="</em>, in
+which case link costs will be computed and the "cost" attribute added automatically (but see description of
+caveats, below). Providing both <em>"cost="</em> and an initial links map with a "cost" attribute is ambiguous and
+will produce an error.
+<p>
+Whenever missing attributes are added, they will be added to a temporary copy of the initial links map; the original
+input data will never be touched. To keep an attribute-amended version of an initial links input map as permanent
+output, run a "complete" model with a "maxdist=" setting that exceeds the length of any of the links in the map. 
+<p>
+Finally, there are some <em>caveats</em> to using <em>"initial="</em>:
+<ul>
+<li>There is nothing to prevent the user from supplying an initial links map that contains less links than a model
+would contain that is run with a complete set of links as input. This can lead
+to counter-intuitive results. E.g. if the initial links are very sparse, then <em>"model=nn""</em> with <em>neighbors=2</em>
+might actually produce an output where one or more nodes have less than two links connected to them.</li> 
+<li>Distance and coordinate attributes in the initial links map must be accurate: Some models (e.g. "delaunay")
+depend on comparing coordinates.. There is currently no automatic topological correction, i.e. snapping of user-provided initial links 
+to input nodes. When creating links in the initial map manually, care must be taken to assure
+that their start/end vertices lie exactly on the nodes that they are supposed to connect
+(small rounding errors will be corrected automatically.<li>
+<li>Link costs computed on-the-fly (if <em>"costmap="</em> is given, but no "cost" attribute is present in
+the attribute table) can be close to those computed by running a complete model with a cost surface, but not identical. The reason
+for this is that the GRASS <em>r.cost</em> module (employed by <em>v.net.models</em>) treats diagonal movement across cells with great
+accuracy when computing actual least-cost paths (LCP). However, since it cannot be assumed that all initial links are true LCP,
+a less accurate method is used to "reconstruct" path costs. The more the shapes of the initial links deviate from LPC, the more
+pronounced the difference will (naturally) be.
+</ul>
 
 <div id="h3_notes_on_performance"></div>
 <h3>Notes on performance</h3>
-- most significant factors
-- filtering input
-- use an initial links map for repetitive runs 
+
+The operation of <em>v.net.models</em> can consume signficantly large computational resources if run on large
+input datasets. Since the program uses a unified "connect all, then reduce" approach, a complete network will
+always be created first (see notes on <a href="#h3_complete">complete</a> model), and 
+computational cost increases linearly depending on the number of input nodes. More specifically:
+<ul>
+<li>A large number of input nodes will produce a large I/O overhead (many SQL queries have to be run on the input nodes' attribute table fields).</li>
+<li>Running in cost-based mode will consume much more CPU time, especially if a high-resolution cost surface is used.</li>
+<li>Every type of operation produces temporary files, which consume disk space as long as <em>v.net.models</em> is running.
+Cost-based operation will consume exponentially more disk space temporarily.</li>
+</ul>
+In order to decrease the stress on computational resources, and to avoid bottlenecks, <em>v.net.models</em> offers two 
+principal strategies (which can also be combined):
+<ul>
+<li>The set of input nodes can be reduced (filtered) using either of the GRASS standard options <em>cats=</em> or <em>where=</em>,
+or by simply setting the <em>-r</em> flag to reduce the input nodes to only those that fall within the extents of the current
+computational region (set by <em><a href="g.region">g.region</a></em>).</li>
+<li>For successive runs with unchanged input data, the <em>"links="</em> output map of a "complete" model run can be
+retained and reused using option <em>"initial="</em>. In effect, this acts as a caching mechanism that is particularly economic
+when running in cost-based mode.</li>
+</ul>
+
+Refer to <a href="#h2_flags_and_parameters">flags and parameters</a> for details on the filtering options/flags mentioned above.
+<p>
+Full details on using option <em>"initial="</em> can be found in the section on <a href="#h3_using_an_initial_links_map">using an initial links map</a>. 
 
 <div id="h3_various_notes"></div>
 <h3>Various notes</h3>
-- small coordinate errors (smaller than 'threshold=' will be corrected automatically by snapping link terminal vertices)
+Finally, note that:
 <ul>
-<li>NULL values in input cost map will be excluded from least-cost path computations.</li>
-<li>This program works correctly with lat/lon reference systems/data.</li>
+<li>NULL values in an input cost surface (if provided by <em>"cost="</em>) will be excluded from least-cost path computations.</li>
+<li>This program works correctly with lat/lon reference systems/input data.</li>
 </ul>
 
 <div id="h2_flags_and_parameters"></div>
@@ -318,8 +455,7 @@ been discussed in more specific context in any of the previous sections.
 	<dt><em>-d</em> [Drop unconnected nodes from output map]</dt>
 	<dd>If this flag is set, then the nodes output map
 	(specified by <em>"nodes="</em>) will only contain those nodes that are connected to
-	at least one other node. Otherwise, all points of the input map will end up as nodes
-	in the nodes output map.</dd>
+	at least one other node.</dd>
 	<dt><em>-g</em> [Global network statistics output in shell script style]</dt>
 	<dd>At the end of reach run, <em>v.net.models</em> prints a number of useful statistics
 	on the properties of the generated network. If this flag is set, then they will be printed
@@ -479,6 +615,8 @@ Academic Press, 1979, 145-166.
 
 <div id="h2_see_also"></div>
 <h2>SEE ALSO</h2>
+<em><a href="g.region">g.region</a></em><br>
+<em><a href="r.cost">r.cost</a></em><br>
 <em><a href="r.walk">r.walk</a></em><br>
 <em><a href="v.delaunay">v.delaunay</a></em><br>
 
