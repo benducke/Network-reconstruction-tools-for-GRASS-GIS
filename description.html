@@ -599,7 +599,7 @@ It is recommended to execute the instructions below from within a newly created 
 a simple "non-world" (XY) coordinate system. This way, there will be no risk of overwriting existing data, and all data
 produced during this introduction can be wiped by deleting the respective mapset.
 <p>
-<h3>Creating synthetic sample data</h3>
+<h3>Create synthetic sample data</h3>
 
 <code>
 g.region n=1000 s=0 e=1000 w=0 res=1
@@ -611,34 +611,55 @@ v.db.addtable map=places columns="key INTEGER"
 v.db.update map=places column="key" value="cat"
 <br>
 </code>
+<p align="center"><img src="v_net_models_input.png" alt="v.net.models nodes input"></p>
 
-<h3>Producing basic network models</h3>
+<h3>Produce basic network models</h3>
 
 <code>
 v.net.models input=places links=links_complete nodes=nodes_complete key="key"
-<br>
+</code>
+<p align="center"><img src="v_net_models_links_complete.png" alt="v.net.models links complete"></p>
+<p align="center"><img src="v_net_models_net_complete.png" alt="v.net.models net complete"></p>
+
+
+<code>
 v.net.models input=places links=links_complete_d500 nodes=nodes_complete_d500 key="key" maxdist=500 -d
-<br>
+</code>
+<p align="center"><img src="v_net_models_net_complete_d500.png" alt="v.net.models net complete maxdist=500"></p>
+
+<code>
 v.net.models input=places model=nn neighbors=3 links=links_nn3 nodes=nodes_nn3 key="key" -d
 </code>
+<p align="center"><img src="v_net_models_net_nn.png" alt="v.net.models net nn"></p>
 
-<h3>Utlizing cost-based mode</h3>
+
+<h3>Utilize cost-based mode</h3>
 <code>
 r.surf.fractal d=2.00001 output=surface
-<br>
+</code>
+<p align="center"><img src="v_net_models_rast_surface.png" alt="v.net.models raster surface"></p>
+
+<code>
 r.slope.aspect elevation=surface slope=slope
-<br>
+</code>
+<p align="center"><img src="v_net_models_rast_slope.png" alt="v.net.models raster slope"></p>
+
+<code>
 v.net.models input=places links=links_complete_c nodes=nodes_complete_c key="key" costmap=slope
-<br>
+</code>
+<p align="center"><img src="v_net_models_net_complete_c.png" alt="v.net.models net complete cost-distance"></p>
+
+<code>
 v.net.models input=places model=nn neighbors=3 links=links_nn3_c nodes=nodes_nn3_c key="key" costmap=slope -d
 </code>
+<p align="center"><img src="v_net_models_net_nn_c.png" alt="v.net.models net nn cost-distance"></p>
  
-<h3>Caching link data with "initial="</h3>
+<h3>Cache link data with "initial="</h3>
 <code>
 v.net.models input=places model=nn neighbors=3 links=links_nn3_c nodes=nodes_nn3_c key="key" initial="links_complete_c" -d
 </code>
  
- <p align="center"><img src="dst.combine.001.png" alt="BPA chart"></p>
+
 
 <div id="h2_caveats"></div>
 <h2>CAVEATS</h2>
