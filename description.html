@@ -13,15 +13,15 @@ network links (lines), given an input map with network nodes (points).
 <p>
 Its intended purpose is to serve as a research tool: Using a number of simple connectivity
 models, <em>v.net.models</em> will generate maps of network links (=edges) that serve as a baseline
-for exploring alternative network structures or comparing against the results of more complex reconstruction and
+for exploring alternative network structures or for comparison against the results of more complex reconstruction and
 simulation models. One possible application area is the reconstruction of historical networks
 given solely the locations of known places that can be assumed to have been part of the
 same network.
 <p>
 To produce more realistic models, a raster cost map can be provided as additional input, in
-which case the reconstructed network links will represent least-cost paths rather than straight-line
+which case the reconstructed network links will represent least-cost paths (<em>LCP</em>) rather than straight-line
 distances (albeit the interpretation of "cost" in this case might not be straight-forward: 
-see <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a>. ).
+see <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a>).
 <p>
 A very basic "social space" connectivity model, based on similarities of attribute field contents,
 is also available. This is intended solely for comparison with the "physical space"
@@ -30,6 +30,8 @@ Analysis (SNA) tool.
 <p>
 Flexible options exist for filtering the nodes that go into the reconstruction, and the
 program's output is enriched with useful statistics in the output map/s attribute table/s.
+<p>
+See <a href="#h2_usage_examples">usage examples</a> for an illustrated walk-through of this program's capabilities.
 
 <div id="h2_input"></div>
 <h2>INPUT</h2>
@@ -307,7 +309,10 @@ of their costs.
 <p>
 On the subject of what constitutes a valid cost surface raster, it must be noted that <em>v.net.models</em> makes no
 assumptions regarding plausibility, "correctness" or even any relation to physical units (such as caloric expenditure).
-It is completely up to the user to decide what the raster map passed via <em>cost=</em> should encode in its cell values.
+It is completely up to the user to decide what the raster map passed via <em>cost=</em> should encode in its cell values,
+as long as each value is "0" or any (other) <em>positive</em> number. Negative cost values are not allowed
+and will be converted to "0" automatically at runtime!
+<p>
 This, of course, means that is also completely up to the user to interpret what these values mean in the context of
 a network analysis (the cost of constructing links, moving across them, maintaining them...).
 <p>  
@@ -333,9 +338,9 @@ This serves several important purposes:
 thus avoiding a potentially time-consuming re-computation for later runs <em>with identical input nodes</em>.</li>
 <li>Iteration: by running <em>v.net.models</em> successively, with the output links of one run being the input links of the next, 
 it is possible to add a degree of "network evolution" to the analysis.</li>
-<li>Flexibility: the cost-based operation (see <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a>) of <em>v.net.models</em> </li>
+<li>Flexibility: the cost-based operation (see <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a>) of <em>v.net.models</em>
 might not be flexible enough for some purposes. But <em>"initial="</em>allows to use externally computed (or constructed!) links for which neither
-straight lines nor the the simple cost model supported by this program are appropriate to define their shapes.
+straight lines nor the the simple cost model supported by this program are appropriate to define their shapes.</li>
 <li>Validation: if the initial links represent those of an observed network, then the more of them that remain after a run with
 a specific <em>mode=</em> setting, the better the chosen model explains the observed reality.</li>
 </ul>
@@ -434,6 +439,10 @@ when running in cost-based mode.</li>
 Refer to <a href="#h2_flags_and_parameters">flags and parameters</a> for details on the filtering options/flags mentioned above.
 <p>
 Full details on using option <em>"initial="</em> can be found in the section on <a href="#h3_using_an_initial_links_map">using an initial links map</a>. 
+<p>
+Since <em>v.net.models</em> performs a large number of attribute table queries, performance will be reduced significantly if the
+(default) DBase ("dbf") database driver is used within the current GRASS mapset. Instead, using SQLite ("sqlite") or another
+capable SQL database driver is highly recommended. Use <a href="db.connect.html">db.connect</a> to get/set the currently used database driver.
 
 <div id="h3_various_notes"></div>
 <h3>Various notes</h3>
@@ -539,35 +548,97 @@ Note: Mandatory parameters are marked with an asterisk ("*") in the list below.
 	for each node. If a label field is not specified, then the primary keys will be used
 	for labelling output data.</dd>
 	<dt><em>model*</em> [Choice of network connectivity model (default: <a href="#h3_complete">complete</a>)]</dt>
-	<dd><a href="#h2_model_details">h2_model_details</a></dd>
+	<dd>This option selects the fundamental network model used for connecting the input nodes (see 
+	<a href="#h2_model_details">model details)</a>.</dd>
 	<dt><em>attributes</em> [Attribute field(s) for similarity test(s) (model <a href="#h3_attsim">attsim</a>)]</dt>
-	<dd><a href="#h3_attsim">model choice 'attsim'</a></dd>
+	<dd>This option is used to define the attributes to use for a similarity-type network model  
+	(see model choice <a href="#h3_attsim">attsim</a> for details).
 	<dt><em>neighbors</em> [Number of nearest neighbors to connect (model <a href="#h3_nn">nn</a>)]</dt>
-	<dd><a href="#h3_nn">model choice 'nn'</a></dd>
-	<dt><em>maxdist</em> [Absolute cost/distance threshold (several models)]</dt>
-	<dd></dd>
+	<dd>Sets the number of nearest neighours to connect (used in conjunction with
+	model choice <a href="#h3_nn">nn</a>).</dd>
+	<dt><em>maxdist</em> [Absolute cost/distance threshold (several models)]</dt>	
+	<dd>Option <em>"maxdist="</em> enforces a hard cut-off limit (maximum linking distance) on link lengths: 
+	If this is set, then all links that exceed the limit will be discarded from the output. By default, the
+	limit will be applied to links costs instead of metric length when running in  <a href="#h3_notes_on_cost-based_operation">cost-based mode</a>.
+	However, if the <em>-f</em> flag is given, then link lengths will be considered, instead.
+	All model choices that work with cost/distance thresholds respect this option.</dd>
 	<dt><em>size</em> [Numeric attribute field with node 'size' (models <a href="#h3_xtent">xtent</a>, <a href="#h3_nn">nn</a>)]</dt>
-	<dd><a href="#h3_xtent">model choice 'xtent'</a>
-	<a href="#h3_nn">model choice 'nn'</a>
-	</dd>
+	<dd>This option defines the attribute field from which to read the "size" values for model choices
+    <a href="#h3_xtent">xtent</a> and <a href="#h3_nn">nn</a>.</dd>	
 	<dt><em>a</em> [Exponential size weight 'a' (model <a href="#h3_xtent">xtent</a>)]</dt>
-	<dd><a href="#h3_xtent">model choice 'xtent'</a></dd>
+	<dd>Supplies the exponential node weight <em>a</em> for model choice <a href="#h3_xtent">xtent</a>.</dd>
 	<dt><em>k</em> [Linear distance weight 'k' (model <a href="#h3_xtent">xtent</a>)]</dt>
-	<dd><a href="#h3_xtent">model choice 'xtent'</a></dd>
-	<dt><em>avg</em> [Distance averaging function (model '<a href="#h3_xtent">xtent</a>'; default: mean)]</dt>
-	<dd>Use "median" for an averaging function that is more rebost against outliers/extreme values.
-	<a href="#h3_xtent">model choice 'xtent'</a></dd>
+	<dd>Supplies the linear distance weight <em>k</em> for model choice <a href="#h3_xtent">xtent</a>.</dd>
+	<dt><em>avg</em> [Distance averaging function (model <a href="#h3_xtent">xtent</a>; default: "mean")]</dt>
+	<dd>Average function to use for model choice <a href="#h3_xtent">xtent</a>).
+	Use <em>"avg=median"</em> for an averaging function that is more robust against outliers/extreme values, if required.	
 	<dt><em>costerr</em> [Costmap error margin (+/-) in percent (requires 'costmap'; default: 0.0)]</dt>
-	<dd>options: 0.0-100.0</dd>
+	<dd>Sets the margin of a random error in the range of +/- 0.0 to 100.0 percent, to be applied to the user-provided cost surface.
+	Refer to <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a> for details.</dd>
 	<dt><em>costres</em> [Costmap resampling factor (requires 'costmap' and 'costerr'; default: 1)]</dt>
-	<dd>options: 1-10</dd>
-	<dt><em>threshold</em> [Threshold distance for topology tests; default: 0.000001]</dt>	
-	<dd></dd>
+	<dd>Causes user-provided cost-surface to be resampled by a factor of 1 to 10 (only useful in conjunction with
+	<em>"costerr="</em>). 
+	Refer to <a href="#h3_notes_on_cost-based_operation">notes on cost-based operation</a> for details.</dd>	
+	<dt><em>threshold</em> [Threshold distance for topology tests; default: 0.000001]</dt>
+	<dd>This sets the minimum distance (in map units) that any two input nodes must be apart from each other,
+	in order to be considered individual nodes (and not duplicate data). It is used for enforcing a minimal
+	topological quality on the primary spatial input data (provided by option <em>input=</em>).  
+	</dd>
 </dl>
 
 <div id="h2_usage_examples"></div>
 <h2>USAGE EXAMPLES</h2>
 
+In the following, a hands-on introduction to the basic use of <em>v.net.models</em> from the GRASS GIS command line is provided.
+<p>
+Note that this introduction uses random data that is generated on-the-fly. This means that it will not be possible to exactly
+reproduce the illustrations shown here. But it should be possible to generate results of a similar nature without the program
+failing to execute any instructions.
+<p>
+It is recommended to execute the instructions below from within a newly created GRASS mapset, in a location that uses
+a simple "non-world" (XY) coordinate system. This way, there will be no risk of overwriting existing data, and all data
+produced during this introduction can be wiped by deleting the respective mapset.
+<p>
+<h3>Creating synthetic sample data</h3>
+
+<code>
+g.region n=1000 s=0 e=1000 w=0 res=1
+<br>
+v.random output=places npoints=10
+<br>
+v.db.addtable map=places columns="key INTEGER"
+<br>
+v.db.update map=places column="key" value="cat"
+<br>
+</code>
+
+<h3>Producing basic network models</h3>
+
+<code>
+v.net.models input=places links=links_complete nodes=nodes_complete key="key"
+<br>
+v.net.models input=places links=links_complete_d500 nodes=nodes_complete_d500 key="key" maxdist=500 -d
+<br>
+v.net.models input=places model=nn neighbors=3 links=links_nn3 nodes=nodes_nn3 key="key" -d
+</code>
+
+<h3>Utlizing cost-based mode</h3>
+<code>
+r.surf.fractal d=2.00001 output=surface
+<br>
+r.slope.aspect elevation=surface slope=slope
+<br>
+v.net.models input=places links=links_complete_c nodes=nodes_complete_c key="key" costmap=slope
+<br>
+v.net.models input=places model=nn neighbors=3 links=links_nn3_c nodes=nodes_nn3_c key="key" costmap=slope -d
+</code>
+ 
+<h3>Caching link data with "initial="</h3>
+<code>
+v.net.models input=places model=nn neighbors=3 links=links_nn3_c nodes=nodes_nn3_c key="key" initial="links_complete_c" -d
+</code>
+ 
+ <p align="center"><img src="dst.combine.001.png" alt="BPA chart"></p>
 
 <div id="h2_caveats"></div>
 <h2>CAVEATS</h2>
@@ -592,7 +663,7 @@ To mitigate this problem, the input cost map should cover
 the extent of the input points plus a significant "buffer zone".
 <p>
 There is no guarantee for topological correctness of the this program's output.
-In fact, most models are likely to produce topologically flawed 
+In fact, most models are likely to produce topologically flawed links as output, especially in cost-based mode.
 <p>
 This program is a Bourne Shell script that relies on the following external tools:
 <ul>
@@ -601,9 +672,6 @@ This program is a Bourne Shell script that relies on the following external tool
 <li>expr</li>
 <li>date</li>
 </ul>
-
-
-<p align="center"><img src="dst.combine.001.png" alt="BPA chart"></p>
 
 
 <div id="h2_references"></div>
@@ -615,10 +683,11 @@ Academic Press, 1979, 145-166.
 
 <div id="h2_see_also"></div>
 <h2>SEE ALSO</h2>
-<em><a href="g.region">g.region</a></em><br>
-<em><a href="r.cost">r.cost</a></em><br>
-<em><a href="r.walk">r.walk</a></em><br>
-<em><a href="v.delaunay">v.delaunay</a></em><br>
+<em><a href="db.connect.html">db.connect</a></em><br>
+<em><a href="g.region.html">g.region</a></em><br>
+<em><a href="r.cost.html">r.cost</a></em><br>
+<em><a href="r.walk.html">r.walk</a></em><br>
+<em><a href="v.delaunay.html">v.delaunay</a></em><br>
 
 <div id="h2_author"></div>
 <h2>AUTHOR</h2>
