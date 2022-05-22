@@ -105,9 +105,9 @@ For use via the QGIS Processing plug-in:
 
 ## Running v.net.models via QGIS Processing
 This works well in general, with a few quirks:
-* Some options (such as "cats=" and "layer=") do not apply in QGIS. They have been hidden from the interface.
-* It is not possible (at least not using QGIS 3.10.x) to restrict attribute field choices to only fields of type integer. This means that it will be possible to select a double type (aka floating point) field for the "key=" option, which will lead to an error message ("key=" must be set to a field of type integer).
-* The included HTML manual page applies to use from within GRASS GIS (but most of the information is transferrable to running v.net.models from within QGIS).
+* Some options (such as "cats=" and "layer=") do not apply to the QGIS Processing environment and will not be available there.
+* It is not possible (tested with QGIS 3.10.x) to restrict attribute field choices to only fields of type integer. This means that it will be possible to select a double type (aka floating point) field for the "key=" option, which will lead to an error message ("key=" must be set to a field of type integer).
+* The included HTML manual page applies to use from within GRASS GIS (but most of the information also applies to running v.net.models from within QGIS).
 
 ## Use on Windows OS
 * GRASS modules might only be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher (This seems to be a problem specific to QGIS 3.10.x).
