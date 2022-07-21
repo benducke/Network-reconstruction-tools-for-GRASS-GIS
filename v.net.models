@@ -17,7 +17,7 @@
 #				any later version that retains the GRASS 7 syntax for the GRASS
 #				commands called by this script).
 #
-# COPYRIGHT:    (C) 2020-2021 by Benjamin Ducke
+# COPYRIGHT:    (C) 2020-2022 by Benjamin Ducke
 #
 #               This program is free software under the GNU General Public
 #               License (>=v2). Read the file COPYING that comes with GRASS
@@ -31,6 +31,7 @@
 # - awk
 # - expr
 # - date
+# - sort
 #
 
 
@@ -287,7 +288,8 @@ if [ -n "${MSYSPATH}" ] ; then
 	GREP="${MSYSPATH}/grep"
 	EXPR="${MSYSPATH}/expr"
 	DATE="${MSYSPATH}/date"
-	# Some GRASS commands require ".bat" extensions, or else "sh.exe" won't find them!
+	SORT="${MSYSPATH}/sort"
+	# Some GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
 	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
 	V_DB_ADDTABLE="v.db.addtable.bat"
 	V_DB_DROPCOLUMN="v.db.dropcolumn.bat"
@@ -299,7 +301,8 @@ else
 	AWK="awk"
 	GREP="grep"
 	EXPR="expr"
-	DATE="date"	
+	DATE="date"
+	SORT="sort"
 	# These are the GRASS commands that are actually Shell scripts.
 	V_DB_ADDCOLUMN="v.db.addcolumn"
 	V_DB_ADDTABLE="v.db.addtable"
@@ -313,13 +316,13 @@ fi
 # Basic module setup.
 
 MODULE_NAME="v_net_models"
-MODULE_VERSION="1.0.0"
+MODULE_VERSION="1.0.1"
 
 # Exit status variables.
-EXIT_OK="0"
-EXIT_ERROR="-1"
-EXIT_CTRL_C="1"
-EXIT_TERMINATED="2"
+EXIT_OK=0
+EXIT_CTRL_C=1
+EXIT_TERMINATED=2
+EXIT_ERROR=3
 
 # Processing states.
 RUNMODE_COST="FALSE" # Cost-based processing mode
@@ -335,7 +338,7 @@ if [ "$1" != "@ARGS_PARSED@" ] ; then
 fi
 
 # Check if we are running under old GRASS 6
-GRASS_V6=`g.version -e | ${GREP} "GRASS 6"`
+GRASS_V6=`g.version -e | "${GREP}" "GRASS 6"`
 
 if [ -n "$GRASS_V6" ] ; then
 	g.message -e "This script requires GRASS GIS version 7 or higher."
@@ -417,103 +420,103 @@ clean_up () {
 	type="vector"
 	# Extracted nodes from input vector map.
 	elem="${TMP_VECT_NODES}"	
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Polygonal bbox of current GRASS region.
 	elem="${TMP_VECT_REGION}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Input points reduced to within current region.
 	elem="${TMP_VECT_SELECT}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Feature(s) extracted from input vector map.
 	elem="${TMP_VECT_EXTRACT}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Feature(s) extracted from input vector map (2).
 	elem="${TMP_VECT_EXTRACT2}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Lines representing newly created network links.
 	elem="${TMP_VECT_LINKS}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Additional network links (lines) to add to links output map.
 	elem="${TMP_VECT_LINKS_ADD}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi	
 	# Network links (lines) with rebuilt category IDs. 
 	elem="${TMP_VECT_LINKS_CAT}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Stores from-to costs for each pair of links (cost-based mode only) 
 	elem="${TMP_VECT_LINKS_COSTS}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Smoothed least-cost paths. 
 	elem="${TMP_VECT_LINKS_SMOOTH}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Cleaned least-cost paths. 
 	elem="${TMP_VECT_LINKS_CLEAN}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Links with row dropped from table
 	elem="${TMP_VECT_LINKS_DROPROW_1}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Links with row dropped from table (swapped)
 	elem="${TMP_VECT_LINKS_DROPROW_2}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Nodes with row dropped from table
 	elem="${TMP_VECT_NODES_DROPROW_1}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Nodes with row dropped from table (swapped)
 	elem="${TMP_VECT_NODES_DROPROW_2}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Delaunay mesh (polygon)
 	elem="${TMP_VECT_LINKS_DELAUNAY_P}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Delaunay mesh (lines)
 	elem="${TMP_VECT_LINKS_DELAUNAY_L}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
@@ -521,7 +524,7 @@ clean_up () {
 	# There are 1 or more such maps: use a pattern to find them
 	# all and remove them!
 	elem="${TMP_VECT_LINKS_PATCH}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" pattern="${elem}*" -f --q
 	fi
@@ -530,55 +533,55 @@ clean_up () {
 	type="raster"
 	# Resampled version of original cost raster map
 	elem="${TMP_RAST_COST_RSP}"
-	 found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	 found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Minimum cost output of r.cost
 	elem="${TMP_RAST_COST_MIN}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Directional surface output of r.cost
 	elem="${TMP_RAST_COST_DIR}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Directional surface output of r.cost (resampled)
 	elem="${TMP_RAST_COST_RES}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Directional surface output of r.cost (random error)
 	elem="${TMP_RAST_COST_ERR}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Directional surface output of r.cost (normalized random error)
 	elem="${TMP_RAST_COST_NRM}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	 # Rasterized link from map supplied via "initial="
 	elem="${TMP_RAST_RSTLNKS1}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Rasterized link from map supplied via "initial=" (2nd version)
 	elem="${TMP_RAST_RSTLNKS2}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	 # Temporary output of an r.mapcalc run (1)
 	elem="${TMP_RAST_MAPCALC1}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi   
@@ -587,7 +590,7 @@ clean_up () {
 	type="region"
 	# Restore saved (original) region
 	elem="${TMP_GEN_REGION_ORG}"
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.region region="${TMP_GEN_REGION_ORG}"
 		if [ ! "$?" -eq "0" ] ; then
@@ -607,13 +610,13 @@ clean_output () {
 	type="vector"
 	# Result map (links).
 	elem="${GIS_OPT_LINKS}"	
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
 	# Result map (nodes).
 	elem="${GIS_OPT_NODES}"	
-	found=`g.list type="${type}" | ${GREP} -c "${elem}"`
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q
 	fi
@@ -625,7 +628,7 @@ clean_output () {
 #				version of the links output map (e.g. when incrementally re-writing
 #				that map, to avoid useless warnings from g.remove).
 clean_links () {
-	found=`g.list type="vector" | ${GREP} -c "${GIS_OPT_LINKS}"`
+	found=`g.list type="vector" | "${GREP}" -c "${GIS_OPT_LINKS}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="vector" name="${GIS_OPT_LINKS}" -f --q
 	fi
@@ -674,8 +677,13 @@ exit_error () {
 #                The contents for setting the variable are returend in "EVAL_RESULT".
 eval_ws_safe () {
 	OLD_IFS="$IFS"
-	IFS=$(echo -en "\n\b")	
-	str=`echo "$1" | ${GREP} "$2="`
+	# Set list separator to newline and line break characters.
+	# This used to be: 
+	# IFS=$(echo -en "\n\b")
+	# However, macOS' shell does not interpret that form correctly.
+	IFS=$'\n\b'
+	# Process (list of) input line(s):
+	str=`echo "$1" | "${GREP}" "$2="`
 	for i in $str
 	do
 		IFS="="
@@ -761,9 +769,9 @@ get_label_no_spaces () {
 		LABEL="$2" # label field = key field
 	else		 
 		if [ "${LABEL_TYPE}" = "CHARACTER" ] || [ "${LABEL_TYPE}" = "TEXT" ] ; then
-				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="${GIS_OPT_KEY}='$2'" -c --quiet | ${AWK} '{ gsub (" ", "_", $0); print}'`
+				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="${GIS_OPT_KEY}='$2'" -c --quiet | "${AWK}" '{ gsub (" ", "_", $0); print}'`
 			else
-				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="${GIS_OPT_KEY}=$2" -c --quiet | ${AWK} '{ gsub (" ", "_", $0); print}'`
+				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="${GIS_OPT_KEY}=$2" -c --quiet | "${AWK}" '{ gsub (" ", "_", $0); print}'`
 			fi		
 	fi
 	check_error "Failed to retrieve label for primary key value '${2}' (map='$1')."
@@ -815,7 +823,7 @@ get_where_clause_inv () {
 list_len () {
 	LIST_LEN=0
 	for item in $1 ; do
-		LIST_LEN=`${EXPR} ${LIST_LEN} + 1`
+		LIST_LEN=`"${EXPR}" ${LIST_LEN} + 1`
 	done
 }
 
@@ -848,7 +856,7 @@ list_get () {
 		if [ ${cur_list_item} -eq $2 ] ; then
 			break
 		fi
-		cur_list_item=`${EXPR} ${cur_list_item} + 1`
+		cur_list_item=`"${EXPR}" ${cur_list_item} + 1`
 	done
 }
 
@@ -860,7 +868,7 @@ list_get () {
 #
 #				Result will be returned in variable 'AWK_VALUE'
 awk_calc () {
-	AWK_VALUE=`${AWK} "BEGIN{ print $* }"`
+	AWK_VALUE=`"${AWK}" "BEGIN{ print $* }"`
 }
 
 
@@ -871,7 +879,7 @@ awk_calc () {
 #					1 = equal
 #					0 = not equal
 awk_equal () {
-	AWK_VALUE=`${AWK} "BEGIN{ print $1==$2 }"`
+	AWK_VALUE=`"${AWK}" "BEGIN{ print $1==$2 }"`
 }
 
 
@@ -881,7 +889,7 @@ awk_equal () {
 #					1 = $1 < $2
 #					0 = $1 >= $2
 awk_smaller () {
-	AWK_VALUE=`${AWK} "BEGIN{ print $1<$2 }"`
+	AWK_VALUE=`"${AWK}" "BEGIN{ print $1<$2 }"`
 }
 
 
@@ -891,7 +899,7 @@ awk_smaller () {
 #					1 = $1 <= $2
 #					0 = $1 > $2
 awk_smaller_eq () {
-	AWK_VALUE=`${AWK} "BEGIN{ print $1<=$2 }"`
+	AWK_VALUE=`"${AWK}" "BEGIN{ print $1<=$2 }"`
 }
 
 
@@ -901,7 +909,7 @@ awk_smaller_eq () {
 #					1 = $1 > $2
 #					0 = $1 <= $2
 awk_larger () {
-	AWK_VALUE=`${AWK} "BEGIN{ print $1>$2 }"`
+	AWK_VALUE=`"${AWK}" "BEGIN{ print $1>$2 }"`
 }
 
 
@@ -911,7 +919,7 @@ awk_larger () {
 #					1 = $1 >= $2
 #					0 = $1 < $2
 awk_larger_eq () {
-	AWK_VALUE=`${AWK} "BEGIN{ print $1>=$2 }"`
+	AWK_VALUE=`"${AWK}" "BEGIN{ print $1>=$2 }"`
 }
 
 
@@ -920,7 +928,7 @@ awk_larger_eq () {
 #				The two numbers must be passed as $1 as $2.
 #				Result will be returned in variable 'AWK_VALUE'
 awk_abs () {
-	AWK_VALUE=`${AWK} 'BEGIN{x = $1-$2; print x < 0 ? -x : x}'`
+	AWK_VALUE=`"${AWK}" 'BEGIN{x = $1-$2; print x < 0 ? -x : x}'`
 }
 
 
@@ -937,7 +945,7 @@ awk_min () {
 		AWK_VALUE="$2"
 	else
 		AWK_VALUE="$1"
-		min=`echo "$1 $2" | ${AWK} "BEGIN{}{if (0+$2<0+$1) min=$2} END{print min}"`
+		min=`echo "$1 $2" | "${AWK}" "BEGIN{}{if (0+$2<0+$1) min=$2} END{print min}"`
 		if [ -n "${min}" ] ; then
 			AWK_VALUE="$min"
 		fi
@@ -958,7 +966,7 @@ awk_max () {
 		AWK_VALUE="$2"
 	else
 		AWK_VALUE="$1"
-		max=`echo "$1 $2" | ${AWK} "BEGIN{}{if (0+$2>0+$1) max=$2} END{print max}"`
+		max=`echo "$1 $2" | "${AWK}" "BEGIN{}{if (0+$2>0+$1) max=$2} END{print max}"`
 		if [ -n "${max}" ] ; then
 			AWK_VALUE="$max"
 		fi
@@ -975,7 +983,11 @@ awk_max () {
 #						An empty value will be returned if there are no values
 #						found in $1.
 awk_median () {
-	med_list=`echo "$1" | ${AWK} '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
+	# Below is the command for sorting with AWK. However, only GNU AWK provides 'asorti(a,b)', 
+	# so this would now work on macOS (would need to install 'gawk' through e.b. MacPorts).
+	# med_list=`echo "$1" | "${AWK}" '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
+	# Sort list of input values in $1, numerically, ascending:
+	med_list=`echo "$1" | "${SORT}" -n`
 	# Get number of items on list:
 	list_len "${med_list}"
 	if [ -z "${med_list}" ] || [ ${LIST_LEN} -eq 0 ] ; then
@@ -999,19 +1011,19 @@ awk_median () {
 		if [ ${LIST_LEN} -gt 2 ] ; then
 			if [[ $((${LIST_LEN} % 2)) -eq 0 ]] ; then
 				# Even list length: median is the mean of the two values at the
-				# list's center.
-				posa=`${EXPR} ${LIST_LEN} / 2`
-				posb=`${EXPR} ${posa} - 1`
-				list_get "${med_list}" ${posa}
+				# list's center.				
+				posa=`"${EXPR}" ${LIST_LEN} / 2`
+				posb=`"${EXPR}" ${posa} - 1`
+				list_get "${med_list}" "${posa}"
 				a="${LIST_ITEM}"
-				list_get "${med_list}" ${posb}
+				list_get "${med_list}" "${posb}"
 				b="${LIST_ITEM}"
 				awk_calc "(${a}+${b})/2"
 				awk_median_val="${AWK_VALUE}"		
 			else
 				# Odd index: median is the value at the list's center.
-				posa=`${EXPR} ${LIST_LEN} / 2`
-				list_get "${med_list}" ${posa}
+				posa=`"${EXPR}" ${LIST_LEN} / 2`
+				list_get "${med_list}" "${posa}"
 				awk_median_val="${LIST_ITEM}"
 			fi
 		fi
@@ -1031,7 +1043,7 @@ awk_median () {
 #					representation of a number!
 grep_is_zero () {
 	GREP_VALUE=
-	GREP_VALUE=`echo "$1" | ${GREP} '[1-9]'`
+	GREP_VALUE=`echo "$1" | "${GREP}" '[1-9]'`
 }
 
 
@@ -1045,21 +1057,38 @@ grep_is_zero () {
 #					representation of a number!
 grep_is_positive () {
 	GREP_VALUE=
-	GREP_VALUE=`echo "$1" | ${GREP} -Ei '[+1-9]' | ${GREP} -Eiv '[-]'`
+	GREP_VALUE=`echo "$1" | "${GREP}" -Ei '[+1-9]' | "${GREP}" -Eiv '[-]'`
 }
 
 
 # FUNCTION
 # check_setup: Check system setup (required external programs available?).
 check_setup () {	
+	
 	message="Failed to run required program: "	
+	
 	# Awk
-	prg=${AWK}
+	prg="${AWK}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Date
+	prg="${DATE}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Expr
+	prg="${EXPR}"
 	: $(${prg} --help)
 	check_error "${message} '${prg}'."
 	
 	# Grep
-	prg=${GREP}
+	prg="${GREP}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Sort
+	prg="${SORT}"
 	: $(${prg} --help)
 	check_error "${message} '${prg}'."
 }
@@ -1075,7 +1104,7 @@ check_environment () {
 	# TODO: We never seem to use this!? It was probably intended to be used in the
 	#      context of adjusting node (point) locations to link (line) start/end vertices.
 	# Set default snapping distance to be half the diagonal of region's cell dimensions.
-	SNAPDIST=`echo ${nsres} ${ewres} | ${AWK} '{ printf "%.8f\n", sqrt(\$1^2 + \$2^2)/2 }'`
+	SNAPDIST=`echo ${nsres} ${ewres} | "${AWK}" '{ printf "%.8f\n", sqrt(\$1^2 + \$2^2)/2 }'`
 	if [ -z "${SNAPDIST}" ] ; then
 		exit_error "Failed to determine default line snapping threshold from GRASS region settings."
 	fi
@@ -1120,7 +1149,7 @@ check_field () {
 	RET_FLD_TEST=""
 	
 	# 1. Check if field exists (always run)
-	fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "|${2}" -o`
+	fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "|${2}" -o`
 	if [ "${fld_test_result}" != "|${2}" ] ; then
 		RET_FLD_TEST="Field '$2' does not exist in attribute table of map '$1'."
 		return
@@ -1129,7 +1158,7 @@ check_field () {
 	# 2. Check for given field type (run if at least 3 arguments given)
 	if [ $# -gt 2 ] ; then
 		fld_test_key_type="UNKNOWN"
-		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "INTEGER|${2}" -w -c`
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "INTEGER|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="INTEGER"
 			if [ "$3" != "INTEGER" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
@@ -1137,7 +1166,7 @@ check_field () {
 				return
 			fi
 		fi
-		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "DOUBLE PRECISION|${2}" -w -c`
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "DOUBLE PRECISION|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="DOUBLE PRECISION"
 			if [ "$3" != "DOUBLE PRECISION" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
@@ -1145,7 +1174,7 @@ check_field () {
 				return
 			fi
 		fi
-		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "CHARACTER|${2}" -w -c`
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "CHARACTER|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="CHARACTER"
 			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
@@ -1153,7 +1182,7 @@ check_field () {
 				return
 			fi
 		fi
-		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | ${GREP} "TEXT|${2}" -w -c`
+		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "TEXT|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="TEXT"
 			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
@@ -1176,44 +1205,44 @@ check_field () {
 			# attributes attached with the total number of attributes
 			# returned by a v.db.select query.
 			# The below are all sensitive vars that might already be set!
-			fld_test_points_old=${points}
-			fld_test_lines_old=${lines}
-			fld_test_areas_old=${areas}
+			fld_test_points_old="${points}"
+			fld_test_lines_old="${lines}"
+			fld_test_areas_old="${areas}"
 			#DEBUG
 			#echo "FLD = ${2}"
 			eval `v.info -t map="${1}" layer=1`
 			check_error "Failed to query map '$1' for feature count."
-			fld_test_num_keys=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
+			fld_test_num_keys=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | "${GREP}" -v -e '^$' -c`
 			check_error "Failed to query map '$1' for contents of field '$2'."
-			fld_test_num_geoms=`${EXPR} ${points} + ${lines} + ${areas}`
+			fld_test_num_geoms=`"${EXPR}" ${points} + ${lines} + ${areas}`
 			#DEBUG			
 			#echo "  NUM_GEOMS = ${fld_test_num_geoms}"
 			#echo "  NUM_KEY = ${fld_test_num_keys}"
 			if [ ${fld_test_num_geoms} -gt ${fld_test_num_keys} ] ; then
 				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is empty in one or more instances."
 				# Restore previous geometry data:
-				points=${fld_test_points_old}
-				lines=${fld_test_lines_old}
-				areas=${fld_test_areas_old}
+				points="${fld_test_points_old}"
+				lines="${fld_test_lines_old}"
+				areas="${fld_test_areas_old}"
 				return
 			fi
 			# Restore previous geometry data:
-			points=${fld_test_points_old}
-			lines=${fld_test_lines_old}
-			areas=${fld_test_areas_old}
+			points="${fld_test_points_old}"
+			lines="${fld_test_lines_old}"
+			areas="${fld_test_areas_old}"
 		fi
 	fi
 	
 	# 4. Check for uniqueness (run if at least 5 arguments given) 
 	if [ $# -gt 4 ] ; then
 		if [ "$5" == "TRUE" ] ; then
-			FLD_TEST_KEYS=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | ${GREP} -v -e '^$'`
+			FLD_TEST_KEYS=`v.db.select -c --quiet columns="${2}" map="${1}" layer="1" | "${GREP}" -v -e '^$'`
 			for fld_test_key in ${FLD_TEST_KEYS} ; do
 				if [ "${FLD_TEST_KEY_TYPE}" = "CHARACTER" ] || [ "${FLD_TEST_KEY_TYPE}" = "TEXT" ] ; then
-					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}='$fld_test_key'" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
+					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}='$fld_test_key'" map="${1}" layer="1" | "${GREP}" -v -e '^$' -c`
 					check_error "Failed to query map '$1' for contents of field '$2'."
 				else
-					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}=$fld_test_key" map="${1}" layer="1" | ${GREP} -v -e '^$' -c`
+					fld_test_num_matches=`v.db.select -c --quiet columns="${2}" where="${2}=$fld_test_key" map="${1}" layer="1" | "${GREP}" -v -e '^$' -c`
 					check_error "Failed to query map '$1' for contents of field '$2'."
 				fi
 				if [ ${fld_test_num_matches} -ne 1 ] ; then
@@ -1234,7 +1263,7 @@ check_field () {
 check_input () {
 	
 	# Check that input vector map has chosen layer.
-	eval `v.info -e map="${GIS_OPT_INPUT}" | ${GREP} "num_dblinks="`
+	eval `v.info -e map="${GIS_OPT_INPUT}" | "${GREP}" "num_dblinks="`
 	check_error "Failed to get basic info for chosen layer of input vector map."
 	if [ -z ${num_dblinks} ] ; then
 		exit_error "Failed to get basic info for chosen layer of input vector map."
@@ -1294,18 +1323,18 @@ check_input () {
 	# Check that "size" attribute (if given) is present and valid.
 	if [ -n "${GIS_OPT_SIZE}" ] ; then
 		# Check if attribute exists
-		result=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -c "|${GIS_OPT_SIZE}"`
+		result=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -w "${GIS_OPT_SIZE}" | "${GREP}" -c "|${GIS_OPT_SIZE}"`
 		if [ ${result} -lt 1 ] ; then
 			exit_error "Attribute '${GIS_OPT_SIZE}' not found in input vector map (case sensitive check)."
 		fi
 		# Check if attribute type is numeric
-		int=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -i -c "INTEGER|"`
-		dbl=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -i -c "PRECISION|"`
+		int=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -w "${GIS_OPT_SIZE}" | "${GREP}" -i -c "INTEGER|"`
+		dbl=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -w "${GIS_OPT_SIZE}" | "${GREP}" -i -c "PRECISION|"`
 		if [ ${int} -lt 1 ] && [ ${dbl} -lt 1 ] ; then
 			exit_error "Attribute '${GIS_OPT_SIZE}' in input vector map is not of numeric type."
 		fi
 		# - must contain data for each feature (=${points})
-		num_vals=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+		num_vals=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
 		check_error "Key field (option 'key=') is not valid."
 		if [ ${points} -ne ${num_vals} ] ; then
 			exit_error "Number of 'size' fields with data (option 'size=') does not match number of input points (${num_keys} vs ${num_vals})."
@@ -1340,35 +1369,35 @@ check_input () {
 	fi
 		
 	# Warn if reserved field names are present in input map's attribute table
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_COORD_X}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COORD_X}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_COORD_X}' in input points map."
 	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_COORD_Y}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COORD_Y}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_COORD_Y}' in input points map."
 	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_LINKS}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LINKS}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_LINKS}' in input points map."
 	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_LEN_SUM}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LEN_SUM}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' in input points map."
 	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_LEN_AVG}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LEN_AVG}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_AVG}' in input points map."
 	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_COST_SUM}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COST_SUM}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' in input points map."
 	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_COST_AVG}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COST_AVG}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_AVG}' in input points map."
 	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | ${GREP} -i -w "${NODES_FLD_NSTRENGTH}"`
+	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_NSTRENGTH}"`
 	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
 		if [ -n "${fld}" ] ; then
 			g.message -w "Found attribute with reserved field name '${NODES_FLD_NSTRENGTH}' in input points map."
@@ -1386,7 +1415,7 @@ check_input () {
 		# Reduce nodes to those within current region.
 		v.select ainput="${TMP_VECT_NODES}" alayer="1" atype="point" binput="${TMP_VECT_REGION}" blayer="1" btype="area" operator="overlap" output="${TMP_VECT_SELECT}" --overwrite --quiet
 		check_error "Failed to extract input points in current region."
-		points_before=${points}
+		points_before="${points}"
 		# If we get this far then the selection succeeded.
 		eval `v.info -t map="${TMP_VECT_SELECT}" layer=1`
 		check_error "Failed to get info for temporary layer with selected input points (points within current region)."
@@ -1425,7 +1454,7 @@ check_input () {
 	fi
 	
 		# Store (filtered) input points in global var:
-	NUM_INPUT_NODES=${points}
+	NUM_INPUT_NODES="${points}"
 
 	
 	# ATTENTION: ORDER MATTERS!
@@ -1437,32 +1466,32 @@ check_input () {
 	# Check that 'key' field is valid:
 	g.message -i "Checking key (and label) field validity..."
 	# - must exist (case sensitive, white space possible)
-	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "|${GIS_OPT_KEY}" -o`
+	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "|${GIS_OPT_KEY}" -o`
 	if [ "${result}" != "|${GIS_OPT_KEY}" ] ; then
 		exit_error "Chosen 'key' field '${GIS_OPT_KEY}' does not exist in input points map (option 'key=')."
 	fi
 	# - must contain data for each feature (=${points})
-	num_keys=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+	num_keys=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
 	check_error "Key field (option 'key=') is not valid."
 	if [ ${points} -ne ${num_keys} ] ; then
 		exit_error "Number of primary key records (option 'key=') does not match number of input points (${num_keys} vs ${num_points})."
 	fi
 	# - must be of type INTEGER
 	KEY_TYPE="UNKNOWN"
-	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "INTEGER|${GIS_OPT_KEY}" -w -c`
+	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "INTEGER|${GIS_OPT_KEY}" -w -c`
 	if [ ${result} -eq 1 ] ; then
 		KEY_TYPE="INTEGER"
 	fi
-	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${GIS_OPT_KEY}" -w -c`
+	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "DOUBLE PRECISION|${GIS_OPT_KEY}" -w -c`
 	#if [ ${result} -eq 1 ] ; then
 	#		KEY_TYPE="DOUBLE PRECISION"
 	#fi
 	#UPDATE: We now accept only numeric primary keys, since this makes a lot of data ops tighter.
-	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "CHARACTER|${GIS_OPT_KEY}" -w -c`
+	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "CHARACTER|${GIS_OPT_KEY}" -w -c`
 	#if [ ${result} -eq 1 ] ; then
 	#		KEY_TYPE="CHARACTER"
 	#fi
-	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "TEXT|${GIS_OPT_KEY}" -w -c`
+	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "TEXT|${GIS_OPT_KEY}" -w -c`
 	#if [ ${result} -eq 1 ] ; then
 	#	KEY_TYPE="TEXT"
 	#fi
@@ -1470,12 +1499,12 @@ check_input () {
 		exit_error "Type of 'key' field in input points layer is not integer (option 'key=')."
 	fi	
 	# - must be unique for each feature
-	KEYS=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$'`
+	KEYS=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$'`
 	for key in ${KEYS} ; do
 		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-			num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}='$key'" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+			num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}='$key'" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
 		else
-			num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}=$key" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+			num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}=$key" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
 		fi
 		if [ ${num_matches} -eq 0 ] ; then
 			exit_error "Primary key value '$key' not found: Please ensure that primary key values do not contain whitespace (option 'key=')."
@@ -1496,31 +1525,31 @@ check_input () {
 	if [ -n "${GIS_OPT_LABEL}" ] && [ "${GIS_OPT_LABEL}" != "${GIS_OPT_KEY}" ] ; then		
 		# Check that 'label' field is valid:
 		# - must exist (case sensitive, white space possible)
-		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "|${GIS_OPT_LABEL}" -o`
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "|${GIS_OPT_LABEL}" -o`
 		if [ "${result}" != "|${GIS_OPT_LABEL}" ] ; then
 			exit_error "Chosen 'label' field '${GIS_OPT_LABEL}' does not exist in input points map (option 'label=')."
 		fi
 		# - must contain data for each feature (=${points})
-		num_keys=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+		num_keys=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
 		check_error "Label field (option 'label=') is not valid."
 		if [ ${points} -ne ${num_keys} ] ; then
 			exit_error "Number of label field records (option 'label=') does not match number of input points (${num_keys} vs ${num_points})."
 		fi
 		# - must be of type, integer, double or text
 		LABEL_TYPE="UNKNOWN"
-		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "INTEGER|${GIS_OPT_LABEL}" -w -c`
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "INTEGER|${GIS_OPT_LABEL}" -w -c`
 		if [ ${result} -eq 1 ] ; then
 			LABEL_TYPE="INTEGER"
 		fi
-		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${GIS_OPT_LABEL}" -w -c`
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "DOUBLE PRECISION|${GIS_OPT_LABEL}" -w -c`
 		if [ ${result} -eq 1 ] ; then
 			LABEL_TYPE="DOUBLE PRECISION"
 		fi
-		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "CHARACTER|${GIS_OPT_LABEL}" -w -c`
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "CHARACTER|${GIS_OPT_LABEL}" -w -c`
 		if [ ${result} -eq 1 ] ; then
 			LABEL_TYPE="CHARACTER"
 		fi
-		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "TEXT|${GIS_OPT_LABEL}" -w -c`
+		result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "TEXT|${GIS_OPT_LABEL}" -w -c`
 		if [ ${result} -eq 1 ] ; then
 			LABEL_TYPE="TEXT"
 		fi
@@ -1529,13 +1558,16 @@ check_input () {
 		fi
 		# - should be unique for each feature with valid primary key
 		OLD_IFS="$IFS"
-		IFS=$(echo -en "\n\b")
-		KEYS=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$'`
+		IFS=$'\n\b'
+		# This will use 'grep' to filter out all lines that are _not_ blank lines:
+		# '^$' matches blank lines, and '-v' reverses the selection:
+		KEYS=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$'`
+		# Now check all non-empty result lines:
 		for key in ${KEYS} ; do
 			if [ "${LABEL_TYPE}" = "CHARACTER" ] || [ "${LABEL_TYPE}" = "TEXT" ] ; then
-				num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}='$key'" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+				num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}='$key'" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
 			else
-				num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}=$key" map="${GIS_OPT_INPUT}" layer="1" | ${GREP} -v -e '^$' -c`
+				num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}=$key" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
 			fi
 			if [ ${num_matches} -eq 0 ] ; then
 				exit_error "Label value '$key' not valid: Please ensure that labels do not contain newline characters (option 'label=')."
@@ -1598,7 +1630,7 @@ check_input () {
 			g.remove type="vector" name="${TMP_VECT_LINKS}" -f --quiet
 			# Show progress		
 			g.message -p "${step} ${NUM_INPUT_NODES} 1"
-			step=`${EXPR} ${step} + 1`
+			step=`"${EXPR}" ${step} + 1`
 		done
 	fi
 
@@ -1614,7 +1646,7 @@ check_input () {
 		#
 		# 1. Test basic map properties: attribute table exists and only lines present?
 		#
-		eval `v.info -e map="${GIS_OPT_INITIAL}" | ${GREP} "num_dblinks="`
+		eval `v.info -e map="${GIS_OPT_INITIAL}" | "${GREP}" "num_dblinks="`
 		if [ -z ${num_dblinks} ] ; then
 			exit_error "Failed to get basic info for chosen layer of input vector map."
 		fi
@@ -1667,7 +1699,7 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`"${EXPR}" ${num_init_valid_coord_flds} + 1`
 			fi
 		fi
 		# from_x
@@ -1681,7 +1713,7 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`"${EXPR}" ${num_init_valid_coord_flds} + 1`
 			fi
 		fi		
 		# to_x
@@ -1695,7 +1727,7 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`"${EXPR}" ${num_init_valid_coord_flds} + 1`
 			fi
 		fi
 		# to_y
@@ -1709,7 +1741,7 @@ check_input () {
 				g.message -e "Coordinate fields are: '${LINKS_FLD_FROM_X}'/'${LINKS_FLD_FROM_Y}' and '${LINKS_FLD_TO_X}'/'${LINKS_FLD_TO_Y}'."
 				exit_error "${RET_FLD_TEST}"
 			else
-				num_init_valid_coord_flds=`${EXPR} ${num_init_valid_coord_flds} + 1`
+				num_init_valid_coord_flds=`"${EXPR}" ${num_init_valid_coord_flds} + 1`
 			fi
 		fi
 		#
@@ -1730,7 +1762,7 @@ check_input () {
 			fi
 		fi			
 		# length_km: If this exists, then it must have the right type, and it must be complete!
-		# NOTE: If it does not exist, then it will be rebuild automatically ONLY if 'length_m' is also missing!
+		# If it does not exist, then it will be rebuild automatically ONLY if 'length_m' is also missing!
 		check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_LEN_KM}"
 		if [ "${RET_FLD_TEST}" == "${LINKS_FLD_LEN_KM}" ] ; then
 			# Field exists: Check if it is ok.
@@ -1816,15 +1848,15 @@ check_input () {
 		get_primary_keys "${GIS_OPT_INPUT}"
 		for key in ${PRIMARY_KEYS} ; do
 			# Step through all input nodes and count number of connections:
-			num_connections_from=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${key}" column="${LINKS_FLD_FROM_ID}" -c | ${GREP} "${key}" -c`
+			num_connections_from=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${key}" column="${LINKS_FLD_FROM_ID}" -c | "${GREP}" "${key}" -c`
 			if [ -z "${num_connections_from}" ] ; then
 				num_connections_from=0
 			fi
-			num_connections_to=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_TO_ID}=${key}" column="${LINKS_FLD_TO_ID}" -c | ${GREP} "${key}" -c`
+			num_connections_to=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_TO_ID}=${key}" column="${LINKS_FLD_TO_ID}" -c | "${GREP}" "${key}" -c`
 			if [ -z "${num_connections_to}" ] ; then
 				num_connections_to=0
 			fi
-			num_connections_total=`${EXPR} ${num_connections_from} + ${num_connections_to}`
+			num_connections_total=`"${EXPR}" ${num_connections_from} + ${num_connections_to}`
 			#DEBUG
 			#echo "KEY=${key}"
 			#echo "CONNS=${num_connections_total}"
@@ -1843,7 +1875,7 @@ check_input () {
 			init_from_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_FROM_ID}" -c`
 			check_error "Failed to retrieve value of field ('${LINKS_FLD_FROM_ID}') from 'initial' links input map ('${GRASS_PKEY}=${cat}')."
 			# Check if 'from_id' occurs as primary key of any input node:
-			num_connections_from=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${GIS_OPT_KEY}=${init_from_id}" column="${GIS_OPT_KEY}" -c | ${GREP} "${init_from_id}" -c`
+			num_connections_from=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${GIS_OPT_KEY}=${init_from_id}" column="${GIS_OPT_KEY}" -c | "${GREP}" "${init_from_id}" -c`
 			if [ -z "${num_connections_from}" ] ; then
 				num_connections_from=0
 			fi
@@ -1851,11 +1883,11 @@ check_input () {
 			init_to_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_TO_ID}" -c`
 			check_error "Failed to retrieve value of field ('${LINKS_FLD_TO_ID}') from 'initial' links input map ('${GRASS_PKEY}=${cat}')."
 			# Check if 'to_id' occurs as primary key of any input node:
-			num_connections_to=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${GIS_OPT_KEY}=${init_to_id}" column="${GIS_OPT_KEY}" -c | ${GREP} "${init_to_id}" -c`
+			num_connections_to=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${GIS_OPT_KEY}=${init_to_id}" column="${GIS_OPT_KEY}" -c | "${GREP}" "${init_to_id}" -c`
 			if [ -z "${num_connections_to}" ] ; then
 				num_connections_to=0
 			fi
-			num_connections_total=`${EXPR} ${num_connections_from} + ${num_connections_to}`
+			num_connections_total=`"${EXPR}" ${num_connections_from} + ${num_connections_to}`
 			#DEBUG
 			#echo "KEY=${cat}"
 			#echo "CONNS=${num_connections_total}"
@@ -1875,16 +1907,16 @@ check_input () {
 			init_to_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_TO_ID}" -c`
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_TO_ID}') from 'initial' links input map."
 			# Check for occurrences of this from/to pair:
-			num_init_pairs_ft=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id}" column="${LINKS_FLD_FROM_ID}" -c | ${GREP} "${init_from_id}" -c`			
+			num_init_pairs_ft=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id}" column="${LINKS_FLD_FROM_ID}" -c | "${GREP}" "${init_from_id}" -c`			
 			# Check for occurrences of this to/from pair:
-			num_init_pairs_tf=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id}" column="${LINKS_FLD_FROM_ID}" -c | ${GREP} "${init_from_id}" -c`
-			num_init_pairs=`${EXPR} ${num_init_pairs_ft} + ${num_init_pairs_tf}`
+			num_init_pairs_tf=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id}" column="${LINKS_FLD_FROM_ID}" -c | "${GREP}" "${init_from_id}" -c`
+			num_init_pairs=`"${EXPR}" ${num_init_pairs_ft} + ${num_init_pairs_tf}`
 			if [ $num_init_pairs -gt 1 ] ; then
 				exit_error "At least one pair of nodes connected by more than one link in initial links map."
 			fi
 		done # Checking map passed as "initial="
 		
-	fi # DONE with all input data checks
+	fi # Finished all input data checks
 	
 	g.message -i "Good: Input data has passed all validity checks."
 }
@@ -2053,7 +2085,7 @@ check_params () {
 	# MAXDIST
 	if [ -n "${GIS_OPT_MAXDIST}" ] ; then						
 		# if provided, then MAXDIST must be > 0.
-		grep_is_positive ${GIS_OPT_MAXDIST}
+		grep_is_positive "${GIS_OPT_MAXDIST}"
 		if [ -z "${GREP_VALUE}" ] ; then
 			g.message -e "Option 'maxdist=' must be a positive number larger than '0'."
 			exit ${EXIT_ERROR}
@@ -2104,43 +2136,43 @@ check_params () {
 #
 preprocess () {
 	# Drop fields with reserved names from copy of input points map (if necessary)
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_COORD_X}"`
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_COORD_X}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COORD_X}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_COORD_X}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_COORD_Y}"`
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_COORD_Y}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COORD_Y}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_COORD_Y}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_LINKS}"`
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LINKS}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_LINKS}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_LINKS}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_LEN_SUM}"`
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LEN_SUM}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_LEN_SUM}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_SUM}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_LEN_AVG}"`
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LEN_AVG}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_LEN_AVG}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_AVG}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_COST_SUM}"`
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_COST_SUM}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COST_SUM}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_COST_SUM}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_COST_AVG}"`
+	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_COST_AVG}"`
 	if [ -n "${fld}" ] ; then
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COST_AVG}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_COST_AVG}' from copy of input points map."
 	fi
 	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-		fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_NSTRENGTH}"`
+		fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_NSTRENGTH}"`
 		if [ -n "${fld}" ] ; then
 			${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_NSTRENGTH}" --quiet
 			check_error "Failed to remove reserved attribute '${NODES_FLD_NSTRENGTH}' from copy of input points map."
@@ -2290,13 +2322,13 @@ links_adjust_nodes ()
 			# Start vertex:
 			adj_startxnew=`v.db.select -c map="$1" column="${adj_fld_startxnew}" where="${adj_fld_key}=${adj_cat_inner}"`				
 			adj_startynew=`v.db.select -c map="$1" column="${adj_fld_startynew}" where="${adj_fld_key}=${adj_cat_inner}"`
-			adj_d_startxnew=`echo ${adj_startxold} ${adj_startxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
-			adj_d_startynew=`echo ${adj_startyold} ${adj_startynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+			adj_d_startxnew=`echo ${adj_startxold} ${adj_startxnew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
+			adj_d_startynew=`echo ${adj_startyold} ${adj_startynew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
 			# End vertex:
 			adj_endxnew=`v.db.select -c map="$1" column="${adj_fld_endxnew}" where="${adj_fld_key}=${adj_cat_inner}"`
 			adj_endynew=`v.db.select -c map="$1" column="${adj_fld_endynew}" where="${adj_fld_key}=${adj_cat_inner}"`
-			adj_d_endxnew=`echo ${adj_endxold} ${adj_endxnew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
-			adj_d_endynew=`echo ${adj_endyold} ${adj_endynew} | ${AWK} '{ printf "%.8f", \$1 - \$2}'`
+			adj_d_endxnew=`echo ${adj_endxold} ${adj_endxnew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
+			adj_d_endynew=`echo ${adj_endyold} ${adj_endynew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
 			#DEBUG: Show node coordinates as stored in attribute table of current link 
 			#v.db.select map="$1" layer="1" where="${adj_fld_key}=${adj_cat_inner}"
 			#END DEBUG
@@ -2311,14 +2343,14 @@ links_adjust_nodes ()
 			v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_startxnew},${adj_startynew}" move="${adj_d_startxnew},${adj_d_startynew},0" cats="${adj_cat_inner}" --quiet
 			v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_endxnew},${adj_endynew}" move="${adj_d_endxnew},${adj_d_endynew},0" cats="${adj_cat_inner}" --quiet
 			# Move on to next link:
-			adj_step_inner=`${EXPR} ${adj_step_inner} + 1`
+			adj_step_inner=`"${EXPR}" ${adj_step_inner} + 1`
 		fi
 		# Try next category value:
-		adj_cat_inner=`${EXPR} ${adj_cat_inner} + 1`
+		adj_cat_inner=`"${EXPR}" ${adj_cat_inner} + 1`
 	done				
 	# Since we extract one node per run, we need to do one pass less
 	# through the inner loop each time we look at another set of links.
-	#NUM_LINKS=`${EXPR} ${NUM_LINKS} - 1`
+	#NUM_LINKS=`"${EXPR}" ${NUM_LINKS} - 1`
 	# Drop attribute table from temporary links map.				
 	${V_DB_DROPTABLE} map="$1" layer="1" -f --quiet		
 
@@ -2360,7 +2392,7 @@ links_droprow () {
 		droprow_out="${TMP_VECT_LINKS_DROPROW_1}"
 	fi
 	# Remove existing vector map to keep v.db.droprow quiet:
-	found=`g.list type="vector" | ${GREP} -c "${droprow_out}"`
+	found=`g.list type="vector" | "${GREP}" -c "${droprow_out}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="vector" name="${droprow_out}" -f --q
 	fi
@@ -2396,7 +2428,7 @@ nodes_droprow () {
 		droprow_out="${TMP_VECT_NODES_DROPROW_1}"
 	fi
 	# Remove existing vector map to keep v.db.droprow quiet:
-	found=`g.list type="vector" | ${GREP} -c "${droprow_out}"`
+	found=`g.list type="vector" | "${GREP}" -c "${droprow_out}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="vector" name="${droprow_out}" -f --q
 	fi
@@ -2436,7 +2468,7 @@ stats_unreduced () {
 		awk_max "${max_len}" "${len}"
 		max_len="${AWK_VALUE}"
 		awk_calc "$total_len+$len"
-		total_len=${AWK_VALUE}
+		total_len="${AWK_VALUE}"
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="${GRASS_PKEY}=${cat}" -c --quiet`
 			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GRASS_PKEY}='${cat}')"
@@ -2445,29 +2477,29 @@ stats_unreduced () {
 			awk_max "${max_cost}" "${cost}"
 			max_cost="${AWK_VALUE}"			
 			awk_calc "$total_cost+$cost"
-			total_cost=${AWK_VALUE}
+			total_cost="${AWK_VALUE}"
 		fi
 		g.message -p "${step} ${lines} 1"
-		step=`${EXPR} ${step} + 1`
+		step=`"${EXPR}" ${step} + 1`
 	done	
-	net_nodes_undreduced=${NUM_INPUT_NODES}
-	net_links_unreduced=${lines}
-	net_len_unreduced=${total_len}
+	net_nodes_undreduced="${NUM_INPUT_NODES}"
+	net_links_unreduced="${lines}"
+	net_len_unreduced="${total_len}"
 	net_len_min_unreduced="${min_len}"
 	net_len_max_unreduced="${max_len}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		net_cost_unreduced=${total_cost}
+		net_cost_unreduced="${total_cost}"
 		net_cost_min_unreduced="${min_cost}"
 		net_cost_max_unreduced="${max_cost}"
 	fi
 	# Compute means
 	awk_calc "(($lines*2)/$NUM_INPUT_NODES)" # 1 link = 2 connections (one at each end!)
-	net_cons_mean_unreduced=${AWK_VALUE}
+	net_cons_mean_unreduced="${AWK_VALUE}"
 	awk_calc "$total_len/$lines"
-	net_len_mean_unreduced=${AWK_VALUE}
+	net_len_mean_unreduced="${AWK_VALUE}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		awk_calc "$total_cost/$lines"
-		net_cost_mean_unreduced=${AWK_VALUE}
+		net_cost_mean_unreduced="${AWK_VALUE}"
 	fi
 	# Compute median(s)
 	lengths=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" -c`
@@ -2476,7 +2508,7 @@ stats_unreduced () {
 	if [ -z "${AWK_VALUE}" ] ; then
 		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
 	fi
-	net_len_median_unreduced=${AWK_VALUE}
+	net_len_median_unreduced="${AWK_VALUE}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" -c`
 		check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GIS_OPT_LINKS})."
@@ -2484,7 +2516,7 @@ stats_unreduced () {
 		if [ -z "${AWK_VALUE}" ] ; then
 			exit_error "No cost data found in attribute table of links output layer (${GIS_OPT_LINKS})."
 		fi
-		net_cost_median_unreduced=${AWK_VALUE}
+		net_cost_median_unreduced="${AWK_VALUE}"
 	fi
 }
 
@@ -2512,19 +2544,19 @@ model_attsim () {
 		for fld in ${GIS_OPT_ATTRIBUTES} ; do				
 			# Get field type
 			fld_type="UNKNOWN"
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "INTEGER|${fld}" -w -c`
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "INTEGER|${fld}" -w -c`
 			if [ ${result} -eq 1 ] ; then
 				fld_type="INTEGER"
 			fi
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "DOUBLE PRECISION|${fld}" -w -c`
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "DOUBLE PRECISION|${fld}" -w -c`
 			if [ ${result} -eq 1 ] ; then
 				fld_type="DOUBLE PRECISION"
 			fi
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "CHARACTER|${fld}" -w -c`
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "CHARACTER|${fld}" -w -c`
 			if [ ${result} -eq 1 ] ; then
 				fld_type="CHARACTER"
 			fi
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${GREP} "TEXT|${fld}" -w -c`
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "TEXT|${fld}" -w -c`
 			if [ ${result} -eq 1 ] ; then
 				fld_type="TEXT"
 			fi
@@ -2554,8 +2586,8 @@ model_attsim () {
 			# Get list of keys of nodes with identical attributes 
 			LIST=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${where}" columns="${GIS_OPT_KEY}" -c --quiet`
 			if [ -n "${LIST}" ] ; then
-				list=""
-				IFS=$(echo -en "\n\b")
+				list=""				
+				IFS=$'\n\b'
 				for item in ${LIST} ; do
 					list="$list $item"
 					# Get the one link with $item in field 'from_id' and our current primary key in 'to_id',
@@ -2574,7 +2606,7 @@ model_attsim () {
 						#echo "CAT=$cat"
 						strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="cat=${cat}" columns="${LINKS_FLD_STRENGTH}" -c --quiet`
 						check_error "Failed to read from attribute field '${LINKS_FLD_STRENGTH}' of link with cat='$cat' in output vector map."
-						strength=`${EXPR} ${strength} + 1`
+						strength=`"${EXPR}" ${strength} + 1`
 						${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_STRENGTH}" value="${strength}" where="cat=${cat}" --quiet
 						check_error "Failed to update attribute field '${LINKS_FLD_STRENGTH}' to '${strength}' for link with cat='$cat' in output vector map."
 					fi
@@ -2585,7 +2617,7 @@ model_attsim () {
 		done
 		IFS="$OLD_IFS"
 		g.message -p "${step} ${NUM_INPUT_NODES} 1"
-		step=`${EXPR} ${step} + 1`
+		step=`"${EXPR}" ${step} + 1`
 	done
 	
 	# PASS 2: Step through all links again and delete those that have strength '0'
@@ -2605,7 +2637,7 @@ model_attsim () {
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
 			check_error "Failed to delete link with ${GRASS_PKEY}='${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
-			links_droprow ${cat}
+			links_droprow "${cat}"
 		fi
 	done
 	
@@ -2640,7 +2672,7 @@ model_complete () {
 		# we need (=number of links in complete network). We use the "column=" option to attach
 		# an attribute table at the same time. Normally, this is used for random
 		# Z values, but we will simply overwrite it with cost values later.
-		num_links=`${EXPR} ${NUM_INPUT_NODES} \* \( ${NUM_INPUT_NODES} - 1 \) / 2`
+		num_links=`"${EXPR}" ${NUM_INPUT_NODES} \* \( ${NUM_INPUT_NODES} - 1 \) / 2`
 		v.random output="${TMP_VECT_LINKS_COSTS}" column="${LINKS_FLD_COST}" npoints="${num_links}" --quiet --overwrite
 		check_error "Failed to create temporary vector map for storing link costs."
 		# Now we need to create attributes of the correct type for storing "from_id" and "to_id" fields
@@ -2670,8 +2702,7 @@ model_complete () {
 	#       - this will require multiple temporary maps to be produced before patching.
 	#		- to avoid CLI buffer overrun, maps should be patched one-by-one, with a new call to v.patch each time
 	#       - once this is done, the calls to r.cost and r.path can be refactored to run in multiple threads
-	#       --> THIS IS NOW IMPLEMENTED BELOW. TEST!
-	#       --> UPDATE: SEEMS TO WORK CORRECTLY FOR STRAIGHT-LINE CASE
+	#       --> THIS IS NOW IMPLEMENTED BELOW.
 	
 	# TODO: - refactor to prepare for multi-threading:
 	#		 - everything that must be done within one isolated thread needs to go
@@ -2760,20 +2791,20 @@ ${tmp_vect_links}
 							cur=1
 							for cost in $COSTVAL ; do
 								if [ $cur -eq $next_cost ] ; then 
-									costval=`echo $cost | ${AWK} -F "|" '{ print $4 }'`
+									costval=`echo $cost | "${AWK}" -F "|" '{ print $4 }'`
 									${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="cat=${cat_cost}" --quiet
 									check_error "Failed to update field '${LINKS_FLD_COST}' in temporary link costs vector map."																				
 								fi
-								cur=`${EXPR} ${cur} + 1`
+								cur=`"${EXPR}" ${cur} + 1`
 							done
-							next_cost=`${EXPR} ${next_cost} + 1`
+							next_cost=`"${EXPR}" ${next_cost} + 1`
 							# Set next primary key value for subsequent upload of cost value
-							cat_cost=`${EXPR} ${cat_cost} + 1`
+							cat_cost=`"${EXPR}" ${cat_cost} + 1`
 						fi
 					done					
 					# Compute least cost vector paths based on directional surface computed above
 					# (end points now become start points, as r.cost has produced back-links!): 
-					r.path input=${TMP_RAST_COST_DIR} format="degree" vector_path="${tmp_vect_links}" start_points="${GIS_OPT_INPUT}" --overwrite --quiet						
+					r.path input="${TMP_RAST_COST_DIR}" format="degree" vector_path="${tmp_vect_links}" start_points="${GIS_OPT_INPUT}" --overwrite --quiet						
 					check_error "Failed to compute least cost paths (iteration ${step})."
 				else
 					# We are running in straight-line links (Euclidean) mode:
@@ -2792,11 +2823,11 @@ ${tmp_vect_links}
 				# Adjust node coordinates of least cost paths (if required)
 				if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 					#links_adjust_nodes "${tmp_vect_links}"
-					links_adjust_nodes "${tmp_vect_links}" "${TMP_VECT_EXTRACT}" ${num_links_to_adjust}
+					links_adjust_nodes "${tmp_vect_links}" "${TMP_VECT_EXTRACT}" "${num_links_to_adjust}"
 					# Since we extract one node per run, we need to adjust one link less
 					# each time we adjust another subset of links (LCPs)!
-					num_links_to_adjust=`${EXPR} ${num_links_to_adjust} - 1`
-					#NUM_LINKS=`${EXPR} ${NUM_LINKS} - 1`
+					num_links_to_adjust=`"${EXPR}" ${num_links_to_adjust} - 1`
+					#NUM_LINKS=`"${EXPR}" ${NUM_LINKS} - 1`
 				fi
 				
 				#DELETE: Obsolete code (implemented sequentical patching below)
@@ -2824,14 +2855,14 @@ ${tmp_vect_links}
 				#	g.remove type="vector" name="${TMP_VECT_LINKS_ADD}" -f --quiet
 				#fi
 				
-				step=`${EXPR} ${step} + 1`				
+				step=`"${EXPR}" ${step} + 1`				
 				g.message -p "${step} ${NUM_INPUT_NODES} 1"
 			else
 				# No feature! This is a fatal error!
 				exit_error "Input data missing for primary key query '${WHERE}'. Aborting."
 			fi
 		else # Last point reached: Do not process!
-			step=`${EXPR} ${step} + 1`
+			step=`"${EXPR}" ${step} + 1`
 		fi
 	done
 	
@@ -2844,7 +2875,7 @@ ${tmp_vect_links}
 	# Count number of maps to patch.
 	num_patches=0
 	for map in $PATCH_LIST ; do
-		num_patches=`${EXPR} ${num_patches} + 1`
+		num_patches=`"${EXPR}" ${num_patches} + 1`
 	done
 	step=0
 	first="TRUE" # First run through patching loop
@@ -2861,7 +2892,7 @@ ${tmp_vect_links}
 			v.patch input="${map}" output="${GIS_OPT_LINKS}" -a -b --overwrite --quiet
 			check_error "Failed to merge patch #${step} of complete links map."
 		fi
-		step=`${EXPR} ${step} + 1`		
+		step=`"${EXPR}" ${step} + 1`		
 		g.message -p "${step} ${num_patches} 1"
 	done	
 	
@@ -2916,7 +2947,7 @@ ${tmp_vect_links}
 	cat=1 # This is the category value (GRASS primary key) of the current link. We use this
 	      # to step through all links of the completely connected network, regardless of any
 	      # other attribute values.
-	links=`${EXPR} ${NUM_INPUT_NODES} - 1` # This is the number of links that are connected
+	links=`"${EXPR}" ${NUM_INPUT_NODES} - 1` # This is the number of links that are connected
 										  # FROM the current node; this number is decreased by 1
 										  # each step through the loop.
 	# Step through all nodes in the same order once more; on this pass, we only transfer
@@ -2935,7 +2966,7 @@ ${tmp_vect_links}
 				get_label "${GIS_OPT_INPUT}" "${key}"
 				#echo "  From ID    = '${key}'"
 				#echo "  From Label = '${LABEL}'"				
-				target=`${EXPR} ${cat} + ${links} - 1`
+				target=`"${EXPR}" ${cat} + ${links} - 1`
 				#echo "  cat range  = ${cat} to ${target}"
 				while [ ${cat} -le ${target} ] ; do
 					# Inner loop: We transfer a FROM/TO pair in every pass through this loop. 
@@ -2946,7 +2977,7 @@ ${tmp_vect_links}
 					get_label "${GIS_OPT_INPUT}" "${key}"
 					from_lbl="${LABEL}"
 					for cur in $PRIMARY_KEYS ; do
-						res=`echo "${previous}" | ${GREP} " ${cur} " -c`						
+						res=`echo "${previous}" | "${GREP}" " ${cur} " -c`						
 						if [ $res -eq 0 ] ; then # Key not found on list of previously transfered keys: Transfer as new TO key in FROM/TO pair.
 							#echo "PREV='$previous'"
 							#echo -e "cur='$cur'\n"
@@ -2963,16 +2994,16 @@ ${tmp_vect_links}
 							${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_TO_LBL}" value="${to_lbl}" where="${LINKS_FLD_KEY}=${cat}" --quiet
 							check_error "Failed to upload attribute '${LINKS_FLD_TO_LBL}' to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
 							g.message -p "${cat} ${lines} 1"
-							cat=`${EXPR} ${cat} + 1`							
+							cat=`"${EXPR}" ${cat} + 1`							
 						fi
 					done
 				done
-				links=`${EXPR} ${links} - 1`
+				links=`"${EXPR}" ${links} - 1`
 			fi
-			step=`${EXPR} ${step} + 1`			
+			step=`"${EXPR}" ${step} + 1`			
 			#g.message -p "${step} ${NUM_INPUT_NODES} 1"
 		else # Last point reached: Do not process!
-			step=`${EXPR} ${step} + 1`
+			step=`"${EXPR}" ${step} + 1`
 		fi
 	done	
 	
@@ -3018,7 +3049,7 @@ ${tmp_vect_links}
 			fi			
 			#r.cost -k -n input="${GIS_OPT_COSTMAP}" start_coordinates="${from_coor_x},${from_coor_y}" stop_coordinates="${to_coor_x},${to_coor_y}" output="${TMP_RAST_COST_MIN}" --o --quiet						
 			#check_error "Failed to compute cost surface from ${from_coor_x},${from_coor_y} to ${to_coor_x},${to_coor_y} (path no. ${step})."
-			#costval=`r.what map="${TMP_RAST_COST_MIN}" coordinates="${to_coor_x},${to_coor_y}" separator="|" --quiet | ${AWK} -F "|" '{ print $4 }'`
+			#costval=`r.what map="${TMP_RAST_COST_MIN}" coordinates="${to_coor_x},${to_coor_y}" separator="|" --quiet | "${AWK}" -F "|" '{ print $4 }'`
 			#check_error "Failed to query cost surface at ${to_coor_x},${to_coor_y} (path no. ${step})."
 			#if [ -z $costval ] ; then
 			#	exit_error "No data at cost surface at ${to_coor_x},${to_coor_y} (path no. ${step})."
@@ -3027,7 +3058,7 @@ ${tmp_vect_links}
 			check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
 			#echo "Cost:   $costval"
 			g.message -p "${step} ${lines} 1"
-			step=`${EXPR} ${step} + 1`
+			step=`"${EXPR}" ${step} + 1`
 		done
 	fi
 	
@@ -3053,13 +3084,13 @@ ${tmp_vect_links}
 			check_error "Failed to query attribute table of links output map."
 			num_cats=0
 			for line in $RECS ; do
-				num_cats=`${EXPR} ${num_cats} + 1`
-				max_cat=${line}
+				num_cats=`"${EXPR}" ${num_cats} + 1`
+				max_cat="${line}"
 			done
-			max_cat=`${EXPR} ${max_cat} + 1`
+			max_cat=`"${EXPR}" ${max_cat} + 1`
 			offset=1
 			for line in $RECS ; do
-				new_cat=`${EXPR} ${max_cat} - ${offset}`
+				new_cat=`"${EXPR}" ${max_cat} - ${offset}`
 				#echo "{$key}: ${line}=$new_cat"
 				if [ ${new_cat} -ne ${line} ] ; then
 					if [ ${new_cat} -eq ${line_old} ] && [ ${line} -eq ${new_cat_old} ] ; then
@@ -3084,10 +3115,10 @@ ${tmp_vect_links}
 				fi
 				line_old=$line
 				new_cat_old=$new_cat
-				offset=`${EXPR} ${offset} + 1`
+				offset=`"${EXPR}" ${offset} + 1`
 			done
 			g.message -p "${step} ${NUM_INPUT_NODES} 1"
-			step=`${EXPR} ${step} + 1`
+			step=`"${EXPR}" ${step} + 1`
 		done
 	fi
 
@@ -3184,10 +3215,10 @@ model_delaunay () {
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
 			check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
-			links_droprow ${cat}
+			links_droprow "${cat}"
 		fi
 		g.message -p "${step} ${lines} 1"
-		step=`${EXPR} ${step} + 1`
+		step=`"${EXPR}" ${step} + 1`
 	done
 
 	# In case that any rows were dropped, we need to copy the temporary
@@ -3230,10 +3261,10 @@ model_linkdist () {
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
 			check_error "Failed to delete link with '${GRASS_PKEY}=${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
-			links_droprow ${cat}
+			links_droprow "${cat}"
 		fi
 		g.message -p "${step} ${lines} 1"
-		step=`${EXPR} ${step} + 1`
+		step=`"${EXPR}" ${step} + 1`
 	done
 	
 	# In case that any rows were dropped, we need to copy the temporary
@@ -3285,7 +3316,7 @@ model_nn () {
 				GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${key}" -c --quiet`			
 			fi		
 			check_error "Failed to query field '${GIS_OPT_SIZE}' of input nodes map (key='$key')."
-			grep_is_positive ${GIS_OPT_NEIGHBORS}
+			grep_is_positive "${GIS_OPT_NEIGHBORS}"
 			if [ -z ${GREP_VALUE} ] ; then
 				exit_error "Invalid 'size' for input point with 'key'='${key}': Must be larger than '0'."
 			fi
@@ -3310,8 +3341,10 @@ model_nn () {
 		check_error "Failed to query fields '${FLD_DIST}' and '${LINKS_FLD_TO_ID}' of links output map (key='${key}')."
 lengths="${lengths_from}
 ${lengths_to}"
-		if [ -n "${lengths}" ] ; then			
-			LIST=`echo "$lengths" | ${AWK} '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`			
+		if [ -n "${lengths}" ] ; then
+			# Sorting with 'asorti(a,b)' not support on macOS' AWK, so we use 'sort' here.
+			# LIST=`echo "$lengths" | "${AWK}" '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
+			LIST=`echo "$lengths" | "${SORT}" -n`
 			if [ -n "${LIST}" ] ; then
 				#echo "$LIST"
 				# Now get GRASS primary keys (cat) for all links connected FROM this node via 'from_id':
@@ -3345,23 +3378,23 @@ ${CATS_TO}"
 							for cur in $LIST ; do
 								if [ "$cur" = "$len" ] ; then
 									if [ $neighbor -lt ${GIS_OPT_NEIGHBORS} ] ; then										
-										connected=`${EXPR} ${connected} + 1`
+										connected=`"${EXPR}" ${connected} + 1`
 										#echo "connected: $cat ($neighbor) = $len"
 										# Mark this link as "keep":
 										${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="1" where="cat=${cat}" --quiet
 										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."										
 									fi
 								fi
-								neighbor=`${EXPR} ${neighbor} + 1` # Advance to next neighbor.
+								neighbor=`"${EXPR}" ${neighbor} + 1` # Advance to next neighbor.
 							done							
 						fi						
 					done
 				fi
 			fi
 			g.message -p "${step} ${NUM_INPUT_NODES} 1"
-			step=`${EXPR} ${step} + 1`
+			step=`"${EXPR}" ${step} + 1`
 		fi
-	done
+	done	
 	
 	# Now we delete all the links that are not marked "keep=1"
 	CATS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_keep}=0" -c`
@@ -3374,7 +3407,7 @@ ${CATS_TO}"
 		v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
 		check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
 		# Drop associated row of attribute table from links map:
-		links_droprow ${cat}
+		links_droprow "${cat}"
 	done
 
 	# Drop column "keep", we don't need it any longer.
@@ -3403,7 +3436,7 @@ model_xtent () {
 	# Find min/max values of C in attribute table.
 	Cmin=""
 	Cmax=""
-	result=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | ${GREP} -w "${GIS_OPT_SIZE}" | ${GREP} -c "|${GIS_OPT_SIZE}"`
+	result=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${GIS_OPT_SIZE}" | "${GREP}" -c "|${GIS_OPT_SIZE}"`
 	check_error "Failed to get columns info for nodes input vector map ('${GIS_OPT_INPUT}')."
 	if [ ${result} -gt 0 ] ; then		
 		VALUES=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" -c --quiet`
@@ -3440,7 +3473,7 @@ model_xtent () {
 			from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${from_id}" -c --quiet`			
 		fi
 		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
-		grep_is_positive ${from_size}
+		grep_is_positive "${from_size}"
 		if [ -z ${GREP_VALUE} ] ; then
 			exit_error "Invalid 'size' for input point with 'key'='${from_id}': Must be larger than '0'."
 		fi
@@ -3454,7 +3487,7 @@ model_xtent () {
 			to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${to_id}" -c --quiet`
 			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		fi
-		grep_is_positive ${to_size}
+		grep_is_positive "${to_size}"
 		if [ -z ${GREP_VALUE} ] ; then
 			exit_error "Invalid 'size' for input point with 'key'='${to_id}': Must be larger than '0'."
 		fi		
@@ -3472,20 +3505,20 @@ model_xtent () {
 		dist="${AWK_VALUE}" # weighted distance
 		# 'davg' is the _average_ length of links in complete network; by default, this is the arithmetic mean
 		if [ "${RUNMODE_COST}" != "TRUE" ] ; then
-			davg=${net_len_mean_unreduced} # Default
+			davg="${net_len_mean_unreduced}" # Default
 		else
-			davg=${net_cost_mean_unreduced} # Default
+			davg="${net_cost_mean_unreduced}" # Default
 		fi		
 		if [ "${GIS_OPT_AVG}" = "median" ] ; then
 			# Choice: Use median
 			if [ "${RUNMODE_COST}" != "TRUE" ] ; then			
-				davg=${net_len_median_unreduced}
+				davg="${net_len_median_unreduced}"
 			else				
-				davg=${net_cost_median_unreduced}
+				davg="${net_cost_median_unreduced}"
 			fi
 		fi
 		awk_calc "($C*($davg/$Cmax))-($dist)"
-		I=${AWK_VALUE} # must be > 0 to connect		
+		I="${AWK_VALUE}" # must be > 0 to connect		
 		# DEBUG
 		#echo "LINK cat: $cat"		
 		#echo "  from_id=$from_id"
@@ -3511,10 +3544,10 @@ model_xtent () {
 			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
 			check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
 			# Drop associated row of attribute table from links map:
-			links_droprow ${cat}
+			links_droprow "${cat}"
 		fi
 		g.message -p "${step} ${lines} 1"
-		step=`${EXPR} ${step} + 1`
+		step=`"${EXPR}" ${step} + 1`
 	done
 	
 	# In case that any rows were dropped, we need to copy the temporary
@@ -3617,7 +3650,7 @@ check_environment
 preprocess
 
 # Keep track of starting time.
-START=`${DATE}`
+START=`"${DATE}"`
 
 # GO!
 #GIS_OPT_INPUT is the input points map: Its handle has been set by check_input()!
@@ -3717,7 +3750,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 				done
 				# Progress update
 				g.message -p "${step} ${NUM_INPUT_NODES} 1"
-				step=`${EXPR} ${step} + 1`
+				step=`"${EXPR}" ${step} + 1`
 			done
 		fi
 		if [ ${TRIGGER_ATTR_COST} == "TRUE" ] ; then
@@ -3781,7 +3814,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 				check_error "Failed to update field '${LINKS_FLD_COST}' in copy of initial links map."
 				# Progress update
 				g.message -p "${step} ${points} 1"
-				step=`${EXPR} ${step} + 1`
+				step=`"${EXPR}" ${step} + 1`
 			done
 			RUNMODE_COST="TRUE" # cost attribute exists now
 		fi
@@ -3794,14 +3827,14 @@ fi
 stats_unreduced
 
 # Decide which attribute field to read for distance threshold
-FLD_DIST=${LINKS_FLD_LEN_M} # Default
+FLD_DIST="${LINKS_FLD_LEN_M}" # Default
 UNITS_DIST="m"
 if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-	FLD_DIST=${LINKS_FLD_COST} # Default if costmap is provided
+	FLD_DIST="${LINKS_FLD_COST}" # Default if costmap is provided
 	UNITS_DIST="cost"		
 fi
 if [ ${GIS_FLAG_M} -eq 1 ] ; then
-	FLD_DIST=${LINKS_FLD_LEN_M} # Force distance units to be meters if '-m' flag is given
+	FLD_DIST="${LINKS_FLD_LEN_M}" # Force distance units to be meters if '-m' flag is given
 	UNITS_DIST="m"
 fi
 
@@ -3883,13 +3916,13 @@ for key in ${PRIMARY_KEYS} ; do
 			n_strength=0
 			#echo $NLIST
 			for val in $NLIST ; do
-				n_strength=`${EXPR} ${n_strength} + ${val}`				
+				n_strength=`"${EXPR}" ${n_strength} + ${val}`				
 			done
 			#echo "[$key] NSTR = $n_strength"
 		fi
 		# TODO: Use SQL OR here, instead of querying from/to separately! 
-		from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID='$key'" -c | ${GREP} "${key}" -c`
-		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID='$key'" -c | ${GREP} "${key}" -c`
+		from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID='$key'" -c | "${GREP}" "${key}" -c`
+		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID='$key'" -c | "${GREP}" "${key}" -c`
 		from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_FROM_ID='$key'" -c`
 		to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_TO_ID='$key'" -c`
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
@@ -3902,13 +3935,13 @@ for key in ${PRIMARY_KEYS} ; do
 			n_strength=0
 			#echo $NLIST
 			for val in $NLIST ; do
-				n_strength=`${EXPR} ${n_strength} + ${val}`				
+				n_strength=`"${EXPR}" ${n_strength} + ${val}`				
 			done
 			#echo "[$key] NSTR = $n_strength"
 		fi
 		# TODO: Use SQL OR here, instead of querying from/to separately!
-		from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID=$key" -c | ${GREP} "${key}" -c`
-		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID=$key" -c | ${GREP} "${key}" -c`
+		from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID=$key" -c | "${GREP}" "${key}" -c`
+		to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID=$key" -c | "${GREP}" "${key}" -c`
 		from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_FROM_ID=$key" -c`
 		to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_TO_ID=$key" -c`
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
@@ -3917,45 +3950,45 @@ for key in ${PRIMARY_KEYS} ; do
 		fi
 	fi
 	# Update subnetwork metrics: number of links, total length and cost of links connected to current node.
-	num_links=`${EXPR} ${from_links} + ${to_links}`
+	num_links=`"${EXPR}" ${from_links} + ${to_links}`
 	if [ $num_links -gt 0 ] ; then
-		subnet_nodes=`${EXPR} ${subnet_nodes} + 1`
-		subnet_links=`${EXPR} ${subnet_links} + ${num_links}`
+		subnet_nodes=`"${EXPR}" ${subnet_nodes} + 1`
+		subnet_links=`"${EXPR}" ${subnet_links} + ${num_links}`
 	fi	
 	total_len=0
 	total_cost=0
 	avg_len=0
 	avg_cost=0
 	OLD_IFS="$IFS"
-	IFS=$(echo -en "\n\b")
+	IFS=$'\n\b"'
 	for i in $from_len ; do
 		awk_calc "$total_len+$i"
-		total_len=${AWK_VALUE}
+		total_len="${AWK_VALUE}"
 		awk_calc "$subnet_len+$total_len"
-		subnet_len=${AWK_VALUE}
+		subnet_len="${AWK_VALUE}"
 	done	
 	for i in $to_len ; do
 		awk_calc "$total_len+$i"
-		total_len=${AWK_VALUE}
+		total_len="${AWK_VALUE}"
 	done	
 	if [ $num_links -gt 0 ] ; then
 		awk_calc "$total_len/$num_links"
-		avg_len=${AWK_VALUE}
+		avg_len="${AWK_VALUE}"
 	fi
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		for i in $from_cost ; do
 			awk_calc "$total_cost+$i"
-			total_cost=${AWK_VALUE}
+			total_cost="${AWK_VALUE}"
 			awk_calc "$subnet_cost+$total_cost"
-			subnet_cost=${AWK_VALUE}
+			subnet_cost="${AWK_VALUE}"
 		done
 		for i in $to_cost ; do
 			awk_calc "$total_cost+$i"
-			total_cost=${AWK_VALUE}
+			total_cost="${AWK_VALUE}"
 		done
 		if [ $num_links -gt 0 ] ; then
 			awk_calc "$total_cost/$num_links"
-			avg_cost=${AWK_VALUE}
+			avg_cost="${AWK_VALUE}"
 		fi		
 	fi
 	IFS="$OLD_IFS"
@@ -3990,11 +4023,11 @@ for key in ${PRIMARY_KEYS} ; do
 			v.edit map="${GIS_OPT_NODES}" layer="1" type="point" tool="delete" cats="${cat}" --quiet
 			check_error "Failed to delete node with 'cat=${cat}' from nodes output vector map ."
 			# Drop associated row of attribute table from nodes map:
-			nodes_droprow ${cat}
+			nodes_droprow "${cat}"
 		fi			
 	fi
 	g.message -p "${step} ${points} 1"
-	step=`${EXPR} ${step} + 1`
+	step=`"${EXPR}" ${step} + 1`
 done
 
 # Compute statistics for reduced network (if applicable)
@@ -4002,7 +4035,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	# Update output nodes count
 	eval `v.info -t map="${GIS_OPT_NODES}" layer="1"`
 	check_error "Failed to get topology info for nodes output vector map ('${GIS_OPT_NODES}')."
-	net_nodes_reduced=${points}
+	net_nodes_reduced="${points}"
 	# Compute statistics
 	# Get global statistics for reduced network.
 	g.message -i "Computing statistics for reduced network:"
@@ -4029,7 +4062,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		awk_max "${max_len}" "${len}"
 		max_len="${AWK_VALUE}"
 		awk_calc "$total_len+$len"
-		total_len=${AWK_VALUE}
+		total_len="${AWK_VALUE}"
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="${GRASS_PKEY}=${cat}" -c --quiet`
 			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (where '${GRASS_PKEY}=${cat}')"
@@ -4038,28 +4071,28 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 			awk_max "${max_cost}" "${cost}"
 			max_cost="${AWK_VALUE}"
 			awk_calc "$total_cost+$cost"
-			total_cost=${AWK_VALUE}
+			total_cost="${AWK_VALUE}"
 		fi
 		g.message -p "${step} ${lines} 1"
-		step=`${EXPR} ${step} + 1`
+		step=`"${EXPR}" ${step} + 1`
 	done	
-	net_links_reduced=${lines}
-	net_len_reduced=${total_len}
+	net_links_reduced="${lines}"
+	net_len_reduced="${total_len}"
 	net_len_min_reduced="${min_len}"
 	net_len_max_reduced="${max_len}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		net_cost_reduced=${total_cost}
+		net_cost_reduced="${total_cost}"
 		net_cost_min_reduced="${min_cost}"
 		net_cost_max_reduced="${max_cost}"
 	fi
 	# Compute mean(s)
 	awk_calc "(${lines}*2)/${net_nodes_reduced}"
-	net_cons_mean_reduced=${AWK_VALUE}
+	net_cons_mean_reduced="${AWK_VALUE}"
 	awk_calc "$total_len/$lines"
-	net_len_mean_reduced=${AWK_VALUE}
+	net_len_mean_reduced="${AWK_VALUE}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		awk_calc "$total_cost/$lines"
-		net_cost_mean_reduced=${AWK_VALUE}
+		net_cost_mean_reduced="${AWK_VALUE}"
 	fi
 	# Compute median(s)
 	lengths=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" -c`
@@ -4068,7 +4101,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	if [ -z "${AWK_VALUE}" ] ; then
 		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
 	fi
-	net_len_median_reduced=${AWK_VALUE}
+	net_len_median_reduced="${AWK_VALUE}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" -c`
 		check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GIS_OPT_LINKS})."
@@ -4076,7 +4109,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		if [ -z "${AWK_VALUE}" ] ; then
 			exit_error "No cost data found in attribute table of links output layer (${GIS_OPT_LINKS})."
 		fi
-		net_cost_median_reduced=${AWK_VALUE}
+		net_cost_median_reduced="${AWK_VALUE}"
 	fi
 fi
 
@@ -4127,7 +4160,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	# We need this to compute the min/max number of connections across all nodes.
 	net_cons_min_reduced=""
 	net_cons_max_reduced=""
-	result=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | ${GREP} -w "${NODES_FLD_LINKS}" | ${GREP} -c "|${NODES_FLD_LINKS}"`
+	result=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LINKS}" | "${GREP}" -c "|${NODES_FLD_LINKS}"`
 	check_error "Failed to get columns info for nodes output vector map ('${GIS_OPT_NODES}')."
 	if [ ${result} -gt 0 ] ; then		
 		LINKS=`v.db.select map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LINKS}" -c --quiet`	
@@ -4205,7 +4238,7 @@ clean_up
 # Show processing time.
 g.message -i "Success."
 g.message -i "Started: ${START}"
-END=`${DATE}`
+END=`"${DATE}"`
 g.message -i "Completed: ${END}"
 
 # Exit with status "OK"
