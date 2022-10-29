@@ -45,8 +45,8 @@
 ##%  key: c
 ##%  description: Connect distant nodes to links if reachable
 ##%End
-#DELETE ME: This is only so that the shell tests don't freak out
-#if the variable is not defined.
+#DELETE ME: This is only defined, so that the shell tests don't freak out
+#if the variable is not defined. Remove once implemented!
 GIS_FLAG_C=0
 
 #%Flag
@@ -340,6 +340,12 @@ fi
 # Check if we are running under old GRASS 6
 GRASS_V6=`g.version -e | "${GREP}" "GRASS 6"`
 
+# Check if we are running under old GRASS 7
+GRASS_V7=`g.version -e | "${GREP}" "GRASS 7"`
+
+# Check if we are running under old GRASS 8
+GRASS_V8=`g.version -e | "${GREP}" "GRASS 8"`
+
 if [ -n "$GRASS_V6" ] ; then
 	g.message -e "This script requires GRASS GIS version 7 or higher."
 	exit ${EXIT_ERROR}
@@ -350,15 +356,15 @@ TMP_PREFIX="tmp_${MODULE_NAME}_`echo $$`_d"
 
 # Names of temporary maps (VECTOR)
 TMP_VECT_NODES="${TMP_PREFIX}_v_nodes" 					# Input nodes (after WHERE and layer= options applied)
-TMP_VECT_REGION="${TMP_PREFIX}_v_region" 					# Polygon that represents bbox of current GRASS region
-TMP_VECT_SELECT="${TMP_PREFIX}_v_select" 					# Input points reduced to those in current region
+TMP_VECT_REGION="${TMP_PREFIX}_v_region" 				# Polygon that represents bbox of current GRASS region
+TMP_VECT_SELECT="${TMP_PREFIX}_v_select" 				# Input points reduced to those in current region
 TMP_VECT_EXTRACT="${TMP_PREFIX}_v_extract" 				# Feature(s) extracted from input vector map
-TMP_VECT_EXTRACT2="${TMP_PREFIX}_v_extract" 				# Feature(s) extracted from input vector map (2)
+TMP_VECT_EXTRACT2="${TMP_PREFIX}_v_extract" 			# Feature(s) extracted from input vector map (2)
 TMP_VECT_LINKS="${TMP_PREFIX}_v_links" 					# Newly created network links (lines)
 TMP_VECT_LINKS_ADD="${TMP_PREFIX}_v_links_add" 			# Additional network links (lines) to add to links output map
 TMP_VECT_LINKS_CAT="${TMP_PREFIX}_v_links_cat" 			# Network links (lines) with rebuilt category IDs
 TMP_VECT_LINKS_COSTS="${TMP_PREFIX}_v_links_costs" 		# Stores from-to costs for each pair of links (cost-based mode only)
-TMP_VECT_LINKS_SMOOTH="${TMP_PREFIX}_v_smoothed" 			# Smoothed least-cost paths
+TMP_VECT_LINKS_SMOOTH="${TMP_PREFIX}_v_smoothed" 		# Smoothed least-cost paths
 TMP_VECT_LINKS_CLEAN="${TMP_PREFIX}_v_cleaned" 			# Cleaned least-cost paths
 TMP_VECT_LINKS_DROPROW_1="${TMP_PREFIX}_v_l_droprow_1" 	# Links with row dropped from table
 TMP_VECT_LINKS_DROPROW_2="${TMP_PREFIX}_v_l_droprow_2" 	# Links with row dropped from table (swapped)
@@ -366,8 +372,8 @@ TMP_VECT_LINKS_DELAUNAY_P="${TMP_PREFIX}_v_delaunay_p" 	# Delaunay mesh (polygon
 TMP_VECT_LINKS_DELAUNAY_L="${TMP_PREFIX}_v_delaunay_l" 	# Delaunay mesh (lines)
 TMP_VECT_NODES_DROPROW_1="${TMP_PREFIX}_v_n_droprow_1" 	# Nodes with row dropped from table
 TMP_VECT_NODES_DROPROW_2="${TMP_PREFIX}_v_n_droprow_2"	# Nodes with row dropped from table (swapped)
-TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 			# BASE name of one vector map patch for model_complete
-TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 			# BASE name of one vector map patch for model_complete
+TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 		# BASE name of one vector map patch for model_complete
+TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 		# BASE name of one vector map patch for model_complete
 
 # Names of temporary maps (RASTER)
 TMP_RAST_COST_RSP="${TMP_PREFIX}_r_cost_rsp" # Resampled version of original cost raster map
@@ -378,15 +384,18 @@ TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost
 TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
 TMP_RAST_RSTLNKS1="${TMP_PREFIX}_r_rstlnks1" # Rasterized link from map supplied via "initial="
 TMP_RAST_RSTLNKS2="${TMP_PREFIX}_r_rstlnks2" # Rasterized link from map supplied via "initial=" (version 2)
-TMP_RAST_MAPCALC1="${TMP_PREFIX}_r_mapcalc1"   # Temporary output of an r.mapcalc run (1)
+TMP_RAST_MAPCALC1="${TMP_PREFIX}_r_mapcalc1" # Temporary output of an r.mapcalc run (1)
+
+# Names of temporary fields
+TMP_FLD_DIST="${TMP_PREFIX}_f_dist" # Dummy field for mandatory 'upload=' option of v.distance.
 
 # Names of temporary regions
 TMP_GEN_REGION_ORG="${TMP_PREFIX}_g_region_org" # Original region settings
 
 # Reserved names of attribute table fields that will be added to LINKS output map
 LINKS_FLD_KEY="cat"				# Default GRASS primary key
-LINKS_FLD_FROM_ID="from_id"	# ID of start node
-LINKS_FLD_TO_ID="to_id"		# ID of end node
+LINKS_FLD_FROM_ID="from_id"		# ID of start node
+LINKS_FLD_TO_ID="to_id"			# ID of end node
 LINKS_FLD_FROM_LBL="from_lbl"	# Label (name) of start node
 LINKS_FLD_TO_LBL="to_lbl"		# Label (name) of end node
 LINKS_FLD_FROM_X="from_x"		# X coordinates of start node.
@@ -401,10 +410,10 @@ LINKS_FLD_STRENGTH="strength"	# Link strength (number of similarities: will only
 # Reserved names of attribute table fields that will be added to NODES output map
 NODES_FLD_COORD_X="coordx" 		# Input node X coordinate
 NODES_FLD_COORD_Y="coordy" 		# Input node Y coordinate
-NODES_FLD_LINKS="links" 			# Number of links connected to node
-NODES_FLD_LEN_SUM="len_sum" 		# Sum of lengths of links connected to node
-NODES_FLD_LEN_AVG="len_mean" 		# Mean length of links connected to node
-NODES_FLD_COST_SUM="cost_sum" 		# Sum of costs of links connected to node
+NODES_FLD_LINKS="links" 		# Number of links connected to node
+NODES_FLD_LEN_SUM="len_sum" 	# Sum of lengths of links connected to node
+NODES_FLD_LEN_AVG="len_mean" 	# Mean length of links connected to node
+NODES_FLD_COST_SUM="cost_sum" 	# Sum of costs of links connected to node
 NODES_FLD_COST_AVG="cost_mean" 	# Mean cost of links connected to node
 NODES_FLD_NSTRENGTH="nstrength"	# Sum of 'strength' of all links connected to node (model 'attsim')
 
@@ -2682,6 +2691,11 @@ model_complete () {
 		check_error "Failed to add attribute field '${LINKS_FLD_TO_ID}' (type '${KEY_TYPE}') to temporary vector map for storing link costs."
 		# Set primary key (GRASS default 'cat' column) value for first upload of cost value. 
 		cat_cost=1
+	else
+		# Straight-line (Euclidean) links: Add a temporary field for 'distance to nearest feature'.
+		# This is only required because 'v.distance' has a mandatory 'upload=' option since GRASS 8.
+		${V_DB_ADDCOLUMN} map="${GIS_OPT_INPUT}" layer="1" columns="${TMP_FLD_DIST} double precision" --quiet
+		check_error "Failed to add temporary attribute field '${TMP_FLD_DIST}' (type 'double precision') to copy of input map."
 	fi
 	# Initialize 'no data' representation for primary keys as empty string.
 	no_data=
@@ -2807,8 +2821,12 @@ ${tmp_vect_links}
 					r.path input="${TMP_RAST_COST_DIR}" format="degree" vector_path="${tmp_vect_links}" start_points="${GIS_OPT_INPUT}" --overwrite --quiet						
 					check_error "Failed to compute least cost paths (iteration ${step})."
 				else
-					# We are running in straight-line links (Euclidean) mode:
-					v.distance from="${GIS_OPT_INPUT}" from_layer="1" from_type="point" to="${TMP_VECT_EXTRACT}" to_layer="1" to_type="point" output="${tmp_vect_links}" --overwrite --quiet
+					# We are running in straight-line links (Euclidean) mode: Create link as a new straight-line
+					# connection, using 'v.distance output='.
+					# NOTE: Since GRASS 8, 'upload=' is a mandatory option. So it is used here to upload the
+					# distance to the nearest feature into a dummy (temporary) attribute field, even though
+					# this is not a necessary operation in our context.
+					v.distance from="${GIS_OPT_INPUT}" from_layer="1" from_type="point" to="${TMP_VECT_EXTRACT}" to_layer="1" to_type="point" upload="dist" column="${TMP_FLD_DIST}" output="${tmp_vect_links}" --overwrite --quiet
 					check_error "Failed to connect point with primary key value '${key}' to all other points of input vector map."
 				fi									
 				# Smooth output path '-s' flag given (we do this before adjusting link nodes to original points!):
