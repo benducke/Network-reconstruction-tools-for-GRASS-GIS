@@ -736,7 +736,7 @@ get_grass_cats () {
 	eval_ws_safe "${cmd}" "attribute_primary_key"
 	if [ -z "${EVAL_RESULT}" ] ; then
 		exit_error "Failed to retrieve name of GRASS primary key column for vector map '$1'."
-	fi	
+	fi
 	GRASS_CATS=`v.db.select map="$1" columns="${EVAL_RESULT}" -c --quiet`
 	GRASS_PKEY="${EVAL_RESULT}"
 	check_error "Failed to retrieve list of GRASS primary keys (map='$1')."
@@ -815,6 +815,97 @@ get_where_clause_inv () {
 		WHERE="${GIS_OPT_KEY}<>'$1'"
 	else
 		WHERE="${GIS_OPT_KEY}<>$1"
+	fi
+}
+
+
+# FUNCTION
+# add_index: Adds an index for an attribute table to speed up query operations.
+#            This will only work if the driver supports it (SQLite or PostgreSQL).
+#            Only the attribute table connected to layer 1 is supported.
+#
+#            This function reads two arguments:
+#				$1 -- name of GRASS vector map that has the attibute table
+#				$2 -- name of field for which to add the index
+#
+#            This function returns nothing. It will abort the program if there
+#            is a fundamental problem with the map and/or its table.
+#            It will only warn if the index could not be build (performance impairment only).
+#
+add_index () {
+	cmd=`v.info -e map="${1}" layer="1"`
+	check_error "Failed to query vector map '$1' for extended metadata (build index)."
+	
+	# Get DB driver name:
+	eval_ws_safe "${cmd}" "attribute_database_driver"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve driver of database connection for vector map '1' (build index)."
+	fi
+	attribute_database_driver="${EVAL_RESULT}"
+	# Index building is only supported for some drivers!	
+	if [ "${attribute_database_driver}" = "pg" ] || [ "${attribute_database_driver}" = "sqlite" ] ; then
+		# Get name of connected database:
+		eval_ws_safe "${cmd}" "attribute_database"
+		if [ -z "${EVAL_RESULT}" ] ; then
+			exit_error "Failed to retrieve name of database connection for vector map '$1' (build index)."
+		fi
+		attribute_database="${EVAL_RESULT}"
+		# Get name of connected table:
+		eval_ws_safe "${cmd}" "attribute_table"
+		if [ -z "${EVAL_RESULT}" ] ; then
+			exit_error "Failed to retrieve name of database table for vector map '1' (build index)."
+		fi
+		attribute_table="${EVAL_RESULT}"	
+		# Build index for specified map and field.
+		db.execute sql="CREATE INDEX ${attribute_table}_${2}_idx ON ${attribute_table}($2)" database="${attribute_database}"
+	else
+		# Driver not supported: Warn.
+		g.message -w "Cannot build an index for database connections of type '${attribute_database_driver}'."
+	fi
+}
+
+
+# FUNCTION
+# del_index: Deletes (drops) an index for an attribute table.
+#            This will only work if the driver supports it (SQLite or PostgreSQL).
+#            Only the attribute table connected to layer 1 is supported.
+#
+#            This function reads two arguments:
+#				$1 -- name of GRASS vector map that has the attibute table
+#				$2 -- name of field for which to delete the index
+#
+#            This function returns nothing. It will abort the program if there
+#            is a fundamental problem with the map and/or its table.
+#
+del_index () {
+	cmd=`v.info -e map="${1}" layer="1"`
+	check_error "Failed to query vector map '$1' for extended metadata (build index)."
+	
+	# Get DB driver name:
+	eval_ws_safe "${cmd}" "attribute_database_driver"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve driver of database connection for vector map '1' (drop index)."
+	fi
+	attribute_database_driver="${EVAL_RESULT}"
+	# Index dropping is only supported for some drivers!	
+	if [ "${attribute_database_driver}" = "pg" ] || [ "${attribute_database_driver}" = "sqlite" ] ; then
+		# Get name of connected database:
+		eval_ws_safe "${cmd}" "attribute_database"
+		if [ -z "${EVAL_RESULT}" ] ; then
+			exit_error "Failed to retrieve name of database connection for vector map '$1' (drop index)."
+		fi
+		attribute_database="${EVAL_RESULT}"
+		# Get name of connected table:
+		eval_ws_safe "${cmd}" "attribute_table"
+		if [ -z "${EVAL_RESULT}" ] ; then
+			exit_error "Failed to retrieve name of database table for vector map '1' (drop index)."
+		fi
+		attribute_table="${EVAL_RESULT}"	
+		# Delete index for specified map and field.
+		db.execute sql="DROP INDEX ${attribute_table}_${2}_idx" database="${attribute_database}"
+	else
+		# Driver not supported: Warn.
+		g.message -w "Cannot drop an index for database connections of type '${attribute_database_driver}'."
 	fi
 }
 
@@ -2848,23 +2939,6 @@ ${tmp_vect_links}
 					#NUM_LINKS=`"${EXPR}" ${NUM_LINKS} - 1`
 				fi
 				
-				#DELETE: Obsolete code (implemented sequentical patching below)
-				# Add new links to existing ones
-				#clean_links # Just to suppress useless overwrite warning
-				#DELETE: Obsolete code (implemented sequentical patching below)
-				#if [ ${step} -gt 1 ] ; then # Second and later iterations: We must PATCH the output of this iteration!
-				#	v.patch input="${TMP_VECT_LINKS},${TMP_VECT_LINKS_ADD}" output="${GIS_OPT_LINKS}" --overwrite --quiet
-				#	check_error "Failed to add to network links map for next iteration (${step} of ${NUM_INPUT_NODES})."
-				#	# Overwrite links map with patched map for next iteration
-				#	g.remove type="vector" name="${TMP_VECT_LINKS}" -f --quiet
-				#	g.copy vector="${GIS_OPT_LINKS},${TMP_VECT_LINKS}" --overwrite --quiet
-				#	check_error "Failed to copy patched network links map for next iteration (${step} of ${NUM_INPUT_NODES})."
-				#else
-				#	# First iteration: We do not have to patch the output of this iteration.
-				#	g.copy vector="${TMP_VECT_LINKS},${GIS_OPT_LINKS}" --overwrite --quiet
-				#	check_error "Failed to add to network links map for next iteration (${step} of ${NUM_INPUT_NODES})."
-				#fi											
-				
 				# Remove some temp maps immediately so we do not get overwrite warnings during next iteration:
 				g.remove type="vector" name="${TMP_VECT_EXTRACT}" -f --quiet
 				
@@ -2957,7 +3031,8 @@ ${tmp_vect_links}
 	# just as we have just done, and to 'reconstruct' the 'rythm'
 	# To do this, we can rely on two simple properties of the links map:
 	# 1. Number of links(x) in fully connected network: x = n(n - 1) / 2
-	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2), etc.
+	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2), etc.	
+	
 	g.message -i "Transferring input point attributes to output lines (links):"
 	# Step through all points of input map and connect them with each other.
 	previous="" # List of previous primary keys that have already been connected as "TO" nodes.
@@ -2970,6 +3045,10 @@ ${tmp_vect_links}
 										  # each step through the loop.
 	# Step through all nodes in the same order once more; on this pass, we only transfer
 	# some important attributes.
+	
+	#TODO: Add all useful indices to speed up operations							
+	add_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
+	
 	get_primary_keys "${GIS_OPT_INPUT}"
 	for key in $PRIMARY_KEYS ; do
 		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
@@ -3023,7 +3102,10 @@ ${tmp_vect_links}
 		else # Last point reached: Do not process!
 			step=`"${EXPR}" ${step} + 1`
 		fi
-	done	
+	done
+	
+	#TODO: Drop all previously created indices.
+	del_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
 	
 	# Upload link costs (if cost raster given).
 	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
