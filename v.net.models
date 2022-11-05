@@ -820,6 +820,49 @@ get_where_clause_inv () {
 
 
 # FUNCTION
+# get_tbl_info: Retrieves essential information for first attribute table's DB connection
+#				("layer 1") connected to a GRASS vector map. The information is read from
+#				the output of 'v.info'.
+#
+#            	This function reads one argument:
+#					$1 -- name of GRASS vector map that has the attibute table of interest
+#
+#            	This function sets three variables:
+#               	attribute_database_driver = GRASS database driver used for the connection
+#												(same as used/listed by 'db.connect')
+#					attribute_database = the name of the actual DB that stores the table
+#					attribute_table = the name of the linked attribute table in the DB
+#
+#				 It will abort the program if there is a problem with the map and/or its table.            
+#
+get_tbl_info () {
+	cmd=`v.info -e map="${1}" layer="1"`
+	check_error "Failed to query vector map '$1' for extended metadata (build index)."
+	
+	# Get DB driver name:
+	eval_ws_safe "${cmd}" "attribute_database_driver"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve driver of database connection for vector map '1' (build index)."
+	fi
+	attribute_database_driver="${EVAL_RESULT}"
+	
+	# Get name of connected database:
+	eval_ws_safe "${cmd}" "attribute_database"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of database connection for vector map '$1' (build index)."
+	fi
+	attribute_database="${EVAL_RESULT}"
+	
+	# Get name of linked table in conntected DB:
+	eval_ws_safe "${cmd}" "attribute_table"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of database table for vector map '1' (build index)."
+	fi
+	attribute_table="${EVAL_RESULT}"	
+}
+
+
+# FUNCTION
 # add_index: Adds an index for an attribute table to speed up query operations.
 #            This will only work if the driver supports it (SQLite or PostgreSQL).
 #            Only the attribute table connected to layer 1 is supported.
@@ -833,35 +876,24 @@ get_where_clause_inv () {
 #            It will only warn if the index could not be build (performance impairment only).
 #
 add_index () {
-	cmd=`v.info -e map="${1}" layer="1"`
-	check_error "Failed to query vector map '$1' for extended metadata (build index)."
-	
-	# Get DB driver name:
-	eval_ws_safe "${cmd}" "attribute_database_driver"
-	if [ -z "${EVAL_RESULT}" ] ; then
-		exit_error "Failed to retrieve driver of database connection for vector map '1' (build index)."
-	fi
-	attribute_database_driver="${EVAL_RESULT}"
+	# Store existing connection information:
+	attribute_database_driver_BAK="${attribute_database_driver}"
+	attribute_database_BAK="${attribute_database}"
+	attribute_table_BAK="${attribute_table}"
+	# Get fresh info for this function:
+	get_tbl_info "$1"
 	# Index building is only supported for some drivers!	
-	if [ "${attribute_database_driver}" = "pg" ] || [ "${attribute_database_driver}" = "sqlite" ] ; then
-		# Get name of connected database:
-		eval_ws_safe "${cmd}" "attribute_database"
-		if [ -z "${EVAL_RESULT}" ] ; then
-			exit_error "Failed to retrieve name of database connection for vector map '$1' (build index)."
-		fi
-		attribute_database="${EVAL_RESULT}"
-		# Get name of connected table:
-		eval_ws_safe "${cmd}" "attribute_table"
-		if [ -z "${EVAL_RESULT}" ] ; then
-			exit_error "Failed to retrieve name of database table for vector map '1' (build index)."
-		fi
-		attribute_table="${EVAL_RESULT}"	
+	if [ "${attribute_database_driver}" = "pg" ] || [ "${attribute_database_driver}" = "sqlite" ] ; then		
 		# Build index for specified map and field.
 		db.execute sql="CREATE INDEX ${attribute_table}_${2}_idx ON ${attribute_table}($2)" database="${attribute_database}"
 	else
 		# Driver not supported: Warn.
 		g.message -w "Cannot build an index for database connections of type '${attribute_database_driver}'."
 	fi
+	# Restore existing connection information:
+	attribute_database_driver="${attribute_database_driver_BAK}"
+	attribute_database="${attribute_database_BAK}"
+	attribute_table="${attribute_table_BAK}"}
 }
 
 
@@ -878,35 +910,24 @@ add_index () {
 #            is a fundamental problem with the map and/or its table.
 #
 del_index () {
-	cmd=`v.info -e map="${1}" layer="1"`
-	check_error "Failed to query vector map '$1' for extended metadata (build index)."
-	
-	# Get DB driver name:
-	eval_ws_safe "${cmd}" "attribute_database_driver"
-	if [ -z "${EVAL_RESULT}" ] ; then
-		exit_error "Failed to retrieve driver of database connection for vector map '1' (drop index)."
-	fi
-	attribute_database_driver="${EVAL_RESULT}"
-	# Index dropping is only supported for some drivers!	
-	if [ "${attribute_database_driver}" = "pg" ] || [ "${attribute_database_driver}" = "sqlite" ] ; then
-		# Get name of connected database:
-		eval_ws_safe "${cmd}" "attribute_database"
-		if [ -z "${EVAL_RESULT}" ] ; then
-			exit_error "Failed to retrieve name of database connection for vector map '$1' (drop index)."
-		fi
-		attribute_database="${EVAL_RESULT}"
-		# Get name of connected table:
-		eval_ws_safe "${cmd}" "attribute_table"
-		if [ -z "${EVAL_RESULT}" ] ; then
-			exit_error "Failed to retrieve name of database table for vector map '1' (drop index)."
-		fi
-		attribute_table="${EVAL_RESULT}"	
+	# Store existing connection information:
+	attribute_database_driver_BAK="${attribute_database_driver}"
+	attribute_database_BAK="${attribute_database}"
+	attribute_table_BAK="${attribute_table}"
+	# Get fresh info for this function:
+	get_tbl_info "$1"
+	# Index droppinh is only supported for some drivers!	
+	if [ "${attribute_database_driver}" = "pg" ] || [ "${attribute_database_driver}" = "sqlite" ] ; then		
 		# Delete index for specified map and field.
 		db.execute sql="DROP INDEX ${attribute_table}_${2}_idx" database="${attribute_database}"
 	else
 		# Driver not supported: Warn.
 		g.message -w "Cannot drop an index for database connections of type '${attribute_database_driver}'."
 	fi
+	# Restore existing connection information:
+	attribute_database_driver="${attribute_database_driver_BAK}"
+	attribute_database="${attribute_database_BAK}"
+	attribute_table="${attribute_table_BAK}"}
 }
 
 
@@ -2906,7 +2927,7 @@ ${tmp_vect_links}
 							# Set next primary key value for subsequent upload of cost value
 							cat_cost=`"${EXPR}" ${cat_cost} + 1`
 						fi
-					done					
+					done
 					# Compute least cost vector paths based on directional surface computed above
 					# (end points now become start points, as r.cost has produced back-links!): 
 					r.path input="${TMP_RAST_COST_DIR}" format="degree" vector_path="${tmp_vect_links}" start_points="${GIS_OPT_INPUT}" --overwrite --quiet						
@@ -3043,19 +3064,27 @@ ${tmp_vect_links}
 	links=`"${EXPR}" ${NUM_INPUT_NODES} - 1` # This is the number of links that are connected
 										  # FROM the current node; this number is decreased by 1
 										  # each step through the loop.
+	
 	# Step through all nodes in the same order once more; on this pass, we only transfer
 	# some important attributes.
-	
-	#TODO: Add all useful indices to speed up operations							
+	#
+	# PERFORMANCE: We do not use 'v.db.update' (huge overhead).
+	# Instead, we first build a list of all SQL UPDATE statements, then feed that
+	# into 'db.execute' in one go!
+	#	
+	# Add all useful indices to speed up operations							
 	add_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
 	
+	# Get info for connected database and table:
+	get_tbl_info "${GIS_OPT_LINKS}"
+	# Now transfer attibutes from original input map to links output map!
 	get_primary_keys "${GIS_OPT_INPUT}"
 	for key in $PRIMARY_KEYS ; do
 		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
 			previous="${previous} $key " # Add current key to list of previous keys.
 			#previous=" $key ${previous}" # Add current key to list of previous keys.
  			# Form SQL where to get next primary key value.
-			get_where_clause "${key}"		
+			get_where_clause "${key}"
 			val=`v.db.select map="${GIS_OPT_INPUT}" column="${GIS_OPT_KEY}" where="${WHERE}" -c`
 			check_error "Failed to query attribute table of copy of input points map."
 			if [ -n "${val}" ] ; then # Feature exists! Process it:
@@ -3081,15 +3110,28 @@ ${tmp_vect_links}
 							get_label "${GIS_OPT_INPUT}" "${cur}"
 							to_lbl="${LABEL}"
 							#echo "    $cat: FROM ${key} ('$from_lbl') TO ${cur} ('$to_lbl')"
-							# Now transfer the actual from/to attributes to the output (links) map's table!
-							${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_FROM_ID}" value="${key}" where="${LINKS_FLD_KEY}=${cat}" --quiet
-							check_error "Failed to upload attribute '${LINKS_FLD_FROM_ID}' to links output vector map (value='${key}'; ${LINKS_FLD_KEY}=${cat})."
-							${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_TO_ID}" value="${cur}" where="${LINKS_FLD_KEY}=${cat}" --quiet
-							check_error "Failed to upload attribute '${LINKS_FLD_TO_ID}' to links output vector map (value='${cur}'; ${LINKS_FLD_KEY}=${cat})."
-							${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_FROM_LBL}" value="${from_lbl}" where="${LINKS_FLD_KEY}=${cat}" --quiet
-							check_error "Failed to upload attribute '${LINKS_FLD_FROM_LBL}' to links output vector map (value='${from_lbl}'; ${LINKS_FLD_KEY}=${cat})."
-							${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_TO_LBL}" value="${to_lbl}" where="${LINKS_FLD_KEY}=${cat}" --quiet
-							check_error "Failed to upload attribute '${LINKS_FLD_TO_LBL}' to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
+							# Transfer the actual from/to attributes to the output (links) map's table!
+							SQL=""
+							SQL="${SQL}UPDATE ${attribute_table} SET"
+							SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
+							SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${cur}"
+							SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${from_lbl}'"
+							SQL="${SQL}, ${LINKS_FLD_TO_LBL} = '${to_lbl}'"
+							SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
+							#
+							#TODO: DELETEME: Below are the calls to "v.db.update", which have been replaced by a single SQL statement piped into 'db.execute'!
+							#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_FROM_ID}" value="${key}" where="${LINKS_FLD_KEY}=${cat}" --quiet							
+							#check_error "Failed to upload attribute '${LINKS_FLD_FROM_ID}' to links output vector map (value='${key}'; ${LINKS_FLD_KEY}=${cat})."														
+							#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_TO_ID}" value="${cur}" where="${LINKS_FLD_KEY}=${cat}" --quiet
+							#check_error "Failed to upload attribute '${LINKS_FLD_TO_ID}' to links output vector map (value='${cur}'; ${LINKS_FLD_KEY}=${cat})."														
+							#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_FROM_LBL}" value="${from_lbl}" where="${LINKS_FLD_KEY}=${cat}" --quiet
+							#check_error "Failed to upload attribute '${LINKS_FLD_FROM_LBL}' to links output vector map (value='${from_lbl}'; ${LINKS_FLD_KEY}=${cat})."														
+							#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_TO_LBL}" value="${to_lbl}" where="${LINKS_FLD_KEY}=${cat}" --quiet
+							#check_error "Failed to upload attribute '${LINKS_FLD_TO_LBL}' to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
+							#
+							# Now add attributes to output links:
+							echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+							check_error "Failed to upload attributes to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
 							g.message -p "${cat} ${lines} 1"
 							cat=`"${EXPR}" ${cat} + 1`							
 						fi
@@ -3104,7 +3146,7 @@ ${tmp_vect_links}
 		fi
 	done
 	
-	#TODO: Drop all previously created indices.
+	# Drop all previously created indices.
 	del_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
 	
 	# Upload link costs (if cost raster given).
@@ -3153,7 +3195,8 @@ ${tmp_vect_links}
 			#check_error "Failed to query cost surface at ${to_coor_x},${to_coor_y} (path no. ${step})."
 			#if [ -z $costval ] ; then
 			#	exit_error "No data at cost surface at ${to_coor_x},${to_coor_y} (path no. ${step})."
-			#fi			
+			#fi
+			# TODO: Replace with direct call to 'db.execute'!
 			${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="${GRASS_PKEY}=${cat}" --quiet
 			check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
 			#echo "Cost:   $costval"
