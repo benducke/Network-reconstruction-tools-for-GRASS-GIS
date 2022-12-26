@@ -79,8 +79,8 @@ Use under Windows requires installation of a Bourne Shell (or compatible interpr
 3. If you went with the default installation settings: Skip straight to the section on "use v.net.models in GRASS GIS" or "use via the QGIS Processing plug-in"!
 4. If (and only if) you have *not* installed into the default "C:\msys64" folder, then you now need to edit edit "v.net.models.bat" and modify its first two lines: 
 
-set GRASS_SH=C:\msys64\usr\bin\sh.exe
-set MSYSPATH=/c/msys64/usr/bin
+> set GRASS_SH=C:\msys64\usr\bin\sh.exe  
+> set MSYSPATH=/c/msys64/usr/bin
 
 The first line contains the full path to the Bourne Shell executable in your MSYS installation folder. Adjust it as needed to reflect your actual setup.
 The second line contains the path in your MSYS installation where all of the MSYS tools (awk.exe, grep.exe, etc.) are stored. Also adjust as needed, but note that this path must be written in POSIX conformant format! The Windows (or rather: CP/M & MS-DOS) drive letter "C:" is replaced by "/c" (or whatever drive has your MSYS installation). Folders are separated by forward slashes "/", not backslashes. No separator slash must be added after the final "bin" folder.
