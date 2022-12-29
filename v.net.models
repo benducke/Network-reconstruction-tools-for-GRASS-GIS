@@ -685,7 +685,7 @@ exit_error () {
 #			 	  than the target variable.
 #                The contents for setting the variable are returend in "EVAL_RESULT".
 eval_ws_safe () {
-	OLD_IFS="$IFS"
+	OLD_IFS_EVAL_WS_SAFE="$IFS"
 	# Set list separator to newline and line break characters.
 	# This used to be: 
 	# IFS=$(echo -en "\n\b")
@@ -702,7 +702,7 @@ eval_ws_safe () {
 			EVAL_RESULT="$j"
 		done
 	done	
-	IFS="$OLD_IFS"
+	IFS="$OLD_IFS_EVAL_WS_SAFE"
 }
 
 
@@ -942,10 +942,20 @@ del_index () {
 #				The result will be returned as an integer in the variable LIST_LEN.
 #
 list_len () {
+	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller
+	# caller loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_LEN="$IFS"
+	IFS=$'\n\b'
+	
 	LIST_LEN=0
 	for item in $1 ; do
 		LIST_LEN=`"${EXPR}" ${LIST_LEN} + 1`
 	done
+	
+	# IMPORTANT: Rest IFS!
+	IFS="$OLD_IFS_LIST_LEN"
 }
 
 
@@ -963,6 +973,13 @@ list_len () {
 #				An error will be thrown if $2 contains an invalid index value.
 #
 list_get () {
+	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller
+	# caller loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_GET="$IFS"
+	IFS=$'\n\b'
+	
 	LIST_ITEM=
 	if [ $2 -lt 0 ] ; then
 		exit_error "list_get(): Attempted to read list/array using negative index value."
@@ -979,6 +996,9 @@ list_get () {
 		fi
 		cur_list_item=`"${EXPR}" ${cur_list_item} + 1`
 	done
+	
+	# IMPORTANT: Rest IFS!
+	IFS="$OLD_IFS_LIST_GET"	
 }
 
 
@@ -1104,6 +1124,7 @@ awk_max () {
 #						An empty value will be returned if there are no values
 #						found in $1.
 awk_median () {
+	
 	# Below is the command for sorting with AWK. However, only GNU AWK provides 'asorti(a,b)', 
 	# so this would now work on macOS (would need to install 'gawk' through e.b. MacPorts).
 	# med_list=`echo "$1" | "${AWK}" '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
@@ -1151,6 +1172,7 @@ awk_median () {
 		# Result
 		AWK_VALUE="$awk_median_val"
 	fi
+	
 }
 
 
@@ -1721,10 +1743,12 @@ check_input () {
 	grep_is_zero "${GIS_OPT_THRESHOLD}"
 	if [ -n "${GREP_VALUE}" ] ; then
 		# Run topological test for input points using v.distance and a user-definable threshold.
-		g.message -i "Checking input points (${NUM_INPUT_NODES}) for duplicates:"
+		g.message -i "Checking input points (${NUM_INPUT_NODES}) for duplicates:"		
 		get_primary_keys "${GIS_OPT_INPUT}"
 		step=1
 		for key in $PRIMARY_KEYS ; do
+			# TODO: One of the modules in this loop pollutes the console with
+			#       'WARNING: Values in column <cat> will be overwritten' messages.
 			get_label "${GIS_OPT_INPUT}" "$key"
 			# Retrieve the one feature with the current primary key value and extract it to a
 			# separate temp map.
@@ -1793,14 +1817,20 @@ check_input () {
 			exit_error "${RET_FLD_TEST}"
 		fi
 		# from_lbl
-		check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_FROM_LBL}" "${LABEL_TYPE}" 	"TRUE"	"FALSE"
+		check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_FROM_LBL}" "CHARACTER" 	"TRUE"	"FALSE"
 		if [ "${RET_FLD_TEST}" != "${LINKS_FLD_FROM_LBL}" ] ; then
-			exit_error "${RET_FLD_TEST}"
+			check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_FROM_LBL}" "TEXT" 	"TRUE"	"FALSE"
+			if [ "${RET_FLD_TEST}" != "${LINKS_FLD_FROM_LBL}" ] ; then
+				exit_error "Field '${LINKS_FLD_FROM_LBL}' in attribute table of map '${GIS_OPT_INITIAL}' is not of type 'CHARACTER' or 'TEXT'."
+			fi
 		fi
 		# to_lbl
-		check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_TO_LBL}" 	"${LABEL_TYPE}" 	"TRUE"	"FALSE"
+		check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_TO_LBL}" 	"CHARACTER" 	"TRUE"	"FALSE"
 		if [ "${RET_FLD_TEST}" != "${LINKS_FLD_TO_LBL}" ] ; then
-			exit_error "${RET_FLD_TEST}"
+			check_field "${GIS_OPT_INITIAL}"	"${LINKS_FLD_TO_LBL}" 	"TEXT" 	"TRUE"	"FALSE"
+			if [ "${RET_FLD_TEST}" != "${LINKS_FLD_TO_LBL}" ] ; then
+				exit_error "Field '${LINKS_FLD_TO_LBL}' in attribute table of map '${GIS_OPT_INITIAL}' is not of type 'CHARACTER' or 'TEXT'."
+			fi
 		fi
 		#
 		# If these attributes are missing, we trigger auto-computation:
@@ -2013,7 +2043,7 @@ check_input () {
 			#echo "KEY=${cat}"
 			#echo "CONNS=${num_connections_total}"
 			if [ ${num_connections_total} -lt 2 ] ; then				
-				exit_error "Initial link with primary key '${GRASS_PKEY}=${cat}' is not connected to two nodes in input map."				
+				exit_error "Initial link with primary key '${GRASS_PKEY}=${cat}' is not connected to two nodes in input map. Hint: Check extents of GRASS region (must completely contain initial links)."				
 			fi
 		done		
 		#
@@ -2706,8 +2736,10 @@ model_attsim () {
 			fi
 			# Get list of keys of nodes with identical attributes 
 			LIST=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${where}" columns="${GIS_OPT_KEY}" -c --quiet`
+			# Get info for connected database and table:
+			get_tbl_info "${GIS_OPT_LINKS}"
 			if [ -n "${LIST}" ] ; then
-				list=""				
+				list=""	
 				IFS=$'\n\b'
 				for item in ${LIST} ; do
 					list="$list $item"
@@ -2728,7 +2760,13 @@ model_attsim () {
 						strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="cat=${cat}" columns="${LINKS_FLD_STRENGTH}" -c --quiet`
 						check_error "Failed to read from attribute field '${LINKS_FLD_STRENGTH}' of link with cat='$cat' in output vector map."
 						strength=`"${EXPR}" ${strength} + 1`
-						${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_STRENGTH}" value="${strength}" where="cat=${cat}" --quiet
+						SQL=""
+						SQL="${SQL}UPDATE ${attribute_table} SET"
+						SQL="${SQL} ${LINKS_FLD_STRENGTH} = ${strength}"
+						SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
+						#DELETEME: Replaced v.db.update with direct DBMS access
+						#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_STRENGTH}" value="${strength}" where="cat=${cat}" --quiet
+						echo "${SQL}" | db.execute database="${attribute_database}" input="-"
 						check_error "Failed to update attribute field '${LINKS_FLD_STRENGTH}' to '${strength}' for link with cat='$cat' in output vector map."
 					fi
 				done
@@ -2745,7 +2783,7 @@ model_attsim () {
 	# Store name of original links output map (we might modify it).
 	links_org="${GIS_OPT_LINKS}"
 	# Get GRASS primary keys for links map and step through them:
-	get_grass_cats "${GIS_OPT_LINKS}"	
+	get_grass_cats "${GIS_OPT_LINKS}"
 	for cat in ${GRASS_CATS} ; do
 		# Get strength of link:
 		strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_STRENGTH}" where="${GRASS_PKEY}=${cat}" -c --quiet`
@@ -2853,6 +2891,11 @@ model_complete () {
 	#############	
 	#DEBUG
 	#echo "STEPS=$NUM_INPUT_NODES"	
+	
+	# Get info for database and table connected to points input map:
+	get_tbl_info "${GIS_OPT_INPUT}"	
+	
+	# Step through all points in input map:
 	for key in $PRIMARY_KEYS ; do
 		if [ -z "${no_data}" ] ; then
 			# 'no data' has not yet been set: We do so now.
@@ -2863,8 +2906,10 @@ model_complete () {
 			# as 'no data'.
 			no_data="${key}"
 		fi
-		#DEBUG
+		#DEBUG		
 		#echo "KEY=$key"
+		# TODO: The loop below pollutes the console with this message:
+		# "WARNING: Values in column <cat> will be overwritten"
 		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
 			# Form SQL WHERE clause to get next primary key value.
 			get_where_clause "${key}"
@@ -2889,7 +2934,9 @@ ${tmp_vect_links}
 				v.edit map="${GIS_OPT_INPUT}" layer="1" type="point" tool="delete" where="${WHERE}" --overwrite --quiet
 				check_error "Failed to delete point with primary key value '${key}' from copy of input vector map."	
 				# By setting the primary key of this feature to our 'no data' value, we mark the corresponding
-				# attribute table record as *deleted*:
+				# attribute table record as *deleted*:								
+				# HINT: We use V_DB_UPDATE here (not db.execute), since it will make sure to refresh the database
+				#       connection with $GIS_OPT_INPUT (we manipulate that map!) each run through the loop.
 				${V_DB_UPDATE} map="${GIS_OPT_INPUT}" layer="1" column="${GIS_OPT_KEY}" value="${no_data}" where="${WHERE}" --overwrite --quiet
 				check_error "Failed to set primary key value '${key}' in copy of input vector map to 'no data' ('$no_data')."
 				# Connect extracted node with all remaining nodes in old map.			
@@ -2903,22 +2950,38 @@ ${tmp_vect_links}
 					from_id="${key}"
 					TO_IDS=`v.db.select map="${GIS_OPT_INPUT}" columns="${GIS_OPT_KEY}" -c --quiet`						 
 					check_error "Failed to retrieve primary keys from temporary vector map for storing link costs."					
+					# Get DBMS connection info for temp links map:
+					get_tbl_info "${TMP_VECT_LINKS_COSTS}"					
 					# Get all least-cost values for all "to nodes" from current cost surface:
 					COSTVAL=`r.what map="${TMP_RAST_COST_MIN}" points="${GIS_OPT_INPUT}" separator="|"`
 					check_error "Failed to query temporary cost raster using map of 'to' nodes."
 					next_cost=1
 					for to_id in $TO_IDS ; do
 						if [ "$to_id" != "$no_data" ] ; then
-							${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_FROM_ID}" value="${key}" where="cat=${cat_cost}" --quiet
-							check_error "Failed to update field '${LINKS_FLD_FROM_ID}' in temporary link costs vector map."
-							${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_TO_ID}" value="${to_id}" where="cat=${cat_cost}" --quiet
-							check_error "Failed to update field '${LINKS_FLD_TO_ID}' in temporary link costs vector map."
+							SQL=""
+							SQL="${SQL}UPDATE ${attribute_table} SET"
+							SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
+							SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${to_id}"
+							SQL="${SQL} WHERE cat = ${cat_cost}; "
+							echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+							#DELETEME: replaced v_db_update with direct calls to db.execute
+							#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_FROM_ID}" value="${key}" where="cat=${cat_cost}" --quiet
+							#check_error "Failed to update field '${LINKS_FLD_FROM_ID}' in temporary link costs vector map."
+							#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_TO_ID}" value="${to_id}" where="cat=${cat_cost}" --quiet
+							#check_error "Failed to update field '${LINKS_FLD_TO_ID}' in temporary link costs vector map."
+							check_error "Failed to update field '${LINKS_FLD_FROM_ID} or ${LINKS_FLD_TO_ID}' in temporary link costs vector map."
 							# Transfer matching cost value
 							cur=1
 							for cost in $COSTVAL ; do
 								if [ $cur -eq $next_cost ] ; then 
 									costval=`echo $cost | "${AWK}" -F "|" '{ print $4 }'`
-									${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="cat=${cat_cost}" --quiet
+									SQL=""
+									SQL="${SQL}UPDATE ${attribute_table} SET"
+									SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"
+									SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat_cost}; "
+									echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+									#DELETEME: replaced v_db_update with direct calls to db.execute
+									#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="cat=${cat_cost}" --quiet
 									check_error "Failed to update field '${LINKS_FLD_COST}' in temporary link costs vector map."																				
 								fi
 								cur=`"${EXPR}" ${cur} + 1`
@@ -2968,8 +3031,7 @@ ${tmp_vect_links}
 				#	g.remove type="vector" name="${TMP_VECT_LINKS_ADD}" -f --quiet
 				#fi
 				
-				step=`"${EXPR}" ${step} + 1`				
-				g.message -p "${step} ${NUM_INPUT_NODES} 1"
+				step=`"${EXPR}" ${step} + 1`								
 			else
 				# No feature! This is a fatal error!
 				exit_error "Input data missing for primary key query '${WHERE}'. Aborting."
@@ -2977,6 +3039,11 @@ ${tmp_vect_links}
 		else # Last point reached: Do not process!
 			step=`"${EXPR}" ${step} + 1`
 		fi
+		#TODO: Progress reporting would be nice to have here.
+		#      However, calling 'g.message' is currently pointless,
+		#      since one of the modules in the loop pollutes the
+		#      console with a '100%' message line for each input point.
+		#g.message -p "${step} ${NUM_INPUT_NODES} 1"
 	done
 	
 	# MAIN LOOP DONE.
@@ -3151,6 +3218,8 @@ ${tmp_vect_links}
 	
 	# Upload link costs (if cost raster given).
 	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+		# Get info for connected database and table:
+		get_tbl_info "${GIS_OPT_LINKS}"
 		g.message -i "Updating link costs and uploading to links output attribute table:"
 		# Upload link costs. 
 		# Step through all nodes in the same order once more; on this pass, we only transfer
@@ -3196,8 +3265,13 @@ ${tmp_vect_links}
 			#if [ -z $costval ] ; then
 			#	exit_error "No data at cost surface at ${to_coor_x},${to_coor_y} (path no. ${step})."
 			#fi
-			# TODO: Replace with direct call to 'db.execute'!
-			${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="${GRASS_PKEY}=${cat}" --quiet
+			SQL=""
+			SQL="${SQL}UPDATE ${attribute_table} SET"
+			SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"			
+			SQL="${SQL} WHERE ${GRASS_PKEY} = ${cat}; "
+			#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+			# ${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="${GRASS_PKEY}=${cat}" --quiet
+			echo "${SQL}" | db.execute database="${attribute_database}" input="-"
 			check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
 			#echo "Cost:   $costval"
 			g.message -p "${step} ${lines} 1"
@@ -3231,6 +3305,8 @@ ${tmp_vect_links}
 				max_cat="${line}"
 			done
 			max_cat=`"${EXPR}" ${max_cat} + 1`
+			# Get info for connected database and table:
+			get_tbl_info "${GIS_OPT_LINKS}"
 			offset=1
 			for line in $RECS ; do
 				new_cat=`"${EXPR}" ${max_cat} - ${offset}`
@@ -3245,12 +3321,29 @@ ${tmp_vect_links}
 					#echo "0 = $new_cat"
 					# Swap cats!
 					# GRASS always starts automatic 'cat' values at '1', so we can use '0' as a safe temporary
-					# and unique value in the swapping process.
-					${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=$line" column="cat" value="0" --quiet
-					check_error "Failed to swap GRASS 'cat' value '$line' with '$0' in links output map."
-					${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=$new_cat" column="cat" value="$line" --quiet
-					check_error "Failed to swap GRASS 'cat' value '$new_cat' with '$line' in links output map."
-					${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=0" column="cat" value="$new_cat" --quiet
+					# and unique value in the swapping process.					
+					SQL=""
+					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL} ${LINKS_FLD_KEY} = 0"
+					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${line}; "
+					#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+					#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=$line" column="cat" value="0" --quiet
+					echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+					check_error "Failed to swap GRASS 'cat' value '$line' with '$0' in links output map."					
+					SQL=""
+					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL} ${LINKS_FLD_KEY} = ${line}"
+					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${new_cat}; "
+					#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+					#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=$new_cat" column="cat" value="$line" --quiet
+					echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+					check_error "Failed to swap GRASS 'cat' value '$new_cat' with '$line' in links output map."					
+					SQL=""
+					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL} ${LINKS_FLD_KEY} = ${new_cat}"
+					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = 0; "
+					#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=0" column="cat" value="$new_cat" --quiet
+					echo "${SQL}" | db.execute database="${attribute_database}" input="-"
 					check_error "Failed to swap GRASS 'cat' value '0' with '$new_cat' in links output map."
 				else
 					# Reached the symmetry element of an odd number of records: Done with this set.
@@ -3515,6 +3608,8 @@ ${CATS_TO}"
 							# We are still looking to connect at least one more!
 							len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="cat=${cat}" -c`
 							check_error "Failed to query links output map for field '${FLD_DIST}' ('cat=${cat}')."
+							# Get info for connected database and table:
+							get_tbl_info "${GIS_OPT_LINKS}"
 							# Step through sorted list of distances and see if we can get a match
 							# in the first n items!
 							neighbor=0;
@@ -3524,7 +3619,13 @@ ${CATS_TO}"
 										connected=`"${EXPR}" ${connected} + 1`
 										#echo "connected: $cat ($neighbor) = $len"
 										# Mark this link as "keep":
-										${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="1" where="cat=${cat}" --quiet
+										SQL=""
+										SQL="${SQL}UPDATE ${attribute_table} SET"
+										SQL="${SQL} ${fld_keep} = 1"
+										SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
+										echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+										#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+										#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="1" where="cat=${cat}" --quiet										
 										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."										
 									fi
 								fi
@@ -3760,10 +3861,26 @@ clean_initial_coords () {
 			# Warn about difference.
 			g.message -e "Difference between coordinate '${fld_link_coord}' of initial link with '${clean_id_pkey_fld}=${clean_id_pkey_val}'"
 			g.message -e "and coordinate of input point (node) with the same ID detected (${val_coord_link} vs ${val_coord_node})."
+			# Back up any DBMS info that the caller might have!
+			clean_coords_att_database_driver="${attribute_database_driver}"
+			clean_coords_att_database="${attribute_database}"
+			clean_coords_att_table="${attribute_table}"
+			# Get info for connected database and table:
+			get_tbl_info "${map_init_links}"			
 			# Copy node coordinate to link coordinate (field to field):
-			${V_DB_UPDATE} map="${map_init_links}" layer="1" column="${fld_link_coord}" value="${val_coord_node}" --quiet
+			SQL=""
+			SQL="${SQL}UPDATE ${attribute_table} SET"
+			SQL="${SQL} ${fld_link_coord} = ${val_coord_node}"
+			SQL="${SQL} WHERE ${clean_id_pkey_fld} = ${clean_id_pkey_val}; "
+			echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+			#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+			#${V_DB_UPDATE} map="${map_init_links}" layer="1" column="${fld_link_coord}" value="${val_coord_node}" --quiet
 			check_error "Failed to update field '${fld_link_coord}' in copy of initial links map."
 			g.message -w "Automatic correction succeeded with 'threshold=${GIS_OPT_THRESHOLD}'."								
+			# Restore DBMS info that the caller might have had!
+			attribute_database_driver="${clean_coords_att_database_driver}"
+			attribute_database="${clean_coords_att_database}"
+			attribute_table="${clean_coords_att_table}"
 		fi
 	fi
 }
@@ -3822,21 +3939,14 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			check_error "Failed to add attribute field '${LINKS_FLD_LEN_KM}' to copy of initial links map."
 		fi
 		if [ ${TRIGGER_ATTR_COORDINATES} == TRUE ] ; then
+			# TODO: This needs TESTING with faulty coordinates!
+			#
 			# We need to rebuild the from/to coordinate pairs for all links. These are
 			# the extreme vertices of the links. The tricky part is: If these are user-supplied
 			# line geometries, then we cannot trust that they lie EXACTLY at the coordinates
 			# of any input nodes. However, this is a requirement, since some models match
 			# links with their connected nodes via the coordinates stored in the attribute table!
-			# So we try some snapping and hope for the best...
-			#
-			# TODO: Adjusting the links by snapping using 'links_adjust_nodes' will NOT WORK!
-			# 		The reason is that that function has been written to specifically to deal
-			# 		with the data structure produced by 'model_complete'. For now, we just need
-			# 		to rely on the user providing data with proper topology!
-			# 		Proper snapping to nodes would be a good feature for a later version.
-			# 		This should be doable by using 'links_adjust_nodes' as a template.
-			#g.message -i "Snapping start/end vertices of 'initial' links map to nodes..."			
-			#links_adjust_nodes "${GIS_OPT_LINKS}"
+			# So we try some "snapping" and hope for the best...
 			#
 			# Now add coordinates of extreme line vertices to attribute table.
 			g.message -i "Adding start/end coordinates to attributes of 'initial' links map..."
@@ -3858,8 +3968,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			step=1 # For progress reporting
 			for key in ${PRIMARY_KEYS} ; do
 				# Secondary loop steps through all nodes in GIS_OPT_LINKS via 'cat':
-				for cat in ${GRASS_CATS} ; do
-					# TODO: This inner loop and one-by-one SQL querying are not exactly efficient!
+				for cat in ${GRASS_CATS} ; do					
 					# Extract "from_id" and "to_id" values for current 'cat':
 					val_from_id=`v.db.select map="${GIS_OPT_LINKS}" column="${LINKS_FLD_FROM_ID}" where="${GRASS_PKEY}=${cat}" -c`
 					check_error "Failed to read attribute field '${LINKS_FLD_FROM_ID}' from copy of initial links map ('${GRASS_PKEY}=${cat}')."
@@ -3910,6 +4019,8 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			# Add 'cost' field to attribute table:
 			${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST} DOUBLE PRECISION"
 			check_error "Failed to add attribute field '${LINKS_FLD_COST}' (double) to copy of initial links map."
+			# Get info for connected database and table:
+			get_tbl_info "${GIS_OPT_LINKS}"
 			# Process all links.
 			get_grass_cats "${GIS_OPT_LINKS}"
 			# Primary loop steps through all nodes in GIS_OPT_LINKS:
@@ -3953,7 +4064,13 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 				eval `r.univar map="${TMP_RAST_MAPCALC1}" -g --quiet`
 				check_error "Failed to compute statistics for link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."
 				# Upload cost value for current link:
-				${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${sum}" where="${GRASS_PKEY}=${cat}" --quiet
+				SQL=""
+				SQL="${SQL}UPDATE ${attribute_table} SET"
+				SQL="${SQL} ${LINKS_FLD_COST} = ${sum}"
+				SQL="${SQL} WHERE ${GRASS_PKEY} = ${cat}; "
+				echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+				#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+				#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${sum}" where="${GRASS_PKEY}=${cat}" --quiet
 				check_error "Failed to update field '${LINKS_FLD_COST}' in copy of initial links map."
 				# Progress update
 				g.message -p "${step} ${points} 1"
@@ -4097,23 +4214,21 @@ for key in ${PRIMARY_KEYS} ; do
 	if [ $num_links -gt 0 ] ; then
 		subnet_nodes=`"${EXPR}" ${subnet_nodes} + 1`
 		subnet_links=`"${EXPR}" ${subnet_links} + ${num_links}`
-	fi	
+	fi
 	total_len=0
 	total_cost=0
 	avg_len=0
 	avg_cost=0
-	OLD_IFS="$IFS"
-	IFS=$'\n\b"'
 	for i in $from_len ; do
 		awk_calc "$total_len+$i"
 		total_len="${AWK_VALUE}"
 		awk_calc "$subnet_len+$total_len"
 		subnet_len="${AWK_VALUE}"
-	done	
+	done
 	for i in $to_len ; do
 		awk_calc "$total_len+$i"
 		total_len="${AWK_VALUE}"
-	done	
+	done
 	if [ $num_links -gt 0 ] ; then
 		awk_calc "$total_len/$num_links"
 		avg_len="${AWK_VALUE}"
@@ -4132,26 +4247,63 @@ for key in ${PRIMARY_KEYS} ; do
 		if [ $num_links -gt 0 ] ; then
 			awk_calc "$total_cost/$num_links"
 			avg_cost="${AWK_VALUE}"
-		fi		
+		fi
 	fi
-	IFS="$OLD_IFS"
 
+	# Get info for connected database and table:
+	get_tbl_info "${GIS_OPT_NODES}"
 	# Upload subnet metrics:
 	get_where_clause "${key}"
-	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LINKS}" value="${num_links}" where="${WHERE}" --quiet
+	SQL=""
+	SQL="${SQL}UPDATE ${attribute_table} SET"
+	SQL="${SQL} ${NODES_FLD_LINKS} = ${num_links}"
+	SQL="${SQL} WHERE ${WHERE}; "
+	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+	#${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LINKS}" value="${num_links}" where="${WHERE}" --quiet
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LINKS}' of output nodes maps ('${GIS_OPT_NODES}')."
 	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_NSTRENGTH}" value="${n_strength}" where="${WHERE}" --quiet
+		SQL=""
+		SQL="${SQL}UPDATE ${attribute_table} SET"
+		SQL="${SQL} ${NODES_FLD_NSTRENGTH} = ${n_strength}"
+		SQL="${SQL} WHERE ${WHERE}; "
+		echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+		#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+		#${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_NSTRENGTH}" value="${n_strength}" where="${WHERE}" --quiet
 		check_error "Failed to write 'node strength' into attribute field '${NODES_FLD_NSTRENGTH}' of output nodes maps ('${GIS_OPT_NODES}')."
-	fi		
-	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_SUM}" value="${total_len}" where="${WHERE}" --quiet
+	fi
+	SQL=""
+	SQL="${SQL}UPDATE ${attribute_table} SET"
+	SQL="${SQL} ${NODES_FLD_LEN_SUM} = ${total_len}"
+	SQL="${SQL} WHERE ${WHERE}; "
+	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+	#${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_SUM}" value="${total_len}" where="${WHERE}" --quiet
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
-	${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_AVG}" value="${avg_len}" where="${WHERE}" --quiet
+	SQL=""
+	SQL="${SQL}UPDATE ${attribute_table} SET"
+	SQL="${SQL} ${NODES_FLD_LEN_AVG} = ${avg_len}"
+	SQL="${SQL} WHERE ${WHERE}; "
+	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+	#${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_LEN_AVG}" value="${avg_len}" where="${WHERE}" --quiet
 	check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_SUM}" value="${total_cost}" where="${WHERE}" --quiet
+		SQL=""
+		SQL="${SQL}UPDATE ${attribute_table} SET"
+		SQL="${SQL} ${NODES_FLD_COST_SUM} = ${total_cost}"
+		SQL="${SQL} WHERE ${WHERE}; "
+		echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+		#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+		#${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_SUM}" value="${total_cost}" where="${WHERE}" --quiet
 		check_error "Failed to write links count into attribute field '${NODES_FLD_COST_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
-		${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_AVG}" value="${avg_cost}" where="${WHERE}" --quiet
+		SQL=""
+		SQL="${SQL}UPDATE ${attribute_table} SET"
+		SQL="${SQL} ${NODES_FLD_COST_AVG} = ${avg_cost}"
+		SQL="${SQL} WHERE ${WHERE}; "
+		echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+		#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
+		#${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_AVG}" value="${avg_cost}" where="${WHERE}" --quiet
 		check_error "Failed to write links count into attribute field '${NODES_FLD_COST_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
 	fi
 	# Delete nodes with zero connections?
@@ -4218,7 +4370,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 		fi
 		g.message -p "${step} ${lines} 1"
 		step=`"${EXPR}" ${step} + 1`
-	done	
+	done
 	net_links_reduced="${lines}"
 	net_len_reduced="${total_len}"
 	net_len_min_reduced="${min_len}"
@@ -4306,7 +4458,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	result=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LINKS}" | "${GREP}" -c "|${NODES_FLD_LINKS}"`
 	check_error "Failed to get columns info for nodes output vector map ('${GIS_OPT_NODES}')."
 	if [ ${result} -gt 0 ] ; then		
-		LINKS=`v.db.select map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LINKS}" -c --quiet`	
+		LINKS=`v.db.select map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LINKS}" -c --quiet`
 		for link in ${LINKS} ; do
 			awk_min "${net_cons_min_reduced}" "${link}"
 			net_cons_min_reduced="${AWK_VALUE}"
