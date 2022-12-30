@@ -426,8 +426,7 @@ computational cost increases linearly depending on the number of input nodes. Mo
 <li>Every type of operation produces temporary files, which consume disk space as long as <em>v.net.models</em> is running.
 Cost-based operation will consume exponentially more disk space.</li>
 </ul>
-In order to decrease the stress on computational resources, and to avoid bottlenecks, <em>v.net.models</em> offers two 
-principal strategies (which can also be combined):
+The following can be useful to avoid the creation of unnecessary resource bottlenecks:
 <ul>
 <li>The set of input nodes can be reduced (filtered) using either of the GRASS standard options <em>"cats="</em> or <em>"where="</em>,
 or by simply setting the <em>"-r"</em> flag to reduce the input nodes to only those that fall within the extents of the current
@@ -435,6 +434,12 @@ computational region (set by <em><a href="g.region">g.region</a></em>).</li>
 <li>For successive runs with unchanged input data, the <em>"links="</em> output map of a "complete" model run can be
 retained and reused using option <em>"initial="</em>. In effect, this acts as a caching mechanism that is particularly economic
 when running in cost-based mode.</li>
+</ul>
+In addition, the following can help to maximize use of available computing resources:
+<ul>
+<li>Option <em>"costmem="</em> can be used to increase the maximum memory available for cost raster operations. This is only useful
+if <em>"costmap="</em> is also provided. It can result in a moderate reduction of processing time on modern systems, if a cost
+raster with large extents and/or high resolution is used.
 </ul>
 
 Refer to <a href="#h2_flags_and_parameters">flags and parameters</a> for details on the filtering options/flags mentioned above.
@@ -450,7 +455,8 @@ capable SQL database driver is highly recommended. Use <a href="db.connect.html"
 Finally, note that:
 <ul>
 <li>NULL values in an input cost surface (if provided by <em>"costmap="</em>) will be excluded from least-cost path computations.</li>
-<li>This program works correctly with lat/lon reference systems/input data.</li>
+<li>This program works correctly with lat/lon reference systems/input data. Distances are computed as geodesic distances in metres, 
+and <em></wm>"maxdist="</em> must always be specified in metres, as well.</li>
 </ul>
 
 <div id="h2_flags_and_parameters"></div>
