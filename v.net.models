@@ -250,6 +250,17 @@ GIS_FLAG_S=0
 #%End
 
 #%Option
+#% key: costmem
+#% type: integer
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Max. memory for cost raster ops in MB (passed to 'r.cost')
+#% options: 300-300000
+#% answer: 300
+#%End
+
+#%Option
 #% key: threshold
 #% type: double
 #% required: no
@@ -2108,6 +2119,11 @@ check_params () {
 		exit ${EXIT_ERROR}
 	fi
 	
+	# Option "costmem" is only meaningful if "costmap" is also provided.
+	if [ ${GIS_OPT_COSTMEM} -gt 1 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -w "Option 'costmem=' is meaningless without 'costmap='. Ignored."		
+	fi
+	
 	# Flag "-m" is only meaningful if "costmap" is also provided.
 	if [ ${GIS_FLAG_M} -eq 1 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
 		g.message -e "Flag '-m(eters)' is only useful if option 'costmap=' is also provided."
@@ -2943,8 +2959,8 @@ ${tmp_vect_links}
 				#
 				# COST map provided? Then we must now change the shapes of the links to least-cost paths!
 				if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-					# Compute least cost surface from current node to all other nodes:
-					r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}" stop_points="${GIS_OPT_INPUT}" output="${TMP_RAST_COST_MIN}" outdir="${TMP_RAST_COST_DIR}" --o --quiet						
+					# Compute least cost surface from current node to all other nodes:					
+					r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}" stop_points="${GIS_OPT_INPUT}" memory="${GIS_OPT_COSTMEM}" output="${TMP_RAST_COST_MIN}" outdir="${TMP_RAST_COST_DIR}" --o --quiet						
 					check_error "Failed to compute cost and direction surfaces (iteration ${step})."
 					# We now store the costs for each path on the current cost raster (we will need this later).
 					from_id="${key}"
