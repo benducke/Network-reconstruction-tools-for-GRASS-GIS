@@ -14,7 +14,7 @@ This program is distributed as a set of files:
 
 # Installation
 
-*Note:* These instructions are only valid for the files in the current Release package! Files in the code repository are under active development and installing them will most likely not result in an installation that works as expected (or at all).
+*Note:* These instructions are only valid for the files in the most current [Release](https://github.com/benducke/v.net.models/releases) package! Files in the code repository are under active development and installing them will most likely not result in an installation that works as expected (or at all).
 
 This software is a Bourne Shell script that has been tested and verified to run on Linux, Windows and macOS operating systems.
 
