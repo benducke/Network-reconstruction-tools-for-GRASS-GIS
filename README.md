@@ -14,6 +14,8 @@ This program is distributed as a set of files:
 
 # Installation
 
+*Note:* These instructions are only valid for the files in the current Release package! Files in the code repository are under active development and installing them will most likely not result in an installation that works as expected (or at all).
+
 This software is a Bourne Shell script that has been tested and verified to run on Linux, Windows and macOS operating systems.
 
 Tested with:
