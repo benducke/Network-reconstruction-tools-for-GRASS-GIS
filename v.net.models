@@ -4,7 +4,7 @@
 # MODULE:     	v.net.models
 # AUTHOR(S): 	Benjamin Ducke <benducke AT fastmail.fm>
 # PURPOSE:		Model-based reconstruction of a network from points (nodes).
-#				This script takes points as input and reconstructs a network
+#				This script takes points as input and reconstructs a networkmodel_complete_thread
 #             	by adding lines (links) between all or a subset of them. Links 
 #				are added according to the chosen connectivity model.
 #				Connection costs between nodes are computed as euclidean (default)
@@ -70,6 +70,12 @@ GIS_FLAG_C=0
 #%End
 
 # TODO: IMPLEMENT ME (FLAG -S)!
+# Implementation needs to be done in model_complete_thread().
+# There is already code there that can be activated with this
+# flag:
+# if [ ${GIS_FLAG_S} -eq 1 ] ; then
+#   ..
+# fi
 ##%Flag
 ##%  key: s
 ##%  description: Smooth paths of least-cost links
@@ -271,20 +277,16 @@ GIS_FLAG_S=0
 #% answer: 0.000001
 #%End
 
-# TODO: IMPLEMENT ME (THREADS=)!
-##%Option
-##% key: threads
-##% type: integer
-##% required: no
-##% multiple: no
-##% key_desc: value
-##% description: Number of threads for parallel processing (performance) 
-##% options: 1-1024
-##% answer: 2
-##%End
-#DELETE ME: This is only so that the shell tests don't freak out
-#if the variable is not defined.
-GIS_OPT_THREADS=2
+#%Option
+#% key: threads
+#% type: integer
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% description: Number of concurrent processing threads (1=no concurrency) 
+#% options: 1-1024
+#% answer: 1
+#%End
 
 # System setup: Modify if needed.
 if [ -n "${MSYSPATH}" ] ; then
@@ -296,10 +298,11 @@ if [ -n "${MSYSPATH}" ] ; then
 	# That means we are running under MS Windows,
 	# and we must make some adjustments to external program calls!
 	AWK="${MSYSPATH}/awk"
-	GREP="${MSYSPATH}/grep"
-	EXPR="${MSYSPATH}/expr"
 	DATE="${MSYSPATH}/date"
+	EXPR="${MSYSPATH}/expr"	
+	GREP="${MSYSPATH}/grep"
 	SORT="${MSYSPATH}/sort"
+	PKILL="${MSYSPATH}/pkill"
 	# Some GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
 	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
 	V_DB_ADDTABLE="v.db.addtable.bat"
@@ -310,10 +313,11 @@ if [ -n "${MSYSPATH}" ] ; then
 	V_TO_LINES="v.to.lines.bat"
 else
 	AWK="awk"
-	GREP="grep"
-	EXPR="expr"
 	DATE="date"
+	EXPR="expr"
+	GREP="grep"	
 	SORT="sort"
+	PKILL="pkill"
 	# These are the GRASS commands that are actually Shell scripts.
 	V_DB_ADDCOLUMN="v.db.addcolumn"
 	V_DB_ADDTABLE="v.db.addtable"
@@ -383,14 +387,12 @@ TMP_VECT_LINKS_DELAUNAY_P="${TMP_PREFIX}_v_delaunay_p" 	# Delaunay mesh (polygon
 TMP_VECT_LINKS_DELAUNAY_L="${TMP_PREFIX}_v_delaunay_l" 	# Delaunay mesh (lines)
 TMP_VECT_NODES_DROPROW_1="${TMP_PREFIX}_v_n_droprow_1" 	# Nodes with row dropped from table
 TMP_VECT_NODES_DROPROW_2="${TMP_PREFIX}_v_n_droprow_2"	# Nodes with row dropped from table (swapped)
-TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 		# BASE name of one vector map patch for model_complete
-TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch_" 		# BASE name of one vector map patch for model_complete
+TMP_VECT_LINKS_PATCH="${TMP_PREFIX}_v_l_patch" 			# BASE name of one vector map patch for model_complete
 
 # Names of temporary maps (RASTER)
 TMP_RAST_COST_RSP="${TMP_PREFIX}_r_cost_rsp" # Resampled version of original cost raster map
 TMP_RAST_COST_MIN="${TMP_PREFIX}_r_cost_min" # Minimum cost output of r.cost
 TMP_RAST_COST_DIR="${TMP_PREFIX}_r_cost_dir" # Directional surface output r.cost
-TMP_RAST_COST_RES="${TMP_PREFIX}_r_cost_res" # Directional surface output r.cost (resampled)
 TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost (random error)
 TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
 TMP_RAST_RSTLNKS1="${TMP_PREFIX}_r_rstlnks1" # Rasterized link from map supplied via "initial="
@@ -428,117 +430,167 @@ NODES_FLD_COST_SUM="cost_sum" 	# Sum of costs of links connected to node
 NODES_FLD_COST_AVG="cost_mean" 	# Mean cost of links connected to node
 NODES_FLD_NSTRENGTH="nstrength"	# Sum of 'strength' of all links connected to node (model 'attsim')
 
-# Make sure we get to clean up!
-trap "g.message -i 'Terminated by user (CTRL+C).' ; clean_up ; exit ${EXIT_CTRL_C}" 2 # user interrupt (CTRL+C)
-trap "'Unexpected termination.' ; clean_up ; exit ${EXIT_TERMINATED}" 1 9 # external interrupt
+# FUNCTION
+# grass_db_connect_default: Restores current GRASS session's initial database
+# connection parameters. This function is used extensively by 'model_complete_thread()'
+# to switch between a thread's local (temporary) database storage and that of the
+# GRASS session running this script. It is also called by clean_up, to make sure
+# that this script does not mess with a user's database connection parameters.
+grass_db_connect_default () {
+	
+	if [ -n "${GRASS_DB_driver}" ] ; then
+		# DEBUG
+		#echo "Restore GRASS DB driver = '${GRASS_DB_driver}'"
+		db.connect driver="${GRASS_DB_driver}"
+		check_error "Failed to restore GRASS session's default database connection ('db.connect driver=${GRASS_DB_driver}')."
+	fi
+	
+	if [ -n "${GRASS_DB_database}" ] ; then
+		# DEBUG
+		#echo "Restore GRASS DB database = '${GRASS_DB_database}'"
+		db.connect database="${GRASS_DB_database}"	
+		check_error "Failed to restore GRASS session's default database connection ('db.connect database=${GRASS_DB_database}')."
+	fi
+	
+}
+
+
+# FUNCTION
+# grass_db_connect_local: Sets current GRASS session's database connection.
+# This function is used extensively by 'model_complete_thread()'
+# to switch database storage from the current GRASS session's default to
+# a temporary SQlite file. This is required to avoid database corruption
+# when running multi-threaded processes.
+#
+# Arguments:
+#	$1 - name of local database file (passed by caller as a unique SQLite file name)
+#
+#
+grass_db_connect_local () {
+		if [ -n "$1" ] ; then
+			db.connect driver="sqlite" database='$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/'"$1"
+			check_error "Failed to set GRASS session's database connection ('db.connect driver=sqlite' database=$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/$1)."
+		else
+			check_error "Cannot set GRASS session's database connection to an empty value."	
+		fi
+}
 
 
 # FUNCTION
 # clean_up: Remove temporary maps, reset region to what it was, etc.
-clean_up () {
+clean_up () {	
+	
 	# Temporary VECTOR maps
 	type="vector"
 	# Extracted nodes from input vector map.
 	elem="${TMP_VECT_NODES}"	
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
+	# Nodes extracted from input vector map by multi-threaded process.
+	elem="${TMP_VECT_NODES}"
+	g.remove type="${type}" pattern="${elem}_*" -f --q 2>/dev/null
+	
 	# Polygonal bbox of current GRASS region.
 	elem="${TMP_VECT_REGION}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Input points reduced to within current region.
 	elem="${TMP_VECT_SELECT}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Feature(s) extracted from input vector map.
 	elem="${TMP_VECT_EXTRACT}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
+	# Feature(s) extracted from input vector map by multi-threaded process.
+	elem="${TMP_VECT_EXTRACT}"
+	g.remove type="${type}" pattern="${elem}_*" -f --q 2>/dev/null
+	
 	# Feature(s) extracted from input vector map (2).
 	elem="${TMP_VECT_EXTRACT2}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Lines representing newly created network links.
 	elem="${TMP_VECT_LINKS}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Additional network links (lines) to add to links output map.
 	elem="${TMP_VECT_LINKS_ADD}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi	
 	# Network links (lines) with rebuilt category IDs. 
 	elem="${TMP_VECT_LINKS_CAT}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Stores from-to costs for each pair of links (cost-based mode only) 
 	elem="${TMP_VECT_LINKS_COSTS}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Smoothed least-cost paths. 
 	elem="${TMP_VECT_LINKS_SMOOTH}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Cleaned least-cost paths. 
 	elem="${TMP_VECT_LINKS_CLEAN}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Links with row dropped from table
 	elem="${TMP_VECT_LINKS_DROPROW_1}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Links with row dropped from table (swapped)
 	elem="${TMP_VECT_LINKS_DROPROW_2}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Nodes with row dropped from table
 	elem="${TMP_VECT_NODES_DROPROW_1}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Nodes with row dropped from table (swapped)
 	elem="${TMP_VECT_NODES_DROPROW_2}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Delaunay mesh (polygon)
 	elem="${TMP_VECT_LINKS_DELAUNAY_P}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Delaunay mesh (lines)
 	elem="${TMP_VECT_LINKS_DELAUNAY_L}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Patched maps generated by model_complete:
 	# There are 1 or more such maps: use a pattern to find them
@@ -546,7 +598,7 @@ clean_up () {
 	elem="${TMP_VECT_LINKS_PATCH}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" pattern="${elem}*" -f --q
+		g.remove type="${type}" pattern="${elem}_*" -f --q 2>/dev/null
 	fi
 	
 	# Temporary RASTER maps
@@ -555,55 +607,55 @@ clean_up () {
 	elem="${TMP_RAST_COST_RSP}"
 	 found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
-	# Minimum cost output of r.cost
+	# Minimum cost output of r.cost	
 	elem="${TMP_RAST_COST_MIN}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
+	# Cost maps produced by multi-threaded process
+	elem="${TMP_RAST_COST_MIN}"
+	g.remove type="${type}" pattern="${elem}_*" -f --q 2>/dev/null
 	# Directional surface output of r.cost
 	elem="${TMP_RAST_COST_DIR}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
-	# Directional surface output of r.cost (resampled)
-	elem="${TMP_RAST_COST_RES}"
-	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
-	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
-	fi
-	# Directional surface output of r.cost (random error)
+	# Directional surfaces produced by multi-threaded process
+	elem="${TMP_RAST_COST_DIR}"
+	g.remove type="${type}" pattern="${elem}_*" -f --q 2>/dev/null
+	# Directional surface output of r.cost (with added random error)
 	elem="${TMP_RAST_COST_ERR}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Directional surface output of r.cost (normalized random error)
 	elem="${TMP_RAST_COST_NRM}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	 # Rasterized link from map supplied via "initial="
 	elem="${TMP_RAST_RSTLNKS1}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	# Rasterized link from map supplied via "initial=" (2nd version)
 	elem="${TMP_RAST_RSTLNKS2}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	 # Temporary output of an r.mapcalc run (1)
 	elem="${TMP_RAST_MAPCALC1}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi   
 	
 	# Temporary REGIONS
@@ -618,8 +670,11 @@ clean_up () {
 		else
 			g.message -i "Restored original GRASS region."
 		fi
-		g.remove type="${type}" name="${elem}" -f --q
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
+	
+	# Switch back to default DB driver and database:
+	grass_db_connect_default
 }
 
 
@@ -643,6 +698,11 @@ clean_output () {
 }
 
 
+# Make sure we get to clean up!
+trap "g.message -i 'Terminated by user (CTRL+C).' ; clean_up ; exit ${EXIT_CTRL_C}" 2 # user interrupt (CTRL+C)
+#trap "'Unexpected termination.' ; clean_up ; exit ${EXIT_TERMINATED}" 1 # external interrupt
+
+
 # FUNCTION
 # clean_links: Remove links output map: This can be done to get rid of a transient
 #				version of the links output map (e.g. when incrementally re-writing
@@ -657,23 +717,77 @@ clean_links () {
 
 # FUNCTION
 # check_error: Check last return status, issue an error message and abort if appropriate.
+#
+# Arguments:
+#
+# $1 - Error message to display (mandatory)
+# $2 - PID (optional)
+#
+# At least $1 must be provided (error message) for this function to
+# work correctly.
+#
+# If $2 is also provided, then its value will be interpreted as
+# an integer type PID, and a 'kill' command with Signal type '1'
+# will be issued to terminate the corresponding job.
+#
 check_error () {
 	if [ ! "$?" -eq "0" ] ; then
 		g.message -e "$1"
-		clean_up
-		clean_output
-		exit ${EXIT_ERROR}
+		if [ -n $2 ] && [ "$2" != "" ] ; then
+			# PID passed: kill!
+			clean_up
+			g.message -e "Terminating job with PID $2 and all subprocesses."	
+			"${PKILL}" --signal 9 -P $2 &
+			exit ${EXIT_ERROR}
+		else
+			clean_up
+			clean_output
+			exit ${EXIT_ERROR}
+		fi		
+	fi
+}
+
+
+# FUNCTION
+# check_warn: Check last return status, issue a warning message if appropriate.
+check_warn () {
+	if [ ! "$?" -eq "0" ] ; then
+		g.message -w "$1"
 	fi
 }
 
 
 # FUNCTION
 # exit_error: Display an error message and exit with default error code.
+# 
+# Arguments:
+#
+# $1 - Error message to display (mandatory)
+# $2 - PID (optional)
+#
+# At least $1 must be provided (error message) for this function to
+# work correctly.
+#
+# If $2 is also provided, then its value will be interpreted as
+# an integer type PID, and a 'kill' command with Signal type '1'
+# will be issued to terminate the corresponding job.
+#
 exit_error () {
-	g.message -e "$1"
-	clean_up
-	clean_output
-	exit ${EXIT_ERROR}
+	g.message -e "$1"	
+	if [ -n $2 ] && [ "$2" != "" ] ; then
+	    # PID passed: kill!
+	    # Note: The trap set at the beginning of this script will make
+	    # sure that all clean-up functions are run.
+	    g.message -e "Terminating job with PID $2."
+		#kill -s 1 $2
+		clean_up
+		clean_output
+		exit ${EXIT_ERROR}
+	else
+		clean_up
+		clean_output
+		exit ${EXIT_ERROR}
+	fi	
 }
 
 
@@ -1252,8 +1366,21 @@ check_setup () {
 # check_environment: Query GRASS environment for some important variables.
 check_environment () {
 	
+	# Get essential GRASS environment settings
+	GISDBASE=`g.gisenv get=GISDBASE`
+	LOCATION_NAME=`g.gisenv get=LOCATION_NAME`
+	MAPSET=`g.gisenv get=MAPSET`
+	
 	# Get current region settings.
-	eval `g.region -p -g`
+	eval `g.region -p -g`	
+		
+	# Get current GRASS database connection	
+	cmd=`db.connect -pg`
+	check_error "Failed to query GRASS session for current database connection ('db.connect')."
+	eval_ws_safe "${cmd}" "driver"
+	GRASS_DB_driver="${EVAL_RESULT}"
+	eval_ws_safe "${cmd}" "database"
+	GRASS_DB_database="${EVAL_RESULT}"
 	
 	# TODO: We never seem to use this!? It was probably intended to be used in the
 	#      context of adjusting node (point) locations to link (line) start/end vertices.
@@ -1771,7 +1898,7 @@ check_input () {
 			v.extract input="${GIS_OPT_INPUT}" layer="1" type="point" where="${WHERE}" output="${TMP_VECT_LINKS}" -t --overwrite --quiet
 			check_error "Failed to extract points with primary key<>'${key}' from copy of input vector map."
 			# Add attribute table with column to hold 'dist' value to extracted point
-			${V_DB_ADDTABLE} map="${TMP_VECT_EXTRACT}" columns="dist DOUBLE PRECISION" --quiet
+			${V_DB_ADDTABLE} map="${TMP_VECT_EXTRACT}" columns="dist DOUBLE PRECISION" --quiet 2>/dev/null
 			check_error "Failed to add attribute table to map with extracted point with primary key='${key}'."
 			# Get minimum distance between current point and all others and store it in attribute table.
 			v.distance from="${TMP_VECT_EXTRACT}" to="${TMP_VECT_LINKS}" upload="dist" column="dist" --quiet
@@ -2120,7 +2247,7 @@ check_params () {
 	fi
 	
 	# Option "costmem" is only meaningful if "costmap" is also provided.
-	if [ ${GIS_OPT_COSTMEM} -gt 1 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
+	if [ ${GIS_OPT_COSTMEM} -gt 300 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
 		g.message -w "Option 'costmem=' is meaningless without 'costmap='. Ignored."		
 	fi
 	
@@ -2391,7 +2518,7 @@ preprocess () {
 	fi
 	
 	# Create default version of output nodes map by copying (filtered) input map
-	g.copy vector="${GIS_OPT_INPUT},${GIS_OPT_NODES}" --overwrite --quiet
+	g.copy vector="${GIS_OPT_INPUT},${GIS_OPT_NODES}" --overwrite --quiet 2>/dev/null
 	check_error "Failed to copy input map to initial output nodes map '${GIS_OPT_NODES}'."
 }
 
@@ -2400,8 +2527,8 @@ preprocess () {
 # links_adjust_nodes: Makes sure that the start and end nodes of each network link are
 # spatially adjusted to lie exactly at the locations of the original input points that
 # mark the intended start and end of each link. This is necessary if the links are
-# computed as least cost paths: GRASS 7's 'r.path' aligns the first and last vertices
-# of each path with the current region's cell system, not with the original start/end
+# computed as least cost paths: GRASS's 'r.path' aligns the first and last vertices
+# of each path with the current region's cell system, NOT with the original start/end
 # points!
 #
 # Using this function is a little tricky, because it has been optimized to process the
@@ -2416,6 +2543,7 @@ preprocess () {
 # 	$1 - map that holds the network links to adjust (DANGER: see below!)
 #   $2 - the start node (normally one point extracted from $GIS_OPT_INPUT)
 #   $3 - number of links to adjust
+#	$4 - PID of main process (set if this function is called from within a concurrent thread)
 # 
 # DANGER: This function will drop and completely re-write the attribute table
 #         of the map passed in $1! Therefore, only pass TEMPORARY maps to
@@ -2446,30 +2574,30 @@ links_adjust_nodes ()
 	# Store original starting point coordinates.
 	#adj_endxold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endxold}"`
 	adj_endxold=`v.db.select -c map="${2}" column="${adj_fld_endxold}"`
-	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endxold}')."
+	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endxold}')." ${4}
 	#adj_endyold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endyold}"`
 	adj_endyold=`v.db.select -c map="${2}" column="${adj_fld_endyold}"`
-	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endyold}')."
+	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endyold}')." ${4}
 	# Attach attribute table to links map of this iteration, so we can
 	# easily loop over all links, fixing each one in turn:	
-	${V_DB_ADDTABLE} map="$1" layer="1" key="${adj_fld_key}" --quiet
-	check_error "Failed to attach attribute table to temporary links map."
+	${V_DB_ADDTABLE} map="$1" layer="1" key="${adj_fld_key}" --quiet 2>/dev/null
+	check_error "Failed to add attribute table to temporary links map '$1'." ${4}
 	#DEBUG: Enable additional columns to store old node coordinates in attribute table
 	#${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_startxold} DOUBLE PRECISION, ${fld_startyold} DOUBLE PRECISION"
 	#${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_endxold} DOUBLE PRECISION, ${fld_endyold} DOUBLE PRECISION"
 	#END DEBUG
 	# Upload current node coordinates to each link's table:
 	v.to.db map="$1" layer="1" type="line" option="start" columns="${adj_fld_startxnew},${adj_fld_startynew}" --quiet
-	check_error "Failed to upload start node coordinates to temporary links map."
+	check_error "Failed to upload start node coordinates to temporary links map." ${4}
 	v.to.db map="$1" layer="1" type="line" option="end" columns="${adj_fld_endxnew},${adj_fld_endynew}" --quiet
-	check_error "Failed to upload end node coordinates to temporary links map."
+	check_error "Failed to upload end node coordinates to temporary links map." ${4}
 	adj_step_inner=1
 	adj_cat_inner=1				
 	#while [ ${adj_step_inner} -lt ${NUM_LINKS} ] ; do
 	while [ ${adj_step_inner} -lt ${3} ] ; do
 		#echo "${adj_fld_key}=${adj_cat_inner}"
 		adj_val=`v.db.select -c map="$1" column="${adj_fld_key}" where="${adj_fld_key}=${adj_cat_inner}"`
-		check_error "Failed to query attribute table of partial links map (iteration ${adj_step_inner})."
+		check_error "Failed to query attribute table of partial links map (iteration ${adj_step_inner})." ${4}
 		if [ -n "${adj_val}" ] ; then # Feature exists! Process it:					
 			# Upload original node coordinates to current link:
 			#DEBUG: Store coordinates of original end node in attribute table
@@ -2478,9 +2606,9 @@ links_adjust_nodes ()
 			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_fld_endyold}" value="${adj_endyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
 			#END DEBUG
 			adj_startxold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startxold}" where="${adj_fld_key}=${adj_cat_inner}"`
-			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startxold}')."
+			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startxold}')." ${4}
 			adj_startyold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startyold}" where="${adj_fld_key}=${adj_cat_inner}"`
-			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startyold}')."
+			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startyold}')." ${4}
 			#DEBUG: Store coordinates of original start node in attribute table
 			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_startxold}" value="${adj_startxold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
 			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_startyold}" value="${adj_startyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
@@ -2507,8 +2635,9 @@ links_adjust_nodes ()
 			#END DEBUG
 			# Use v.edit to correct node positions now!
 			# TODO: pass threshold="0.00000001" to v.edit!?
-			v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_startxnew},${adj_startynew}" move="${adj_d_startxnew},${adj_d_startynew},0" cats="${adj_cat_inner}" --quiet
-			v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_endxnew},${adj_endynew}" move="${adj_d_endxnew},${adj_d_endynew},0" cats="${adj_cat_inner}" --quiet
+			#v_edit_thresholds="threshold=-1,0.0001,0"
+			v.edit ${v_edit_thresholds} map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_startxnew},${adj_startynew}" move="${adj_d_startxnew},${adj_d_startynew},0" cats="${adj_cat_inner}" --quiet
+			v.edit ${v_edit_thresholds} map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_endxnew},${adj_endynew}" move="${adj_d_endxnew},${adj_d_endynew},0" cats="${adj_cat_inner}" --quiet
 			# Move on to next link:
 			adj_step_inner=`"${EXPR}" ${adj_step_inner} + 1`
 		fi
@@ -2823,9 +2952,549 @@ model_attsim () {
 		g.remove type="vector" name="${links_org}" -f --quiet
 		check_error "Failed to delete links vector map for replacement with reduced attributes map."
 		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
 		check_error "Failed to copy new links map with reduced attributes to output map."
 	fi
+}
+
+
+# FUNCTION
+# mutex_acquire: Uses mkdir to create a mutex lock in the
+# filesystem (default GRASS temp directory) that prevents race conditions
+# on shared resources when running operations in multiple threads.
+# Uses GRASS' TMPDIR environment variable to store the mutex dir.
+# 
+# Mkdir is suitable for creating a mutex, because (from the point of view
+# of a shell scipt) it is atomic: A directory can be checked and created
+# in one indivisible operation.
+#
+# Arguments:
+#
+#	$1 = miss sleep time in seconds (default: 0.01s)
+#		 This sets the time that the main loop of this function
+#		 spends idling before reattempting to acqurie the mutex lock.
+#		 The default is very short, which is only suitable for locks
+#		 that will be set and released rapidly (i.e. no code should
+#		 spend much time holding the lock). If the time that any
+#		 code segment spends holding the lock regularly exceeds the
+#		 default, then $1 should be set higher to avoid excessive
+#		 overhead by the 'sleep' command!
+#
+#	$2 = mutex name (default: v_net_models_<process PID>.lock)
+#		 Setting $2 (in addition to $1) allows to create a 'named mutex'.
+#        This should only be done if the mutex needs to be created
+#		 with an individual name (e.g. by a nested function that
+#		 has some need to create its own mutex). Note that in the
+#		 latter case, mutex_release() must also be called with the
+#		 same name.
+#
+# Adapted from: https://www.ewan.cc/?q=node/85
+mutex_acquire() {
+	if [ "$1" = "" ] ; then
+		sleep="0.01s"
+	else
+		sleep="$1"
+	fi
+	if [ "$2" = "" ] ; then
+		lock="v_net_models_lock"
+	else
+		lock="v_net_models_$2_lock"
+	fi
+	locked="false"
+	# This will loop until the mutex was successfully created/acquired:
+	while [ ${locked} = "false" ] ; do
+		# Attempt to create mutex lock (=temp directory):
+		mkdir "${TMPDIR}/${lock}" 2>/dev/null
+		rc=$?
+		if [ ${rc} -ne 0 ] ; then
+			# mutex could not be acquired: volatile code segment must wait
+			sleep "${sleep}"
+		else
+			# mutex lock acquired: exit loop and allow execution of
+			# volatile code segment.
+			locked="true"
+			# DEBUG
+			#echo "MUTEX DIR CREATE: '${TMPDIR}/${lock}'"
+		fi
+	done
+}
+
+
+# FUNCTION
+# mutex_release: Releases a mutex lock in the filesystem (default GRASS temp directory).
+#
+# Arguments:
+#	
+#	$1 = mutex name
+#		 This must only be set if a 'named mutex' was created.
+#		 See 'mutex_acquire()' for information.
+#
+mutex_release() {
+	if [ "$1" = "" ] ; then
+		lock="v_net_models_lock"
+	else
+		lock="v_net_models_$1_lock"
+	fi
+	rmdir "${TMPDIR}/${lock}"
+	# Not being able to release the mutex indicates a fatal flaw
+	# in the multi-threaded processing and leads to program abortion!
+	check_error "Failed to release mutex lock '${lock}'."
+
+	# DEBUG
+	#echo "MUTEX DIR DELETE: '${TMPDIR}/${lock}'"
+}
+
+
+# FUNCTION
+# mutex_acquire_seq: Attempts to acquire the globally synchronised mutex
+# lock (used only by model_complete_thread) in strict sequence.
+#
+# This function is _only_ used by 'model_complete_thread()'.
+# It manages a very specific type of mutex that can only be acquired
+# by a thread in a strict sequence. The purpose of this is to make
+# absolutely sure that the all threads perform the very first operation
+# on a data structure (the input points map from which one focal node
+# after another is extracted into a local temporary map) in strict
+# order of launching the background threads. This is necessary, because
+# the individual focal networks created by each thread must be in a
+# specific order for the attribute transfer in 'model_complete()' (which
+# dispatches the individual worker threads) to work correctly.
+#
+# The only argument to this function is:
+#
+# 	$1 - sequence number of thread that wishes to acquire the mutex lock
+#
+# The mutex lock will be granted if the temp dir for thread $1 exists and
+# could be removed successfully.
+#
+# This entire mechanism can only work if the first thread requests the lock
+# for '$1=0', and if all consecute threads request the lock for a strictly
+# incrementing (by 1) sequence value.
+#
+# Anything else would lead to a DEADLOCK.
+#
+mutex_acquire_seq() {
+	# DEBUG
+	# echo "MUTEX SEQ REQ: '$1'"
+	
+	lock="v_net_models_lock_seq_$1"
+	
+	locked="false"
+	# This will loop until the mutex was successfully created/acquired:
+	while [ ${locked} = "false" ] ; do
+		# Removing the temp dir for the requesting thread's unique ID
+		# represents acquisition of mutex lock:
+		rmdir "${TMPDIR}/${lock}" 2>/dev/null
+		rc=$?
+		if [ ${rc} -ne 0 ] ; then
+			# mutex could not be acquired: volatile code segment must wait
+			sleep "0.01"
+		else
+			# mutex lock acquired: exit loop and allow execution of
+			# volatile code segment.
+			locked="true"
+			# DEBUG
+			# echo "MUTEX ACQ: '${TMPDIR}/${lock}'"
+		fi
+	done
+}
+
+
+# FUNCTION
+# mutex_release_seq: Releases the globally synchronised mutex lock,
+# used exclusively by 'model_complete_thread()'.
+# See description of 'mutex_acquire_seq()' for details.
+#
+# This function takes only one argument:
+#
+#	$1: ID of next thread that will be allowed to acquire the lock.
+#
+mutex_release_seq() {
+	# Releasing the mutex is done by creating a temp dir that
+	# contains the ID of the next thread in the sequence in its name.
+	lock="v_net_models_lock_seq_$1"
+	mkdir "${TMPDIR}/${lock}" 2>/dev/null
+	rc=$?
+	if [ ${rc} -ne 0 ] ; then
+		check_error "Unable to relase mutex lock for thread #$1."
+	fi
+	# DEBUG
+	# echo "MUTEX SEQ REL: '$1'"
+}
+
+
+# FUNCTION
+# model_complete_thread: This is the code that does the heavy lifting
+# processing work for model_complete(). It has been moved into a separate
+# function to make it suitable for multi-threaded processing.
+#
+# This function is called only from within the main loop of model_complete(),
+# where the latter steps through all points of the input to extract the
+# sub networks.
+#
+# Arguments:
+# 	$1 - thread ID (a unique integer 0..n) 
+#   $2 - Goal contribution (%), passed as INTEGER 0 .. 100
+#        This argument is the percentage to which this thread
+#		 contributes to the overall processing goal. It is used
+#		 for progress reporting and can be set to '0' to disable.
+#	$3 - the primary key of the current input feature (network node/point)
+#        to process
+#	$4 - globally unique job ID: an integer value provided by the caller.
+#	$5 - PID of caller process (required to kill entire script on fatal error)
+# 
+# TODO:
+#
+#	    * Results of multi-threaded run MUST be compared with old, single-threaded code
+#		  (incl. sequence of edges and nodes in output maps!)
+#
+#	    * In MAIN, there is a loop that re-orders the links table for a run with a
+#		  cost map:
+#		  if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+#		    g.message -i "Reordering link attributes:"
+#           ..
+#         -> It seems, that the current, multi-threaded code no longer requires this!
+#
+#		* Implement multi-threaded cost raster ops!
+#		  [X] DONE: TESTING REQUIRED (incl. with an initial model and cost raster)
+#
+#		  [CAVEAT]: cat sequence of output links attribute table is not strictly ascending in
+#			     cost based mode.
+#                -> Near line 3890, there is code that re-orders the output links for each
+#                   patch map. This will produce correct data (i.e. correct associations of
+#                   attribute rows and geometries/LCPs). But the cat sequence is descending
+#				    for each patch, which just looks weird, if the unordered table is printed.
+#					However, to fix this, we would have to re-order ALL other attributes instead
+#				    of cat. The overhead this would require does not seem to be worth it.
+#				  -> Document this behaviour!
+#
+#		  [BUG!]: links_adjust_nodes() fails for LAT/LON: the adjusted nodes all have some individual,
+#				  small variations in their locations and are not where they are supposed
+#				  to be.
+#				  -> THIS PROBLEM ONLY EXISTS IN LAT/LON REGIONS!
+#				  -> v.edit 'move' is used to move coords by deltas, and AWK with precision 8 is involved!
+#				  -> increase awk precision and/or use snapping tolerance in v.edit?
+#				  -> is this just a mix-up of X and Y in lat/lon locations?
+#				  -> DIAGNOSIS: Compare to results without any nodes adjustment, to see if anything has
+#					 been moved, at all!
+#					 ALSO compare to output of old, single-threaded code: Did that have the same issue?
+#
+#		  * Make sure that all threads are terminated if "exit" is called from
+#           within multi-threaded raster processing ops. This includes all
+#		    called subfunctions (DONE for "links_adjust_nodes": any others?)!
+#			-> This can be tested by simply generating a call to check_error and passing
+#			   any message as $1 and $global_pid as $2!
+#
+#		  * Make sure that CTRL+C will also terminate all threads
+#		    (see "trap" statements at start of script)!
+#           -> Currently, CTRL+C in the middle of this threaded function leaves
+#           around temp files: tmp_v_net_models_1423339_d_v_select_* ...
+#			-> NEW: moved 'trap' statement for signal 2 to after declarations of
+#			   clean-up functions. TEST: Cleaning should work now!
+#
+#		  * Expose r.cost flag '-k' (currently always set): If this is not set,
+#		    then the results are less accurate, but faster!
+#
+#		* Make sure that the code segments guarded by (the sync'd) mutex
+#	      are all minimal!
+#
+#		* All the mutex handling and temporary map production should
+#		  be conditionalized on GIS_OPT_THREADS -gt 1 (we don't need
+#		  all this overhead when running in single-thread mode!).
+#
+#		* Remove/disable debugging messages from this function and the caller function
+#
+#		* Implement progress display with g.progress.
+#
+#		* Code needs a lot of cleaning up for legibility.
+#
+#		* use shell's 'local' keyword to define clash-free variables in functions(?)
+#
+#		* Update documentation ("Performance"):
+#			- more threads = more overhead and (much) more memory footprint
+#			  and temporary storage requirements (especially when using
+#			  cost rasters!) -> probably not worth it for small input sizes and
+#			  small cost rasters
+#			- use "threshold=0" to disable time-consuming topology tests for
+#			  large numbers of input points (but then user must guarantee data
+#			  quality a priori!)
+#			- approximation: new option to on -k(night's move): off by default now
+#
+model_complete_thread () {
+	id=$1	
+	goal=$2
+	key=$3
+	step=$4
+	cat_next=$5
+	global_pid=$6
+	#DEBUG
+	echo "THREAD $id LAUNCHED (pkey=$key) (goal=$goal) (cat_next=$cat_next) (step=$step)"
+
+	#DEBUG Test script termination from within thread
+	#if [ $step -eq 5 ] ; then
+	#	exit_error "STOP!" $global_pid
+	#fi
+	
+	# MUTEX ON
+	#mutex_acquire "0.1s" "${global_pid}_g_copy_input"
+	mutex_acquire_seq ${step}
+	next_step=`"${EXPR}" ${step} + 1`
+		
+	# MUTEX ON
+	#mutex_acquire "0.1s" "${global_pid}_where"
+	# Form SQL WHERE clause to get next primary key value.
+	get_where_clause "${key}"
+	local_where="${WHERE}"
+	# MUTEX OFF
+	#mutex_release "${global_pid}_where"	
+	
+	# Create a local copy of nodes input map:
+	# Switch to thread-local DB driver and database:
+	mutex_acquire "0.1s" "${global_pid}_db_switch"
+	#db.connect driver="sqlite" database='$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/'"${GIS_OPT_INPUT}_${step}.db"
+	#check_error "Failed to set local DB connection in background job/thread #${step} (1)."
+	grass_db_connect_local "${GIS_OPT_INPUT}_${step}.db"
+	g.copy vector="${GIS_OPT_INPUT},${GIS_OPT_INPUT}_${step}" --overwrite --quiet 2>/dev/null
+	check_error "Failed to copy input nodes map '${GIS_OPT_INPUT}' to '${GIS_OPT_INPUT}_${step}' for thread safety." ${global_pid}
+	mutex_release "${global_pid}_db_switch"
+
+	# MUTEX ON
+	#mutex_acquire "0.1s" "${global_pid}_v_edit"
+	# Delete extracted node from ORIGINAL (global!) nodes input map(!):
+	# Switch to default (global) DB driver and database:
+	mutex_acquire "0.1s" "${global_pid}_db_switch"
+	grass_db_connect_default
+	#check_error "Failed to set default DB connection in background job/thread #${step} (after creating local map)."
+	v.edit map="${GIS_OPT_INPUT}" layer="1" type="point" tool="delete" where="${local_where}" --overwrite --quiet		
+	check_error "Failed to delete point with primary key value '${key}' from copy of input vector map." ${global_pid}
+	# MUTEX OFF
+	#mutex_release "${global_pid}_v_edit"
+	mutex_release "${global_pid}_db_switch"
+	
+	# TODO: Does this really have to be done within this scope/mutex?
+	# MUTEX ON
+	#mutex_acquire "0.1" "${global_pid}_v_db_update"
+	# By setting the primary key of this feature to our 'no data' value, we mark the corresponding
+	# attribute table record as *deleted*:								
+	# HINT: We use V_DB_UPDATE here (not db.execute), since it will make sure to refresh the database
+	#       connection with $GIS_OPT_INPUT (we manipulate that map!) each run through the loop.		
+	${V_DB_UPDATE} map="${GIS_OPT_INPUT}" layer="1" column="${GIS_OPT_KEY}" value="${no_data}" where="${local_where}" --overwrite --quiet
+	check_error "Failed to set primary key value '${key}' in copy of input vector map to 'no data' ('$no_data')." ${global_pid}
+	# MUTEX OFF
+	#mutex_release "${global_pid}_v_db_update"
+	
+	# MUTEX OFF
+	#mutex_release "${global_pid}_g_copy_input"	
+	mutex_release_seq ${next_step}
+	
+	# MUTEX ON
+	mutex_acquire "0.1s" "${global_pid}_v_db_select"	
+	# Retrieve GRASS primary key ('cat') value:
+	# Switch to thread-local DB driver and database:
+	mutex_acquire "0.1s" "${global_pid}_db_switch"
+	#db.connect driver="sqlite" database='$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/'"${GIS_OPT_INPUT}_${step}.db"
+	#check_error "Failed to set local DB connection in background job/thread #${step} (2)."
+	grass_db_connect_local "${GIS_OPT_INPUT}_${step}.db"
+	# Do selection:
+	val=`v.db.select map="${GIS_OPT_INPUT}_${step}" column="${GIS_OPT_KEY}" where="${local_where}" -c`
+	check_error "Failed to query attribute table of copy of input points map." ${global_pid}
+	mutex_release "${global_pid}_db_switch"
+	# MUTEX OFF	
+	mutex_release "${global_pid}_v_db_select"
+	
+	if [ -n "${val}" ] ; then # Feature exists! Process it:
+		# We extract each node in turn to a new map. Then we connect all other
+		# nodes (that remain in the original map) to the extracted node. The
+		# result is a new (lines) map with the a non-redundant subnetwork.
+		#
+		# Set name of temporary links output map for current pass through the main loop:
+		tmp_vect_links="${TMP_VECT_LINKS_PATCH}_${step}"
+		#DEBUG
+		#echo "TMP MAP: ${tmp_vect_links}"		
+		
+		## MUTEX ON
+		#mutex_acquire "0.1s" "${global_pid}_v_extract"
+		# Extract current node to new local (to this thread) temporary map:
+		# Switch to thread-local DB driver and database:
+		mutex_acquire "0.1s" "${global_pid}_db_switch"
+		#db.connect driver="sqlite" database='$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/'"${GIS_OPT_INPUT}_${step}.db"
+		#check_error "Failed to set local DB connection in background job/thread #${step} (2)."
+		grass_db_connect_local "${GIS_OPT_INPUT}_${step}.db"
+		# Do extraction:
+		v.extract input="${GIS_OPT_INPUT}_${step}" layer="1" type="point" where="${local_where}" output="${TMP_VECT_EXTRACT}_${step}" --overwrite --quiet						
+		check_error "Failed to extract point with primary key value '${key}' from copy of input vector map." ${global_pid}
+		# Delete extracted node from thread-local version of input map:
+		v.edit map="${GIS_OPT_INPUT}_${step}" layer="1" type="point" tool="delete" where="${local_where}" --overwrite --quiet		
+		check_error "Failed to delete point with primary key value '${key}' from thread-local copy of input vector map." ${global_pid}
+		## MUTEX OFF
+		mutex_release "${global_pid}_db_switch"
+		#mutex_release "${global_pid}_v_extract"		
+		
+		# DEBUG
+		#mutex_acquire "0.1s" "${global_pid}_v_ops"		
+		
+		# Connect extracted node with all remaining nodes in old map.			
+		#
+		# COST map provided? Then we must now change the shapes of the links to least-cost paths!
+		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+			# Compute least cost surface from current node to all other nodes:					
+			r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}_${step}" stop_points="${GIS_OPT_INPUT}_${step}" memory="${GIS_OPT_COSTMEM}" output="${TMP_RAST_COST_MIN}_${step}" outdir="${TMP_RAST_COST_DIR}_${step}" --o --quiet
+			check_error "Failed to compute cost and direction surfaces (iteration ${step})." ${global_pid}
+			## MUTEX ON
+			mutex_acquire "0.1s" "${global_pid}_db_switch"
+			# Switch to thread-local DB driver and database:			
+			grass_db_connect_local "${GIS_OPT_INPUT}_${step}.db"
+			# We now store the costs for each path on the current cost raster (we will need this later).
+			from_id="${key}"
+			TO_IDS=`v.db.select map="${GIS_OPT_INPUT}_${step}" columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY} != ${key}" -c --quiet`
+			check_error "Failed to retrieve primary keys from temporary vector map for storing link costs." ${global_pid}
+			# Get DBMS connection info for temp links map:
+			get_tbl_info "${TMP_VECT_LINKS_COSTS}"
+			# Get all least-cost values for all "to nodes" from current cost surface:
+			COSTVAL=`r.what map="${TMP_RAST_COST_MIN}_${step}" points="${GIS_OPT_INPUT}_${step}" separator="|"`
+			check_error "Failed to query temporary cost raster using map of 'to' nodes." ${global_pid}
+			# First cat in attribute table is provided by calling function!
+			cat_cost=$cat_next
+			# Index of first cost value starts at '1' for each thread!
+			next_cost=1			
+			#DEBUG
+			#echo "$TO_IDS"			
+			for to_id in $TO_IDS ; do
+				if [ "$to_id" != "$no_data" ] ; then
+					SQL=""
+					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
+					SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${to_id}"
+					SQL="${SQL} WHERE cat = ${cat_cost}; "
+					echo "${SQL}" | db.execute database="${attribute_database}" input="-"					
+					#DELETEME: replaced v_db_update with direct calls to db.execute
+					#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_FROM_ID}" value="${key}" where="cat=${cat_cost}" --quiet
+					#check_error "Failed to update field '${LINKS_FLD_FROM_ID}' in temporary link costs vector map."
+					#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_TO_ID}" value="${to_id}" where="cat=${cat_cost}" --quiet
+					#check_error "Failed to update field '${LINKS_FLD_TO_ID}' in temporary link costs vector map."
+					check_error "Failed to update field '${LINKS_FLD_FROM_ID} or ${LINKS_FLD_TO_ID}' in temporary link costs vector map." ${global_pid}
+					# Transfer matching cost value
+					cur=1
+					for cost in $COSTVAL ; do
+						if [ $cur -eq $next_cost ] ; then 
+							costval=`echo $cost | "${AWK}" -F "|" '{ print $4 }'`
+							SQL=""
+							SQL="${SQL}UPDATE ${attribute_table} SET"
+							SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"
+							SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat_cost}; "
+							echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+							#DELETEME: replaced v_db_update with direct calls to db.execute
+							#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="cat=${cat_cost}" --quiet
+							check_error "Failed to update field '${LINKS_FLD_COST}' in temporary link costs vector map." ${global_pid}							
+						fi
+						cur=`"${EXPR}" ${cur} + 1`
+					done
+					next_cost=`"${EXPR}" ${next_cost} + 1`
+					# Set next primary key value for subsequent upload of cost value
+					cat_cost=`"${EXPR}" ${cat_cost} + 1`
+				fi
+			done			
+						
+			# Compute least cost vector paths based on directional surface computed above
+			# (end points now become start points, as r.cost has produced back-links!): 
+			r.path input="${TMP_RAST_COST_DIR}_${step}" format="degree" vector_path="${tmp_vect_links}" start_points="${GIS_OPT_INPUT}_${step}" --overwrite --quiet						
+			check_error "Failed to compute least cost paths (iteration ${step})." ${global_pid}
+			
+			# Smooth output path if '-s' flag given (we do this before adjusting link nodes to original points!):
+			# TODO: Not yet implemented/tested. Needs to be made THREAD-SAFE once implemented.
+			# TODO: Logics: This seems only useful if a cost map is also provided, users should thus be advised
+			#		when setting this flag w/o also providing a cost map for input!
+			#if [ ${GIS_FLAG_S} -eq 1 ] ; then
+			#	v.generalize --o input="${tmp_vect_links}" output="${TMP_VECT_LINKS_SMOOTH}_${step}" type="line" alpha="1" beta="1" method="snakes" threshold="0" --overwrite --quiet
+			#	check_error "Failed to smooth network links map (${step} of ${NUM_INPUT_NODES})." ${global_pid}
+			#	g.remove type="vector" name="${tmp_vect_links}" -f --quiet # So that g.copy won't issue a warning.
+			#	g.copy vector="${TMP_VECT_LINKS_SMOOTH}_${step},${tmp_vect_links}" --overwrite --quiet 2>/dev/null
+			#	check_error "Failed to copy smoothed network links map (${step} of ${NUM_INPUT_NODES})." ${global_pid}
+			#	g.remove type="vector" name="${TMP_VECT_LINKS_SMOOTH}_${step}" -f --quiet
+			#fi
+		
+			# Adjust node coordinates of least cost paths (if required).
+			# This check-and-adjust step is necessary, because r.path will create least-cost
+			# paths whose start and end nodes are aligned to the cell centers of the cost
+			# raster. Instead, we want them to be exactly the coordinates of the original input points.
+			# NOTE: ${num_links_to_adjust} is the number of points in the LCP subnetwork processed by this thread.
+			# In theory, we could also read that from `v.info'. However, calling the latter will set
+			# variables that might interfere with those in other threads. So we make use of the fact that
+			# that the thread with ID '0' is the first one that was launched and has an LCP subnetwork
+			# with ${NUM_INPUT_NODES}, while all successive threads have ${NUM_INPUT_NODES} - ${id}!
+			num_links_to_adjust=`"${EXPR}" ${NUM_INPUT_NODES} - ${step}`
+			links_adjust_nodes "${tmp_vect_links}" "${TMP_VECT_EXTRACT}_${step}" "${num_links_to_adjust}" ${global_pid}	
+			
+			# We cannot release the DB mutex sooner, because up to this point, we have been writing
+			# new tables into the shared mapset database!			
+			mutex_release "${global_pid}_db_switch"
+			## MUTEX OFF
+			
+			# At this point, we already remove the temporary raster surfaces to release storage space:	
+			## MUTEX ON		
+			mutex_acquire "0.1" "${global_pid}_g_remove" 
+			g.remove type="raster" name="${TMP_RAST_COST_MIN}_${step}" -f --quiet
+			g.remove type="raster" name="${TMP_RAST_COST_DIR}_${step}" -f --quiet
+			mutex_release "${global_pid}_g_remove"
+			## MUTEX OFF
+		else
+			# We are running in straight-line links (Euclidean) mode: Create link as a new straight-line
+			# connection, using 'v.distance output='.
+			# NOTE: Since GRASS 8, 'upload=' is a mandatory option. So it is used here to upload the
+			# distance to the nearest feature into a dummy (temporary) attribute field, even though
+			# this is not a necessary operation in our context.
+			
+			# DEBUG
+			#mutex_release "${global_pid}_v_ops"
+			
+			# MUTEX ON
+			#mutex_acquire "0.1" "${global_pid}_v_distance"
+			# Switch to thread-local DB driver and database:
+			mutex_acquire "0.1s" "${global_pid}_db_switch"
+			#db.connect driver="sqlite" database='$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/'"${GIS_OPT_INPUT}_${step}.db"
+			#check_error "Failed to set local DB connection in background job/thread #${step} (2)."
+			grass_db_connect_local "${GIS_OPT_INPUT}_${step}.db"
+			# Create distance lines maps:
+			v.distance from="${GIS_OPT_INPUT}_${step}" from_layer="1" from_type="point" to="${TMP_VECT_EXTRACT}_${step}" to_layer="1" to_type="point" upload="dist" column="${TMP_FLD_DIST}" output="${tmp_vect_links}" --overwrite --quiet
+			check_error "Failed to connect point with primary key value '${key}' to all other points of input vector map." ${global_pid}
+			# MUTEX OFF
+			mutex_release "${global_pid}_db_switch"
+			#mutex_release "${global_pid}_v_distance"
+		fi
+		
+		# Clean up! Remove local temporary maps, still within this thread's scope.
+		mutex_acquire "0.1" "${global_pid}_g_remove" 
+		# Switch to thread-local DB driver and database:
+		mutex_acquire "0.1s" "${global_pid}_db_switch"		
+		#db.connect driver="sqlite" database='$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/'"${GIS_OPT_INPUT}_${step}.db"
+		#check_error "Failed to set local DB connection in background job/thread #${step} (2)."		
+		grass_db_connect_local "${GIS_OPT_INPUT}_${step}.db"
+		# Remove temporary maps:		
+		g.remove type="vector" name="${TMP_VECT_EXTRACT}_${step}" -f --quiet		
+		g.remove type="vector" name="${GIS_OPT_INPUT}_${step}" -f --quiet
+		# Switch back to default (global) DB driver and database:
+		grass_db_connect_default
+		#check_error "Failed to set default DB connection in background job/thread #${step} (at end of processing)."
+		# Remove thread-local database file:
+		rm "$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/${GIS_OPT_INPUT}_${step}.db"
+		check_warn "Failed to delete temporary database file '$GISDBASE/$LOCATION_NAME/$MAPSET/sqlite/${GIS_OPT_INPUT}_${step}.db'. Please remove manually."
+		mutex_release "${global_pid}_db_switch"
+		mutex_release "${global_pid}_g_remove"
+		
+	else
+		# No feature to extract! This is a fatal error!		
+		exit_error "Input data missing for primary key query '${local_where}'. Aborting."
+	fi
+	
+	# Update progress display
+	if [ ${goal} -gt 0 ] ; then
+		g.message -p "${goal} 100 ${goal}"
+	fi
+	
+	#DEBUG
+	#echo "THREAD $id COMPLETED"
+
+	return 0
 }
 
 
@@ -2843,7 +3512,7 @@ model_complete () {
 	# to create a new points vector map, and we use its attribute table to store the
 	# cost data.
 	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-		# Use v.random to create as many features with attached attributes as
+		# We use v.random to create as many features with attached attributes as
 		# we need (=number of links in complete network). We use the "column=" option to attach
 		# an attribute table at the same time. Normally, this is used for random
 		# Z values, but we will simply overwrite it with cost values later.
@@ -2855,63 +3524,30 @@ model_complete () {
 		check_error "Failed to add attribute field '${LINKS_FLD_FROM_ID}' (type '${KEY_TYPE}') to temporary vector map for storing link costs."
 		${V_DB_ADDCOLUMN} map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_TO_ID} ${KEY_TYPE}" --quiet
 		check_error "Failed to add attribute field '${LINKS_FLD_TO_ID}' (type '${KEY_TYPE}') to temporary vector map for storing link costs."
-		# Set primary key (GRASS default 'cat' column) value for first upload of cost value. 
+		# Set primary key (GRASS default 'cat' column) value for first upload of cost value.
 		cat_cost=1
 	else
 		# Straight-line (Euclidean) links: Add a temporary field for 'distance to nearest feature'.
 		# This is only required because 'v.distance' has a mandatory 'upload=' option since GRASS 8.
 		${V_DB_ADDCOLUMN} map="${GIS_OPT_INPUT}" layer="1" columns="${TMP_FLD_DIST} double precision" --quiet
 		check_error "Failed to add temporary attribute field '${TMP_FLD_DIST}' (type 'double precision') to copy of input map."
-	fi
-	# Initialize 'no data' representation for primary keys as empty string.
-	no_data=
-	# Step through all points of input map and connect them with each other.
-	step=1	
-	# This loop steps through number of input nodes MINUS ONE(!).
-	# The reason for this is that the last node will already be part
-	# of the fully connected network when the loop reaches its index.
-	#NUM_LINKS=${NUM_INPUT_NODES} # Number of links at current processing step: Needed by links_adjust_nodes()!
-	num_links_to_adjust=${NUM_INPUT_NODES} # Number of links at current processing step: Needed by links_adjust_nodes()!
-	get_primary_keys "${GIS_OPT_INPUT}"
-	# PATCH_LIST: This list is where we keep the names of the temporary vector maps
-	# with subnetworks that we patch together in one go, after the main loop has completed:
-	PATCH_LIST=
-	
-	# TODO: - refactor the main loop below, so that there will be only one, unified
-	#		   vector maps patching phase, in a SEPARATE loop after this one.
-	#       - this will require multiple temporary maps to be produced before patching.
-	#		- to avoid CLI buffer overrun, maps should be patched one-by-one, with a new call to v.patch each time
-	#       - once this is done, the calls to r.cost and r.path can be refactored to run in multiple threads
-	#       --> THIS IS NOW IMPLEMENTED BELOW.
-	
-	# TODO: - refactor to prepare for multi-threading:
-	#		 - everything that must be done within one isolated thread needs to go
-	#          into a FUNCTION that can then be launched in the background: https://www.ewan.cc/?q=node/85
-	
-	# TODO: - enable multi-threaded computing of r.cost in this loop:
-	#			- would require two dispatchers:
-	#				- 1st dispatcher runs v.extract to create m:n link sets vector maps (m=number of primary keys)
-	#				- 2nd dispatcher runs r.cost on the maps created by first dispatcher
-	#				- both dispatchers suffix all temporary maps with the ID of the m-th primary key
-	#					- this allows clean_up() to do its job using a map name pattern matcher
-	#					- it also allows r.cost to identify the 1st dispatcher's map needed
-	#					- it also allows the main loop below to identify the map needed for running r.path on it
-	#		- the number of threads to dispatch is passed in GIS_OPT_THREADS (default: 2; range: 1-1024)
-	#		- we might have to force $GIS_OPT_KEY to be of type integer in order to create reliable
-	#		  temporary map names! [DONE]
-	#       - DOCS: multi-threaded operation will potentially increase memory footprint significantly!
-	#               -> one more reason to expose the memory tuning option of r.cost!
+	fi	
 	
 	#############
 	# MAIN LOOP #
 	#############	
-	#DEBUG
-	#echo "STEPS=$NUM_INPUT_NODES"	
 	
+	# This loop steps through all input nodes EXCEPT THE LAST ONE(!).
+	# The reason for this is that the last node will already be part
+	# of the fully connected network when the loop reaches its index.
+	get_primary_keys "${GIS_OPT_INPUT}"
+
 	# Get info for database and table connected to points input map:
 	get_tbl_info "${GIS_OPT_INPUT}"	
-	
-	# Step through all points in input map:
+
+	# Initialize 'no data' representation for primary keys as empty string.
+	no_data=	
+	# Make sure that we have a valid 'no data' encoding:
 	for key in $PRIMARY_KEYS ; do
 		if [ -z "${no_data}" ] ; then
 			# 'no data' has not yet been set: We do so now.
@@ -2921,158 +3557,112 @@ model_complete () {
 			# we can safely use this value to mark all remaining (non-extracted) records
 			# as 'no data'.
 			no_data="${key}"
+			break
 		fi
-		#DEBUG		
-		#echo "KEY=$key"
-		# TODO: The loop below pollutes the console with this message:
-		# "WARNING: Values in column <cat> will be overwritten"
-		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
-			# Form SQL WHERE clause to get next primary key value.
-			get_where_clause "${key}"
-			val=`v.db.select map="${GIS_OPT_INPUT}" column="${GIS_OPT_KEY}" where="${WHERE}" -c`
-			check_error "Failed to query attribute table of copy of input points map."
-			if [ -n "${val}" ] ; then # Feature exists! Process it:
-				# We move each node in turn to a new map and connect all other
-				# nodes that remain in the old map with it.
-				#
-				# Set name of temporary links output map for current pass through the main loop:
-				tmp_vect_links="${TMP_VECT_LINKS_PATCH}${step}"
-				# Add tmp map to list of subnetwork patches.
-				PATCH_LIST="${PATCH_LIST}
-${tmp_vect_links}
-"
-				#DEBUG
-				#echo "TMP MAP: ${tmp_vect_links}"				
-				# Extract current node to new map:
-				v.extract input="${GIS_OPT_INPUT}" layer="1" type="point" where="${WHERE}" output="${TMP_VECT_EXTRACT}" --overwrite --quiet				
-				check_error "Failed to extract point with primary key value '${key}' from copy of input vector map."				
-				# Delete extracted node from old map(!):
-				v.edit map="${GIS_OPT_INPUT}" layer="1" type="point" tool="delete" where="${WHERE}" --overwrite --quiet
-				check_error "Failed to delete point with primary key value '${key}' from copy of input vector map."	
-				# By setting the primary key of this feature to our 'no data' value, we mark the corresponding
-				# attribute table record as *deleted*:								
-				# HINT: We use V_DB_UPDATE here (not db.execute), since it will make sure to refresh the database
-				#       connection with $GIS_OPT_INPUT (we manipulate that map!) each run through the loop.
-				${V_DB_UPDATE} map="${GIS_OPT_INPUT}" layer="1" column="${GIS_OPT_KEY}" value="${no_data}" where="${WHERE}" --overwrite --quiet
-				check_error "Failed to set primary key value '${key}' in copy of input vector map to 'no data' ('$no_data')."
-				# Connect extracted node with all remaining nodes in old map.			
-				#
-				# COST map provided? Then we must now change the shapes of the links to least-cost paths!
-				if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-					# Compute least cost surface from current node to all other nodes:					
-					r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}" stop_points="${GIS_OPT_INPUT}" memory="${GIS_OPT_COSTMEM}" output="${TMP_RAST_COST_MIN}" outdir="${TMP_RAST_COST_DIR}" --o --quiet						
-					check_error "Failed to compute cost and direction surfaces (iteration ${step})."
-					# We now store the costs for each path on the current cost raster (we will need this later).
-					from_id="${key}"
-					TO_IDS=`v.db.select map="${GIS_OPT_INPUT}" columns="${GIS_OPT_KEY}" -c --quiet`						 
-					check_error "Failed to retrieve primary keys from temporary vector map for storing link costs."					
-					# Get DBMS connection info for temp links map:
-					get_tbl_info "${TMP_VECT_LINKS_COSTS}"					
-					# Get all least-cost values for all "to nodes" from current cost surface:
-					COSTVAL=`r.what map="${TMP_RAST_COST_MIN}" points="${GIS_OPT_INPUT}" separator="|"`
-					check_error "Failed to query temporary cost raster using map of 'to' nodes."
-					next_cost=1
-					for to_id in $TO_IDS ; do
-						if [ "$to_id" != "$no_data" ] ; then
-							SQL=""
-							SQL="${SQL}UPDATE ${attribute_table} SET"
-							SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
-							SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${to_id}"
-							SQL="${SQL} WHERE cat = ${cat_cost}; "
-							echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-							#DELETEME: replaced v_db_update with direct calls to db.execute
-							#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_FROM_ID}" value="${key}" where="cat=${cat_cost}" --quiet
-							#check_error "Failed to update field '${LINKS_FLD_FROM_ID}' in temporary link costs vector map."
-							#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_TO_ID}" value="${to_id}" where="cat=${cat_cost}" --quiet
-							#check_error "Failed to update field '${LINKS_FLD_TO_ID}' in temporary link costs vector map."
-							check_error "Failed to update field '${LINKS_FLD_FROM_ID} or ${LINKS_FLD_TO_ID}' in temporary link costs vector map."
-							# Transfer matching cost value
-							cur=1
-							for cost in $COSTVAL ; do
-								if [ $cur -eq $next_cost ] ; then 
-									costval=`echo $cost | "${AWK}" -F "|" '{ print $4 }'`
-									SQL=""
-									SQL="${SQL}UPDATE ${attribute_table} SET"
-									SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"
-									SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat_cost}; "
-									echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-									#DELETEME: replaced v_db_update with direct calls to db.execute
-									#${V_DB_UPDATE} map="${TMP_VECT_LINKS_COSTS}" layer="1" column="${LINKS_FLD_COST}" value="${costval}" where="cat=${cat_cost}" --quiet
-									check_error "Failed to update field '${LINKS_FLD_COST}' in temporary link costs vector map."																				
-								fi
-								cur=`"${EXPR}" ${cur} + 1`
-							done
-							next_cost=`"${EXPR}" ${next_cost} + 1`
-							# Set next primary key value for subsequent upload of cost value
-							cat_cost=`"${EXPR}" ${cat_cost} + 1`
-						fi
-					done
-					# Compute least cost vector paths based on directional surface computed above
-					# (end points now become start points, as r.cost has produced back-links!): 
-					r.path input="${TMP_RAST_COST_DIR}" format="degree" vector_path="${tmp_vect_links}" start_points="${GIS_OPT_INPUT}" --overwrite --quiet						
-					check_error "Failed to compute least cost paths (iteration ${step})."
-				else
-					# We are running in straight-line links (Euclidean) mode: Create link as a new straight-line
-					# connection, using 'v.distance output='.
-					# NOTE: Since GRASS 8, 'upload=' is a mandatory option. So it is used here to upload the
-					# distance to the nearest feature into a dummy (temporary) attribute field, even though
-					# this is not a necessary operation in our context.
-					v.distance from="${GIS_OPT_INPUT}" from_layer="1" from_type="point" to="${TMP_VECT_EXTRACT}" to_layer="1" to_type="point" upload="dist" column="${TMP_FLD_DIST}" output="${tmp_vect_links}" --overwrite --quiet
-					check_error "Failed to connect point with primary key value '${key}' to all other points of input vector map."
-				fi									
-				# Smooth output path '-s' flag given (we do this before adjusting link nodes to original points!):
-				if [ ${GIS_FLAG_S} -eq 1 ] ; then
-					v.generalize --o input="${tmp_vect_links}" output="${TMP_VECT_LINKS_SMOOTH}" type="line" alpha="1" beta="1" method="snakes" threshold="0" --overwrite --quiet
-					check_error "Failed to smooth network links map (${step} of ${NUM_INPUT_NODES})."
-					g.remove type="vector" name="${tmp_vect_links}" -f --quiet # So that g.copy won't issue a warning.
-					g.copy vector="${TMP_VECT_LINKS_SMOOTH},${tmp_vect_links}" --overwrite --quiet
-					check_error "Failed to copy smoothed network links map (${step} of ${NUM_INPUT_NODES})."
-					g.remove type="vector" name="${TMP_VECT_LINKS_SMOOTH}" -f --quiet
-				fi
-				# Adjust node coordinates of least cost paths (if required)
-				if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-					#links_adjust_nodes "${tmp_vect_links}"
-					links_adjust_nodes "${tmp_vect_links}" "${TMP_VECT_EXTRACT}" "${num_links_to_adjust}"
-					# Since we extract one node per run, we need to adjust one link less
-					# each time we adjust another subset of links (LCPs)!
-					num_links_to_adjust=`"${EXPR}" ${num_links_to_adjust} - 1`
-					#NUM_LINKS=`"${EXPR}" ${NUM_LINKS} - 1`
-				fi
-				
-				# Remove some temp maps immediately so we do not get overwrite warnings during next iteration:
-				g.remove type="vector" name="${TMP_VECT_EXTRACT}" -f --quiet
-				
-				#DELETE: Obsolete code (implemented sequentical patching below)
-				#if [ ${step} -gt 1 ] ; then
-				#	g.remove type="vector" name="${TMP_VECT_LINKS_ADD}" -f --quiet
-				#fi
-				
-				step=`"${EXPR}" ${step} + 1`								
-			else
-				# No feature! This is a fatal error!
-				exit_error "Input data missing for primary key query '${WHERE}'. Aborting."
-			fi
-		else # Last point reached: Do not process!
-			step=`"${EXPR}" ${step} + 1`
-		fi
-		#TODO: Progress reporting would be nice to have here.
-		#      However, calling 'g.message' is currently pointless,
-		#      since one of the modules in the loop pollutes the
-		#      console with a '100%' message line for each input point.
-		#g.message -p "${step} ${NUM_INPUT_NODES} 1"
 	done
 	
-	# MAIN LOOP DONE.
-	# Now patch all temporary links output maps into complete map:
-	g.message -i "Patching network link subsets:"
-	if [ -z "${PATCH_LIST}" ] ; then
-		exit_error "No links found in result of 'complete' model run."
+	# PATCH_LIST: This list is where we keep the names of the temporary vector maps
+	# with subnetworks that we patch together in one go, after the main loop has completed:
+	PATCH_LIST=
+	
+	# Calculate feature processing intervals (=dispatchers), based on number of
+	# processing threads (option 'threads='). The list of DISPATCHES will be used
+	# to control the outermost processing loop of this function.
+	num_features=`"${EXPR}" ${NUM_INPUT_NODES} - 1` # Process all features except for the last one!
+	if [ ${GIS_OPT_THREADS} -gt ${num_features} ] ; then
+		# We have more (requested) threads than features: adjust!
+		GIS_OPT_THREADS=${num_features}
 	fi
-	# Count number of maps to patch.
+	num_dispatches=`"${EXPR}" ${num_features} / ${GIS_OPT_THREADS}`	
+	remainder=`"${EXPR}" ${num_features} % ${GIS_OPT_THREADS}`
+	DISPATCHES=""
+	cur=0
+	while [ ${cur} -lt ${num_dispatches} ] ; do
+		DISPATCHES="${DISPATCHES}
+${GIS_OPT_THREADS}
+"
+		cur=`"${EXPR}" ${cur} + 1`
+	done
+	if [ ${remainder} -gt 0 ] ; then
+		DISPATCHES="${DISPATCHES}
+${remainder}
+"
+		num_dispatches=`"${EXPR}" ${num_dispatches} + 1`
+	fi
+	
+	echo "*** DEBUG ***"
+	echo "global PID=$$"
+	echo "GIS_OPT_THREADS=$GIS_OPT_THREADS"
+	echo "num_features=$num_features"
+	echo "num_dispatches=$num_dispatches"
+	echo "remainder=$remainder"
+	for cur in $DISPATCHES ; do
+		echo "$cur"
+	done
+	echo "*** ***"
+	
+	# Step through all points in input map.
+	# The actual processing work is done in a separate thread by model_complete_thread.
+	# The list $DISPATCHES contains the number of processing jobs to be dispatched
+	# in every run through the loop. For all but the last run, this will be the same
+	# as $GIS_OPT_THREADS. Only the last job might happen to be smaller than $GIS_OPT_THREADS.
+	mutex_release_seq 0 # Open global mutex lock for first thread in sequence.
+	job=0; # global counter for runs through the loop [0..num input points]
+	cat_next=1; # TODO
+	for dispatch in ${DISPATCHES} ; do
+		tid=0 # thread ID within current dispatch
+		# Launch as many jobs as current dispatch says:
+		while [ ${tid} -lt ${dispatch} ] ; do
+			i=0
+			for cur in $PRIMARY_KEYS ; do
+				# Get the primary attribute table key that matches the current feature:
+				if [ ${i} -eq ${job} ] ; then
+					# DEBUG
+					#echo "PK=${cur}"					
+					break;
+				fi
+				i=`"${EXPR}" ${i} + 1`
+			done
+			# Launch a new processing thread in the background, passing it the primary key:
+			# DEBUG
+			#echo "model_complete_thread $tid N $cur $job $$"			
+			model_complete_thread ${tid} 0 ${cur} ${job} ${cat_next} $$ &
+			cat_next=`"${EXPR}" ${cat_next} + \( $num_features - $job \)`
+			tid=`"${EXPR}" ${tid} + 1`
+			job=`"${EXPR}" ${job} + 1`			
+			sleep "0.02s" # Add a short delay before launching next thread (synchronisation)
+		done
+		wait # Wait for all dispatched jobs to complete.
+	done
+	
+	# Build SORTED list of subnetwork maps from all dispatched jobs.
+	# It is of critical importance to maintain a well-defined order here,
+	# because the attribute transfer (from input nodes) later will depend on it!
+	job=0;
+	for dispatch in ${DISPATCHES} ; do
+		tid=0 # thread ID within current dispatch
+		while [ ${tid} -lt ${dispatch} ] ; do
+			PATCH_LIST="${PATCH_LIST}
+${TMP_VECT_LINKS_PATCH}_${job}
+"
+			job=`"${EXPR}" ${job} + 1`
+			tid=`"${EXPR}" ${tid} + 1`
+		done
+	done
+
+	# MAIN LOOP DONE.
+	
+	# Now patch all temporary link output maps into a complete map!	
+	# Count number of maps to patch:
 	num_patches=0
 	for map in $PATCH_LIST ; do
 		num_patches=`"${EXPR}" ${num_patches} + 1`
 	done
+	if [ $num_patches -lt 1 ] ; then
+		exit_error "No links found in result of 'complete' model run."
+	fi
+	# Do the patching:
+	g.message -i "Merging ${num_patches} network link subsets:"
 	step=0
 	first="TRUE" # First run through patching loop
 	for map in $PATCH_LIST ; do
@@ -3080,7 +3670,7 @@ ${tmp_vect_links}
 		#echo patching: "${map}"
 		if [ "${first}" = "TRUE" ] ; then
 			# First map: Just copy
-			g.copy vector="${map},${GIS_OPT_LINKS}" --overwrite --quiet
+			g.copy vector="${map},${GIS_OPT_LINKS}" --overwrite --quiet 2>/dev/null
 			check_error "Failed to copy first patch of complete links map."
 			first="FALSE"
 		else
@@ -3095,7 +3685,7 @@ ${tmp_vect_links}
 	# We have modified GIS_OPT_INPUT (heavily) and deleted many of its points.
 	# But we have a copy of the (filtered) original input, made by 'preprocess()':
 	# Copy that back!
-	g.copy vector="${GIS_OPT_NODES},${GIS_OPT_INPUT}" --overwrite --quiet
+	g.copy vector="${GIS_OPT_NODES},${GIS_OPT_INPUT}" --overwrite 2>/dev/null
 	check_error "Failed to copy initial output nodes back to original input points map '${GIS_OPT_INPUT}'."
 	
 	# Build topology of links output map
@@ -3115,7 +3705,7 @@ ${tmp_vect_links}
 	
 	# ATTACH OUTPUT ATTRIBUTES
 	# Attach an (empty except for 'cat') attribute table.
-	${V_DB_ADDTABLE} map="${GIS_OPT_LINKS}" layer="1" key="${LINKS_FLD_KEY}" --quiet
+	${V_DB_ADDTABLE} map="${GIS_OPT_LINKS}" layer="1" key="${LINKS_FLD_KEY}" --quiet 2>/dev/null
 	check_error "Failed to add attribute table to links output vector map."
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID} ${KEY_TYPE}" --quiet
 	check_error "Failed to add attribute field '${LINKS_FLD_FROM_ID}' (type '${KEY_TYPE}') to links output vector map."
@@ -3132,7 +3722,7 @@ ${tmp_vect_links}
 	# (B) A completely separate set of lines that represent all possible links of the network.
 	# We now need to transfer the primary keys (and labels) of A to the lines of B as from/to
 	# attributes. The solution here is to once more loop through all original points in A,
-	# just as we have just done, and to 'reconstruct' the 'rythm'
+	# same as we have just done, and to 'reconstruct' the 'rythm'.
 	# To do this, we can rely on two simple properties of the links map:
 	# 1. Number of links(x) in fully connected network: x = n(n - 1) / 2
 	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2), etc.	
@@ -3269,7 +3859,7 @@ ${tmp_vect_links}
 				WHERE="${LINKS_FLD_FROM_ID}=$from_id AND ${LINKS_FLD_TO_ID}=$to_id" 
 			fi			
 			#echo "WHERE='$WHERE'"			
-			costval=`v.db.select map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_COST}" where="${WHERE}" -c --quiet` 			
+			costval=`v.db.select map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_COST}" where="${WHERE}" -c --quiet`
 			#echo "costval='$costval'"			
 			if [ -z "$costval" ] ; then
 				exit_error "No cost value available for path from '$from_id' to '$to_id'."
@@ -3300,7 +3890,7 @@ ${tmp_vect_links}
 	# is that r.cost/r.path work in the exact reverse order of v.distance (Euclidean links)!
 	# Instead of swapping the actual attribute values field-by-field (slow and error prone),
 	# we just swap the GRASS primary key values "cat" for all records that have the same
-	# user-defined primary key.
+	# user-defined primary key.	
 	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 		g.message -i "Reordering link attributes:"
 		get_primary_keys "${GIS_OPT_INPUT}"
@@ -3386,7 +3976,6 @@ ${tmp_vect_links}
 }
 
 
-
 # FUNCTION
 # model_delaunay: Create a network where nodes are connected using delaunay minimal triangulation.
 model_delaunay () {
@@ -3406,13 +3995,13 @@ model_delaunay () {
 	# to upload delaunay line start/end node coords to the attribute table in layer 1...
 	v.delaunay input="${GIS_OPT_INPUT}" output="${TMP_VECT_LINKS_DELAUNAY_P}" --o --quiet
 	check_error "Failed to compute Delaunay triangulation for input points/nodes."
-	${V_DB_ADDTABLE} map="${TMP_VECT_LINKS_DELAUNAY_P}" layer="1" --quiet
+	${V_DB_ADDTABLE} map="${TMP_VECT_LINKS_DELAUNAY_P}" layer="1" --quiet 2>/dev/null
 	check_error "Failed to add attribute table (layer 1) to temporary map with Delaunay triangulation."
 	${V_TO_LINES} input="${TMP_VECT_LINKS_DELAUNAY_P}" output="${TMP_VECT_LINKS_DELAUNAY_L}" --o --quiet
 	check_error "Failed to convert Delaunay triangulation of input points/nodes to lines."
 	${V_DB_DROPTABLE} map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="2" -f --quiet
 	check_error "Failed to delete attribute table (layer 2) from temporary map with Delaunay triangulation."
-	${V_DB_ADDTABLE} map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" --quiet
+	${V_DB_ADDTABLE} map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" --quiet 2>/dev/null
 	check_error "Failed to add attribute table (layer 1) to temporary map with Delaunay triangulation."
 	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="start" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y}" units="meters" --o --quiet
 	check_error "Failed to upload line start coordinates to temporary map with Delaunay triangulation."
@@ -3480,7 +4069,7 @@ model_delaunay () {
 		g.remove type="vector" name="${links_org}" -f --quiet
 		check_error "Failed to delete links vector map for replacement with reduced attributes map."
 		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
 		check_error "Failed to copy new links map with reduced attributes to output map."
 	fi
 }
@@ -3526,7 +4115,7 @@ model_linkdist () {
 		g.remove type="vector" name="${links_org}" -f --quiet
 		check_error "Failed to delete links vector map for replacement with reduced attributes map."
 		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
 		check_error "Failed to copy new links map with reduced attributes to output map."
 	fi
 }
@@ -3681,7 +4270,7 @@ ${CATS_TO}"
 		g.remove type="vector" name="${links_org}" -f --quiet
 		check_error "Failed to delete links vector map for replacement with reduced attributes map."
 		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
 		check_error "Failed to copy new links map with reduced attributes to output map."
 	fi
 }
@@ -3817,7 +4406,7 @@ model_xtent () {
 		g.remove type="vector" name="${links_org}" -f --quiet
 		check_error "Failed to delete links vector map for replacement with reduced attributes map."
 		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet
+		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
 		check_error "Failed to copy new links map with reduced attributes to output map."
 	fi
 }
@@ -3938,7 +4527,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 	eval `v.info -t map="${GIS_OPT_INITIAL}" layer="1"`
 	g.message -i "Initial network has ${lines} links."
 	# Copy initial map as (preliminary) links output map:
-	g.copy vector="${GIS_OPT_INITIAL},${GIS_OPT_LINKS}" --overwrite --quiet
+	g.copy vector="${GIS_OPT_INITIAL},${GIS_OPT_LINKS}" --overwrite --quiet 2>/dev/null
 	check_error "Failed to copy initial links map as preliminary links output map."
 
 	# There are some attributes that might be missing from the initial links map and	
@@ -4537,7 +5126,7 @@ if [ "${nodes_org}" != "${GIS_OPT_NODES}" ] ; then
 	g.remove type="vector" name="${nodes_org}" -f --quiet
 	check_error "Failed to delete nodes vector map for replacement with reduced attributes map."
 	# Copy new version with reduced attribute rows as original output map name:
-	g.copy vector="${GIS_OPT_NODES},${nodes_org}" --overwrite --quiet
+	g.copy vector="${GIS_OPT_NODES},${nodes_org}" --overwrite --quiet 2>/dev/null
 	check_error "Failed to copy new nodes map with reduced attributes to output map."
 fi
 
