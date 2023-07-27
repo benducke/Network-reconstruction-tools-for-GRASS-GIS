@@ -17,7 +17,7 @@
 #				any later version that retains the GRASS 7 syntax for the GRASS
 #				commands called by this script).
 #
-# COPYRIGHT:    (C) 2020-2022 by Benjamin Ducke
+# COPYRIGHT:    (C) 2020-2023 by Benjamin Ducke
 #
 #               This program is free software under the GNU General Public
 #               License (>=v2). Read the file COPYING that comes with GRASS
@@ -57,6 +57,11 @@ GIS_FLAG_C=0
 #%Flag
 #%  key: g
 #%  description: Global network statistics output in shell script style
+#%End
+
+#%Flag
+#%  key: k
+#%  description: 'Knight's move' for more accurate (but slower) cost computations
 #%End
 
 #%Flag
@@ -330,8 +335,9 @@ fi
 
 # Basic module setup.
 
-MODULE_NAME="v_net_models"
-MODULE_VERSION="1.0.1"
+MODULE_NAME="v_net_models" # for prefixing temporary object names
+MODULE_NAME_EXEC="v.net.models" # name as run on the command line
+MODULE_VERSION="1.1.0"
 
 # Exit status variables.
 EXIT_OK=0
@@ -2251,6 +2257,12 @@ check_params () {
 		g.message -w "Option 'costmem=' is meaningless without 'costmap='. Ignored."		
 	fi
 	
+	# Flag "-k" is only meaningful if "costmap" is also provided.
+	if [ ${GIS_FLAG_K} -eq 1 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
+		g.message -e "Flag '-k(night's move)' is only useful if option 'costmap=' is also provided."
+		exit ${EXIT_ERROR}
+	fi
+	
 	# Flag "-m" is only meaningful if "costmap" is also provided.
 	if [ ${GIS_FLAG_M} -eq 1 ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
 		g.message -e "Flag '-m(eters)' is only useful if option 'costmap=' is also provided."
@@ -3194,6 +3206,7 @@ mutex_release_seq() {
 #
 #		  * Expose r.cost flag '-k' (currently always set): If this is not set,
 #		    then the results are less accurate, but faster!
+#           [DONE]: -k will incur about +50% r.cost times
 #
 #		* Make sure that the code segments guarded by (the sync'd) mutex
 #	      are all minimal!
@@ -3219,6 +3232,8 @@ mutex_release_seq() {
 #			  large numbers of input points (but then user must guarantee data
 #			  quality a priori!)
 #			- approximation: new option to on -k(night's move): off by default now
+#			  CAVEAT: Needs to be turned on for comparable results with old
+#			  version's outputs (up to version 1.0.1).
 #
 model_complete_thread () {
 	id=$1	
@@ -3337,8 +3352,14 @@ model_complete_thread () {
 		#
 		# COST map provided? Then we must now change the shapes of the links to least-cost paths!
 		if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-			# Compute least cost surface from current node to all other nodes:					
-			r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}_${step}" stop_points="${GIS_OPT_INPUT}_${step}" memory="${GIS_OPT_COSTMEM}" output="${TMP_RAST_COST_MIN}_${step}" outdir="${TMP_RAST_COST_DIR}_${step}" --o --quiet
+			# Compute least cost surface from current node to all other nodes:
+			if [ ${GIS_FLAG_K} -eq 1 ] ; then
+			    # Use 'knight's move' (more accurate but slower)
+				r.cost -k -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}_${step}" stop_points="${GIS_OPT_INPUT}_${step}" memory="${GIS_OPT_COSTMEM}" output="${TMP_RAST_COST_MIN}_${step}" outdir="${TMP_RAST_COST_DIR}_${step}" --o --quiet
+			else
+				# Use simple diagonal moves (less accurate but faster, default if '-k' is not given
+				r.cost -n input="${GIS_OPT_COSTMAP}" start_points="${TMP_VECT_EXTRACT}_${step}" stop_points="${GIS_OPT_INPUT}_${step}" memory="${GIS_OPT_COSTMEM}" output="${TMP_RAST_COST_MIN}_${step}" outdir="${TMP_RAST_COST_DIR}_${step}" --o --quiet
+			fi
 			check_error "Failed to compute cost and direction surfaces (iteration ${step})." ${global_pid}
 			## MUTEX ON
 			mutex_acquire "0.1s" "${global_pid}_db_switch"
@@ -4503,6 +4524,9 @@ MAIN () {
 # MAIN #
 ########
 
+# Go!
+g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
+
 # Run all pre-flight checks:
 check_setup
 check_params
@@ -4517,9 +4541,20 @@ preprocess
 # Keep track of starting time.
 START=`"${DATE}"`
 
-# GO!
+# GO! GO!
 #GIS_OPT_INPUT is the input points map: Its handle has been set by check_input()!
 g.message -i "Input network has ${NUM_INPUT_NODES} nodes."
+
+if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	# Compute least cost surface from current node to all other nodes:
+	if [ ${GIS_FLAG_K} -eq 1 ] ; then
+	    # Use 'knight's move' (more accurate but slower)
+	    g.message -i "Using slower but more accurate cost computations ('r.cost -r')."
+	else
+		# Use simple diagonal moves (less accurate but faster, default if '-k' is not given
+		g.message -i "Using faster but less accurate cost computations."
+	fi
+fi
 
 # Compute complete model first (always, unless option "initial=" is provided):
 if [ -n "${GIS_OPT_INITIAL}" ] ; then
