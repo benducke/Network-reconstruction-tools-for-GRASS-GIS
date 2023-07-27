@@ -3146,39 +3146,20 @@ mutex_release_seq() {
 #
 # Arguments:
 # 	$1 - thread ID (a unique integer 0..n) 
-#   $2 - Goal contribution (%), passed as INTEGER 0 .. 100
-#        This argument is the percentage to which this thread
-#		 contributes to the overall processing goal. It is used
-#		 for progress reporting and can be set to '0' to disable.
+#   $2 - Goal contribution: pass 0 (int) to prevent this thread from
+#	     updating the global progress counter. Any integer value > 0
+#		 to make the thread update the global progress counter.
 #	$3 - the primary key of the current input feature (network node/point)
 #        to process
 #	$4 - globally unique job ID: an integer value provided by the caller.
-#	$5 - PID of caller process (required to kill entire script on fatal error)
+#	$5 - next primary key value (cat), provided by caller
+#   $6 - total number of threads/jobs run by caller (for status update)
+#	$7 - PID of caller process (required to kill entire script on fatal error)
 # 
 # TODO:
 #
 #	    * Results of multi-threaded run MUST be compared with old, single-threaded code
 #		  (incl. sequence of edges and nodes in output maps!)
-#
-#	    * In MAIN, there is a loop that re-orders the links table for a run with a
-#		  cost map:
-#		  if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-#		    g.message -i "Reordering link attributes:"
-#           ..
-#         -> It seems, that the current, multi-threaded code no longer requires this!
-#
-#		* Implement multi-threaded cost raster ops!
-#		  [X] DONE: TESTING REQUIRED (incl. with an initial model and cost raster)
-#
-#		  [CAVEAT]: cat sequence of output links attribute table is not strictly ascending in
-#			     cost based mode.
-#                -> Near line 3890, there is code that re-orders the output links for each
-#                   patch map. This will produce correct data (i.e. correct associations of
-#                   attribute rows and geometries/LCPs). But the cat sequence is descending
-#				    for each patch, which just looks weird, if the unordered table is printed.
-#					However, to fix this, we would have to re-order ALL other attributes instead
-#				    of cat. The overhead this would require does not seem to be worth it.
-#				  -> Document this behaviour!
 #
 #		  [BUG!]: links_adjust_nodes() fails for LAT/LON: the adjusted nodes all have some individual,
 #				  small variations in their locations and are not where they are supposed
@@ -3190,6 +3171,19 @@ mutex_release_seq() {
 #				  -> DIAGNOSIS: Compare to results without any nodes adjustment, to see if anything has
 #					 been moved, at all!
 #					 ALSO compare to output of old, single-threaded code: Did that have the same issue?
+#
+#		* Implement multi-threaded cost raster ops!
+#		  [X] DONE: TESTING REQUIRED (incl. with an initial model and cost raster)
+#
+#		  [ANNOYANCE]: cat sequence of output links attribute table is not strictly ascending in
+#			     cost based mode.
+#                -> Near line 3890, there is code that re-orders the output links for each
+#                   patch map. This will produce correct data (i.e. correct associations of
+#                   attribute rows and geometries/LCPs). But the cat sequence is descending
+#				    for each patch, which just looks weird, if the unordered table is printed.
+#					However, to fix this, we would have to re-order ALL other attributes instead
+#				    of cat. The overhead this would require does not seem to be worth it.
+#				  -> Document this behaviour!
 #
 #		  * Make sure that all threads are terminated if "exit" is called from
 #           within multi-threaded raster processing ops. This includes all
@@ -3204,10 +3198,6 @@ mutex_release_seq() {
 #			-> NEW: moved 'trap' statement for signal 2 to after declarations of
 #			   clean-up functions. TEST: Cleaning should work now!
 #
-#		  * Expose r.cost flag '-k' (currently always set): If this is not set,
-#		    then the results are less accurate, but faster!
-#           [DONE]: -k will incur about +50% r.cost times
-#
 #		* Make sure that the code segments guarded by (the sync'd) mutex
 #	      are all minimal!
 #
@@ -3217,23 +3207,30 @@ mutex_release_seq() {
 #
 #		* Remove/disable debugging messages from this function and the caller function
 #
-#		* Implement progress display with g.progress.
+#		* Implement progress display with g.progress. [DONE]
 #
 #		* Code needs a lot of cleaning up for legibility.
 #
 #		* use shell's 'local' keyword to define clash-free variables in functions(?)
 #
 #		* Update documentation ("Performance"):
-#			- more threads = more overhead and (much) more memory footprint
-#			  and temporary storage requirements (especially when using
-#			  cost rasters!) -> probably not worth it for small input sizes and
+#			- more threads = more overhead and (much) larger memory footprint
+#			  and temporary storage requirements when using cost rasters!
+#			  -> probably not worth it for small input sizes and
 #			  small cost rasters
+#		    - More threads give best performance gain when many high-resolution
+#             cost rasters are involved. But due to several synchronisation
+#			  bottlenecks (GRASS is not thread-safe in many aspects), there is no
+#			  linear positive correlation between number of threads and gain
+#			  in computing performance. 
 #			- use "threshold=0" to disable time-consuming topology tests for
 #			  large numbers of input points (but then user must guarantee data
 #			  quality a priori!)
 #			- approximation: new option to on -k(night's move): off by default now
 #			  CAVEAT: Needs to be turned on for comparable results with old
-#			  version's outputs (up to version 1.0.1).
+#			  version's outputs (anything prior to version 1.1.0; if v.net.models
+#			  does not show version information on start-up, then it is older
+#			  than 1.1.0!).
 #
 model_complete_thread () {
 	id=$1	
@@ -3241,9 +3238,11 @@ model_complete_thread () {
 	key=$3
 	step=$4
 	cat_next=$5
-	global_pid=$6
+	num_jobs=$6
+	global_pid=$7
+	
 	#DEBUG
-	echo "THREAD $id LAUNCHED (pkey=$key) (goal=$goal) (cat_next=$cat_next) (step=$step)"
+	#echo "THREAD $id LAUNCHED (goal=$goal) (key=$key) (step=$step) (cat_next=$cat_next) (num_jobs=$num_jobs) (global_pid=$global_pid)"
 
 	#DEBUG Test script termination from within thread
 	#if [ $step -eq 5 ] ; then
@@ -3507,13 +3506,18 @@ model_complete_thread () {
 		exit_error "Input data missing for primary key query '${local_where}'. Aborting."
 	fi
 	
-	# Update progress display
-	if [ ${goal} -gt 0 ] ; then
-		g.message -p "${goal} 100 ${goal}"
-	fi
-	
 	#DEBUG
 	#echo "THREAD $id COMPLETED"
+
+	if [ "${goal}" -gt 0 ] ; then
+		# Update shared (by all threads) progress counter	
+		## MUTEX ON		
+		mutex_acquire "0.1" "${global_pid}_g_progress"
+		progress=`"${EXPR}" ${step} + 1`
+		g.message -p "${progress} ${num_jobs} 1"
+		mutex_release "${global_pid}_g_progress"
+		# MUTEX OFF
+	fi
 
 	return 0
 }
@@ -3611,16 +3615,25 @@ ${remainder}
 		num_dispatches=`"${EXPR}" ${num_dispatches} + 1`
 	fi
 	
-	echo "*** DEBUG ***"
-	echo "global PID=$$"
-	echo "GIS_OPT_THREADS=$GIS_OPT_THREADS"
-	echo "num_features=$num_features"
-	echo "num_dispatches=$num_dispatches"
-	echo "remainder=$remainder"
-	for cur in $DISPATCHES ; do
-		echo "$cur"
-	done
-	echo "*** ***"
+	# Calculate number of jobs:
+	if [ ${remainder} -gt 0 ] ; then
+		num_jobs=`"${EXPR}" \( ${num_dispatches} - 1 \) \* ${GIS_OPT_THREADS} + ${remainder}`
+	else
+		num_jobs=`"${EXPR}" ${num_dispatches} \* ${GIS_OPT_THREADS}`
+	fi
+	
+	# DEBUG
+	#echo "*** DEBUG ***"
+	#echo "num_jobs=$num_jobs"
+	#echo "global PID=$$"
+	#echo "GIS_OPT_THREADS=$GIS_OPT_THREADS"
+	#echo "num_features=$num_features"
+	#echo "num_dispatches=$num_dispatches"
+	#echo "remainder=$remainder"
+	#for cur in $DISPATCHES ; do
+	#	echo "$cur"
+	#done
+	#echo "*** ***"
 	
 	# Step through all points in input map.
 	# The actual processing work is done in a separate thread by model_complete_thread.
@@ -3645,9 +3658,7 @@ ${remainder}
 				i=`"${EXPR}" ${i} + 1`
 			done
 			# Launch a new processing thread in the background, passing it the primary key:
-			# DEBUG
-			#echo "model_complete_thread $tid N $cur $job $$"			
-			model_complete_thread ${tid} 0 ${cur} ${job} ${cat_next} $$ &
+			model_complete_thread ${tid} 1 ${cur} ${job} ${cat_next} ${num_jobs} $$ &
 			cat_next=`"${EXPR}" ${cat_next} + \( $num_features - $job \)`
 			tid=`"${EXPR}" ${tid} + 1`
 			job=`"${EXPR}" ${job} + 1`			
