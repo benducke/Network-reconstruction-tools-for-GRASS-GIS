@@ -1308,6 +1308,23 @@ awk_median () {
 
 
 # FUNCTION
+# is_uint:			Returns '1' if $1 is an unsigned int.
+is_uint() { case $1        in '' | *[!0-9]*              ) return 1;; esac ;}
+
+# FUNCTION
+# is_int:			Returns '1' if $1 is an int.
+is_int()  { case ${1#[-+]} in '' | *[!0-9]*              ) return 1;; esac ;}
+
+# FUNCTION
+# is_unum:			Returns '1' if $1 is an unsigned number.
+is_unum() { case $1        in '' | . | *[!0-9.]* | *.*.* ) return 1;; esac ;}
+
+# FUNCTION
+# is_num:			Returns '1' if $1 is a number.
+is_num()  { case ${1#[-+]} in '' | . | *[!0-9.]* | *.*.* ) return 1;; esac ;}
+
+
+# FUNCTION
 # grep_is_zero:		Uses 'grep' to check whether $1 contains a numeric caracter
 #					in the range [1-9]. This is useful for checking whether an
 # 					option value is true zero ('0','0.0','0.00', etc.).
@@ -1379,7 +1396,13 @@ check_environment () {
 	
 	# Get current region settings.
 	eval `g.region -p -g`	
-		
+
+	# Store projection (to differentiate x/y and lat/lon)
+	GRASS_REG_PROJECTION="${projection}"
+	if [ "${GRASS_REG_PROJECTION}" = "3" ] ; then
+		g.message -w "Running in lat/lon mode. Expect reduced performance."
+	fi
+
 	# Get current GRASS database connection	
 	cmd=`db.connect -pg`
 	check_error "Failed to query GRASS session for current database connection ('db.connect')."
@@ -2545,17 +2568,40 @@ preprocess () {
 #
 # Using this function is a little tricky, because it has been optimized to process the
 # particular subsets of network LCPs generated in the main loop of 'model_complete':
-# It is assumed that the links to adjust are LCP bundles that consist of one starting
-# node that is connected by LCPs to any number of stopping nodes (the 'while' loop
+# It is assumed that the links to adjust are LCP bundles that consist of one end
+# node that is connected by LCPs from any number of start nodes (the 'while' loop
 # in this function iterates through these LCPs). However, this function can also be
 # used to process a single link by providing a start node in $1, a map with just
 # one link in $2 and '1' in $3.
 #
+# The main loop in this function can only work, because r.path saves the original
+# 'cat' values of each starting point in its LCP output. This allows us to associate
+# them with the original points in GIS_OPT_INPUT and their true coordinates!
+#
+# NOTE FOR LAT/LON DATA:
+# We resort to the work-around below. Once it has been clarified which
+# GRASS versions are affected by this bug, it might be possible to re-enable the simpler behaviour
+# for specific versions of GRASS.
+#
 # Arguments:
-# 	$1 - map that holds the network links to adjust (DANGER: see below!)
-#   $2 - the start node (normally one point extracted from $GIS_OPT_INPUT)
+# 	$1 - map that holds the network links to adjust (DANGER: see below!).
+#        This should be the output of r.path. It should not be linked to any
+#		 attributes, but it _must_ contain the 'cat' primary keys of the
+#		 points (from GIS_OPT_INPUT) that represent the start nodes of the paths, so
+#		 that we we can reconstruct these original associations. Luckily, r.path
+#        makes sure that thedr cat values do get copied through!
+#   $2 - the focal point of the LCPs in $1 (normally a point extracted from $GIS_OPT_INPUT)
+#		 This is the point for which the cost surface was originally computed using r.cost.
+#        In a second step, r.path was used to trace all LCPs from a set of starting points
+#        back to that point. However, at that processing stage, the precise coordinates
+#        of the focal point were already lost, since r.cost and r.path work raster-based.
+#        Therefore, $2 must be passed as a point containing the original, precise coordinates.
 #   $3 - number of links to adjust
 #	$4 - PID of main process (set if this function is called from within a concurrent thread)
+#
+# Output:
+#	   - A multi-line representation of the adjusted line geometry of the current LCP
+#        (to be merged by caller into a complete file that can then be ingested by v.in.ascii).
 # 
 # DANGER: This function will drop and completely re-write the attribute table
 #         of the map passed in $1! Therefore, only pass TEMPORARY maps to
@@ -2565,102 +2611,193 @@ preprocess () {
 #
 # CAVEAT 2: It is assumed that the links to adjust are in a map with an unbroken
 #         sequence of GRASS primary keys (normally 'cat'), starting at "1"!
+#
 links_adjust_nodes ()
 {	
-	# Temporary attribute field names	
+	
+	# Define temporary attribute field names:
 	adj_fld_key="cat" # Default GRASS primary key.
-	#adj_fld_key="${GRASS_PKEY}" # Default GRASS primary key.
-	adj_fld_startxold="${NODES_FLD_COORD_X}"
-	adj_fld_startyold="${NODES_FLD_COORD_Y}"
-	adj_fld_endxold="${NODES_FLD_COORD_X}"
-	adj_fld_endyold="${NODES_FLD_COORD_Y}"
-	adj_fld_startxnew="startxnew"
-	adj_fld_startynew="startynew"
-	adj_fld_endxnew="endxnew"
-	adj_fld_endynew="endynew"
+	adj_fld_endxold="${NODES_FLD_COORD_X}" # Original/precise X coordinate of focal point for all LCPs
+	adj_fld_endyold="${NODES_FLD_COORD_Y}" # Original/precise X coordinate of focal point for all LCPs
+	adj_fld_startxold="${NODES_FLD_COORD_X}" # Original/precise X coordinate of individual LCP starting point
+	adj_fld_startyold="${NODES_FLD_COORD_Y}" # Original/precise X coordinate of individual LCP starting point
+	adj_fld_endxnew="endxnew" # Current X coordinate of last vertex of LCP (as stored by r.path)
+	adj_fld_endynew="endynew" # Current X coordinate of last vertex of LCP (as stored by r.path)
+	adj_fld_startxnew="startxnew" # Current X coordinate of first vertex of LCP (as stored by r.path)
+	adj_fld_startynew="startynew" # Current X coordinate of first vertex of LCP (as stored by r.path)
+	#
 	# The start/stop vertices (called "nodes" by GRASS) of each path
-	# produced by 'r.path' are no longer
-	# located exactly at the input points. We move/snap them to correct that
-	# problem and retain a topologically correct network of nodes that lie
-	# exactly on the first and last vertex of each link!
-	# Store original starting point coordinates.
-	#adj_endxold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endxold}"`
+	# produced by 'r.path' are no longer located exactly at the input points.
+	# We move/snap them to correct that problem and retain a topologically correct network
+	# of nodes that lie exactly on the first and last vertices of each link!
+	#
+	# Store original end point coordinates (this is the point from $GIS_OPT_INPUT that contains the end vertices 
+	# of all LCPs in the map passed as $1):
 	adj_endxold=`v.db.select -c map="${2}" column="${adj_fld_endxold}"`
 	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endxold}')." ${4}
-	#adj_endyold=`v.db.select -c map="${TMP_VECT_EXTRACT}" column="${adj_fld_endyold}"`
 	adj_endyold=`v.db.select -c map="${2}" column="${adj_fld_endyold}"`
 	check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_endyold}')." ${4}
-	# Attach attribute table to links map of this iteration, so we can
-	# easily loop over all links, fixing each one in turn:	
+	#
+	# Attach attribute table to LCP map ($1), so we can easily loop over all LCPs, fixing each one in turn:
 	${V_DB_ADDTABLE} map="$1" layer="1" key="${adj_fld_key}" --quiet 2>/dev/null
 	check_error "Failed to add attribute table to temporary links map '$1'." ${4}
-	#DEBUG: Enable additional columns to store old node coordinates in attribute table
-	#${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_startxold} DOUBLE PRECISION, ${fld_startyold} DOUBLE PRECISION"
-	#${V_DB_ADDCOLUMN} map="$1" layer="1" columns="${fld_endxold} DOUBLE PRECISION, ${fld_endyold} DOUBLE PRECISION"
-	#END DEBUG
-	# Upload current node coordinates to each link's table:
+	#
+	# Upload node coordinates (=start and end vertices of each LCP) to attribute table:
 	v.to.db map="$1" layer="1" type="line" option="start" columns="${adj_fld_startxnew},${adj_fld_startynew}" --quiet
 	check_error "Failed to upload start node coordinates to temporary links map." ${4}
 	v.to.db map="$1" layer="1" type="line" option="end" columns="${adj_fld_endxnew},${adj_fld_endynew}" --quiet
 	check_error "Failed to upload end node coordinates to temporary links map." ${4}
-	adj_step_inner=1
-	adj_cat_inner=1				
-	#while [ ${adj_step_inner} -lt ${NUM_LINKS} ] ; do
-	while [ ${adj_step_inner} -lt ${3} ] ; do
-		#echo "${adj_fld_key}=${adj_cat_inner}"
-		adj_val=`v.db.select -c map="$1" column="${adj_fld_key}" where="${adj_fld_key}=${adj_cat_inner}"`
+	
+	adj_step_inner=1 # This is just a simple loop counter for stepping through all LCPs.
+	adj_cat_inner=1 #TODO: We always traverse all cat values starting at '1'. Alternatively, we could use the 
+	                #      min cat values, as reported by v.category, as starting point (v.category option=report input=${1} -g).
+	                #	   That could really speed things up for larger maps (but for smaller maps, it would add the overhead
+	                #	   of running v.category multiple times and slow things down)!	
+
+	# lat/lon data only: for work-around, based on ASCII representation of LCPs.
+	if [ "${GRASS_REG_PROJECTION}" = "3" ] ; then
+		# Start a new, empty geometry representation of the entire LCP bundle.
+		# Write header for LCP ASCII representation:
+		path_geom="ORGANIZATION: 
+DIGIT DATE: 
+DIGIT NAME:   v_net_models
+MAP NAME:     
+MAP DATE:     Sat Jul 29 15:26:26 2023
+MAP SCALE:    1
+OTHER INFO:   
+ZONE:         0
+MAP THRESH:   0.000000
+VERTI:"
+	fi
+
+	# Step through all LCPs in $1:
+	while [ ${adj_step_inner} -le ${3} ] ; do
+		adj_val=`v.db.select -c map="$1" column="${adj_fld_key}" where="${adj_fld_key}=${adj_cat_inner}"` # Check if we have this 'cat' in $1
 		check_error "Failed to query attribute table of partial links map (iteration ${adj_step_inner})." ${4}
-		if [ -n "${adj_val}" ] ; then # Feature exists! Process it:					
-			# Upload original node coordinates to current link:
-			#DEBUG: Store coordinates of original end node in attribute table
-			#echo "Feature ${adj_step_inner} has ${adj_fld_key}=${adj_cat_inner}."
-			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_fld_endxold}" value="${adj_endxold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_fld_endyold}" value="${adj_endyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-			#END DEBUG
+		if [ -n "${adj_val}" ] ; then # Feature exists in $1! Process it:					
+			# Upload original start coordinates for current LCP.
+			# These are different for each LCP and must be read from the full set of input points in $GIS_OPT_INPUT.
+			# Luckily, r.path has saved the original 'cat's from those input points, so that we can match them here simply by primary key!
 			adj_startxold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startxold}" where="${adj_fld_key}=${adj_cat_inner}"`
 			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startxold}')." ${4}
 			adj_startyold=`v.db.select -c map="${GIS_OPT_INPUT}" column="${adj_fld_startyold}" where="${adj_fld_key}=${adj_cat_inner}"`
 			check_error "Failed to query temporary nodes map for stored coordinates (field '${adj_fld_startyold}')." ${4}
-			#DEBUG: Store coordinates of original start node in attribute table
-			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_startxold}" value="${adj_startxold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-			#${V_DB_UPDATE} map="$1" layer="1" column="${adj_startyold}" value="${adj_startyold}" where="${adj_fld_key}=${adj_cat_inner}" --quiet
-			#END DEBUG
-			# Compute translation factors for moving vertices:
-			# Start vertex:
-			adj_startxnew=`v.db.select -c map="$1" column="${adj_fld_startxnew}" where="${adj_fld_key}=${adj_cat_inner}"`				
-			adj_startynew=`v.db.select -c map="$1" column="${adj_fld_startynew}" where="${adj_fld_key}=${adj_cat_inner}"`
-			adj_d_startxnew=`echo ${adj_startxold} ${adj_startxnew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
-			adj_d_startynew=`echo ${adj_startyold} ${adj_startynew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
-			# End vertex:
-			adj_endxnew=`v.db.select -c map="$1" column="${adj_fld_endxnew}" where="${adj_fld_key}=${adj_cat_inner}"`
-			adj_endynew=`v.db.select -c map="$1" column="${adj_fld_endynew}" where="${adj_fld_key}=${adj_cat_inner}"`
-			adj_d_endxnew=`echo ${adj_endxold} ${adj_endxnew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
-			adj_d_endynew=`echo ${adj_endyold} ${adj_endynew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
-			#DEBUG: Show node coordinates as stored in attribute table of current link 
-			#v.db.select map="$1" layer="1" where="${adj_fld_key}=${adj_cat_inner}"
-			#END DEBUG
-			#DEBUG: Print deltas.
-			#echo "  adj_d_startxnew=${adj_d_startxnew}"
-			#echo "  adj_d_startynew=${adj_d_startynew}"
-			#echo "  adj_d_endxnew=${adj_d_endxnew}"
-			#echo "  adj_d_endynew=${adj_d_endynew}"
-			#END DEBUG
-			# Use v.edit to correct node positions now!
-			# TODO: pass threshold="0.00000001" to v.edit!?
-			#v_edit_thresholds="threshold=-1,0.0001,0"
-			v.edit ${v_edit_thresholds} map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_startxnew},${adj_startynew}" move="${adj_d_startxnew},${adj_d_startynew},0" cats="${adj_cat_inner}" --quiet
-			v.edit ${v_edit_thresholds} map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_endxnew},${adj_endynew}" move="${adj_d_endxnew},${adj_d_endynew},0" cats="${adj_cat_inner}" --quiet
+			
+			if [ "${GRASS_REG_PROJECTION}" != "3" ] ; then
+				# x/y data case:
+				# Compute translation factors for moving vertices.
+				# Get current end vertex of LCP (as stored by r.path in $1):
+				adj_endxnew=`v.db.select -c map="$1" column="${adj_fld_endxnew}" where="${adj_fld_key}=${adj_cat_inner}"`
+				adj_endynew=`v.db.select -c map="$1" column="${adj_fld_endynew}" where="${adj_fld_key}=${adj_cat_inner}"`			
+				# Calculate end vertex coordinate deltas and store results with fixed precision:
+				adj_d_endxnew=`echo ${adj_endxold} ${adj_endxnew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
+				adj_d_endynew=`echo ${adj_endyold} ${adj_endynew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
+				# Get current start vertex of LCP (as stored by r.path in $1):
+				adj_startxnew=`v.db.select -c map="$1" column="${adj_fld_startxnew}" where="${adj_fld_key}=${adj_cat_inner}"`				
+				adj_startynew=`v.db.select -c map="$1" column="${adj_fld_startynew}" where="${adj_fld_key}=${adj_cat_inner}"`
+				# Calculate start vertex coordinate deltas and store result with fixed precision:
+				adj_d_startxnew=`echo ${adj_startxold} ${adj_startxnew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`
+				adj_d_startynew=`echo ${adj_startyold} ${adj_startynew} | "${AWK}" '{ printf "%.8f", \$1 - \$2}'`			
+				#
+				#TODO: The two v.edit statements below, using tool "vertextmove", would be the quickest, most simple
+				#      way to get the job (coordinate adjustment) done for x/y and lat/lon data alike.
+				# 	   HOWEVER, due to a bug in v.edit, which moves
+				#      the ENTIRE line geometry instead of just the vertex (specified by 'coords=') when running
+				#      in a lat/lon region, we can only use this simple approach for x/y data currently...
+				#
+				# Adjust end node of LCP:
+				v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_endxnew},${adj_endynew}" move="${adj_d_endxnew},${adj_d_endynew},0" cats="${adj_cat_inner}" --quiet
+				# Adjust start node of LCP:
+				v.edit map="$1" layer="1" type="line" tool="vertexmove" coords="${adj_startxnew},${adj_startynew}" move="${adj_d_startxnew},${adj_d_startynew},0" cats="${adj_cat_inner}" --quiet			
+			else
+				# Lat/lon case:
+				# We use v.out.ascii to produce an ASCII representation of the current LCP and then
+				# process that line-by-line, injecting new start and end vertices into the stream
+				# and then piping the result back into an updated LCP representation. We hand the
+				# result back to the caller, who in turn takes care of writing a new vector map
+				# that contains all updated LCPs!
+				path=`v.out.ascii input="${1}" type="line" format="standard" cats="${adj_cat_inner}" --quiet`
+				check_error "Failed to export LCP to ASCII representation ('cat'='${adj_cat_inner}')." ${4}
+				# Now write the LCP paths into the ASCII representation:
+				OLD_IFS="$IFS"
+				IFS=$'\n\b'
+				num_vertices=0 # This is the first bit of information that we need from v.out.ascii
+				cur_vertex=1 # Keeps track of the vertex in the LCP that we are currently processing
+				# Main loop for parsing v.out.ascii output: We go through all lines of the
+				# ASCII file, but manipulate and store only the vertex list.			
+				for line in $path ; do
+					if [ ${num_vertices} -eq 0 ] ; then
+						# We still need to find the line that provides the number of vertices.
+						# Let's see if the current $line has what we need:
+						num_vertices=`echo "$line" | ${GREP} "L  "`					
+						if [ -n "${num_vertices}" ] ; then
+							# This looks like the right line. Try reading it into an int!
+							num_vertices=`echo "$line" | cut -d " " -f3`
+							check_error "Failed to extract numnber of vertices for LCP with cat'='${adj_cat_inner}')." ${4}
+							# Ok! We got the number of vertices.
+							# We add the corresponding v.out.ascii line as first line of the
+							# current path geometry representation:
+							path_geom="$path_geom
+$line"
+							continue
+						else
+							# Not what we need. Keep looking!
+							num_vertices=0 # Reset to default value.
+						fi					
+					fi
+					if [ ${num_vertices} -gt 0 ] ; then
+						# We have the number of vertices. Now we must keep reading vertices,
+						# replacing the first and the last one!
+						if [ ${cur_vertex} -eq 1 ] ; then
+							# We have the first vertex: Replace it!
+							path_geom="$path_geom
+ ${adj_startxold}  ${adj_startyold} "
+						fi
+						if [ ${cur_vertex} -gt 1 ] && [ ${cur_vertex} -lt ${num_vertices} ] ; then
+							# We have a vertex in between the first and last ones: retain it!
+							path_geom="$path_geom
+$line"
+						fi
+						if [ $cur_vertex -eq ${num_vertices} ] ; then
+							# We have the last vertex: Replace it!
+							path_geom="$path_geom
+ ${adj_endxold}  ${adj_endyold} "
+						fi
+						cur_vertex=`"${EXPR}" ${cur_vertex} + 1`
+					fi
+				done			
+				# Write last line of output (cat):
+				path_geom="$path_geom
+ 1     ${adj_cat_inner}"
+			
+				# If we have a valid LCP representation, then $num_vertices must be <= 2 at this point!
+				if [ ${num_vertices} -lt 2 ] ; then
+					IFS="$OLD_IFS"
+					exit_error "Invalid LCP retrieved for 'cat'='${adj_cat_inner}'." ${4}
+				fi			
+				IFS="$OLD_IFS"
+			fi
 			# Move on to next link:
 			adj_step_inner=`"${EXPR}" ${adj_step_inner} + 1`
 		fi
 		# Try next category value:
 		adj_cat_inner=`"${EXPR}" ${adj_cat_inner} + 1`
-	done				
-	# Since we extract one node per run, we need to do one pass less
-	# through the inner loop each time we look at another set of links.
-	#NUM_LINKS=`"${EXPR}" ${NUM_LINKS} - 1`
-	# Drop attribute table from temporary links map.				
-	${V_DB_DROPTABLE} map="$1" layer="1" -f --quiet		
+	done
+	
+	# Once more, we have to run different code, depending on whether we are dealing
+	# with lat/lon or x/y data!
+	if [ "${GRASS_REG_PROJECTION}" = "3" ] ; then
+		# Lat/lon:
+		# Now overwrite the map passed to this function with the new, adjusted
+		# LCP representations, using v.out.ascii:
+		echo "$path_geom" | v.in.ascii input="-" format="standard" output="$1" --o --quiet 2>/dev/null
+		check_error "Failed to export adjusted LCPs (fuction 'links_adust_nodes')." ${4}
+	else
+		# Only required for x/y data:
+		# Drop attribute table from temporary links map.				
+		${V_DB_DROPTABLE} map="$1" layer="1" -f --quiet
+		check_error "Failed to drop attribute table of adjusted LCPs (fuction 'links_adust_nodes')." ${4}	
+	fi
 
 }
 
@@ -3158,22 +3295,10 @@ mutex_release_seq() {
 # 
 # TODO:
 #
-#	    * Results of multi-threaded run MUST be compared with old, single-threaded code
-#		  (incl. sequence of edges and nodes in output maps!)
-#
-#		  [BUG!]: links_adjust_nodes() fails for LAT/LON: the adjusted nodes all have some individual,
-#				  small variations in their locations and are not where they are supposed
-#				  to be.
-#				  -> THIS PROBLEM ONLY EXISTS IN LAT/LON REGIONS!
-#				  -> v.edit 'move' is used to move coords by deltas, and AWK with precision 8 is involved!
-#				  -> increase awk precision and/or use snapping tolerance in v.edit?
-#				  -> is this just a mix-up of X and Y in lat/lon locations?
-#				  -> DIAGNOSIS: Compare to results without any nodes adjustment, to see if anything has
-#					 been moved, at all!
-#					 ALSO compare to output of old, single-threaded code: Did that have the same issue?
-#
-#		* Implement multi-threaded cost raster ops!
-#		  [X] DONE: TESTING REQUIRED (incl. with an initial model and cost raster)
+#		* [BUG]: progress (%) can bounce back in multi-threaded mode:
+#			     -> If a thread that was started earlier completes quicker than the next thread,
+#				    it will pull down the progress% to its local value.
+#				 -> Global progress display must probably be handled by caller, and not within thread.
 #
 #		  [ANNOYANCE]: cat sequence of output links attribute table is not strictly ascending in
 #			     cost based mode.
@@ -3185,9 +3310,12 @@ mutex_release_seq() {
 #				    of cat. The overhead this would require does not seem to be worth it.
 #				  -> Document this behaviour!
 #
+#		  * [PERFORMANCE] a speed up for large $GIS_OPT_INPUT could be gained by not
+#			starting the main loop in links_adjust_nodes() at '1' every time.
+#           See the comment there for a better starting value!
+#
 #		  * Make sure that all threads are terminated if "exit" is called from
-#           within multi-threaded raster processing ops. This includes all
-#		    called subfunctions (DONE for "links_adjust_nodes": any others?)!
+#           within multi-threaded raster processing ops.
 #			-> This can be tested by simply generating a call to check_error and passing
 #			   any message as $1 and $global_pid as $2!
 #
@@ -3201,13 +3329,7 @@ mutex_release_seq() {
 #		* Make sure that the code segments guarded by (the sync'd) mutex
 #	      are all minimal!
 #
-#		* All the mutex handling and temporary map production should
-#		  be conditionalized on GIS_OPT_THREADS -gt 1 (we don't need
-#		  all this overhead when running in single-thread mode!).
-#
 #		* Remove/disable debugging messages from this function and the caller function
-#
-#		* Implement progress display with g.progress. [DONE]
 #
 #		* Code needs a lot of cleaning up for legibility.
 #
@@ -3231,6 +3353,8 @@ mutex_release_seq() {
 #			  version's outputs (anything prior to version 1.1.0; if v.net.models
 #			  does not show version information on start-up, then it is older
 #			  than 1.1.0!).
+#		    - performance degrades a lot in lat/lon mode, due to the use of a work-around
+#             for adjusting link start/end vertices!
 #
 model_complete_thread () {
 	id=$1	
@@ -3442,9 +3566,9 @@ model_complete_thread () {
 			# variables that might interfere with those in other threads. So we make use of the fact that
 			# that the thread with ID '0' is the first one that was launched and has an LCP subnetwork
 			# with ${NUM_INPUT_NODES}, while all successive threads have ${NUM_INPUT_NODES} - ${id}!
-			num_links_to_adjust=`"${EXPR}" ${NUM_INPUT_NODES} - ${step}`
-			links_adjust_nodes "${tmp_vect_links}" "${TMP_VECT_EXTRACT}_${step}" "${num_links_to_adjust}" ${global_pid}	
-			
+			num_links_to_adjust=`"${EXPR}" ${NUM_INPUT_NODES} - ${step} - 1`
+			links_adjust_nodes "${tmp_vect_links}" "${TMP_VECT_EXTRACT}_${step}" "${num_links_to_adjust}" ${global_pid}
+
 			# We cannot release the DB mutex sooner, because up to this point, we have been writing
 			# new tables into the shared mapset database!			
 			mutex_release "${global_pid}_db_switch"
@@ -3923,7 +4047,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# Instead of swapping the actual attribute values field-by-field (slow and error prone),
 	# we just swap the GRASS primary key values "cat" for all records that have the same
 	# user-defined primary key.	
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	# NOTE: Reversing node order will be SKIPPED when running in lat/lon mode, since the
+	#       current work-around (processing of ASCII LCP presentations) leaves the link
+	#		geometries in the correct order!
+	if [ -n "${GIS_OPT_COSTMAP}" ] && [ "${GRASS_REG_PROJECTION}" != "3" ]; then
 		g.message -i "Reordering link attributes:"
 		get_primary_keys "${GIS_OPT_INPUT}"
 		line_old=-1
