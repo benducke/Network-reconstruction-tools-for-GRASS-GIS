@@ -1,0 +1,765 @@
+#!/bin/sh
+############################################################################
+#
+# MODULE:     	v.sort
+# AUTHOR(S): 	Benjamin Ducke <benducke AT fastmail.fm>
+# PURPOSE:		Sorts features of a vector map on values of a chosen field.
+#				This script takes a vector map as input and creates a new vector map
+#				in which the data storage order confirms to user-defined criteria.
+#             	At the same time, this script ensures that all primary keys of the
+#				new vector maps are stored as an unbroken sequence "1,2,3,..,n".
+#				Thus, v.sort can be used to fix GRASS vector maps that have "messy"
+#				primary key sequences or to enforce a specific data order on vector
+#				maps.
+#
+# COMPATIBILITY:
+#				This script has been written to run under GRASS 8 (and possibly
+#				any later version that retains the GRASS 8 syntax for the GRASS
+#				commands called by this script).
+#
+# COPYRIGHT:    (C) 2024 by Benjamin Ducke
+#
+#               This program is free software under the GNU General Public
+#               License (>=v2). Read the file COPYING that comes with GRASS
+#               for details.
+#
+#############################################################################
+
+# CAVEATS/TODO/LIMITATIONS
+# * input map geometries without attribute records in the input map will not be preserved in the output map
+# * the output map will always have all of its features in layer 1.
+# * Since "db.execute" allows to specify only one database for both source and target tables, this script
+#   won't work if the input map stores its attribute tables in a different datatase than that used
+#   by the current GRASS session.
+# * This script makes heavy use of direct SQL execution. It will only run if the current GRASS session is
+#   using one of the supported DBMS backends.
+# * If the column on which to sort contains "|" for any record, then the operation will fail and "delimiter="
+#   must be used to choose a field delimiter that does not appear in the data.
+
+#
+# REQUIRED EXTERNAL PROGRAMS:
+# - grep
+# - expr
+# - date
+# - cut
+# - pkill
+# - sort
+# - wc
+#
+
+
+#%Module
+#% description: Sorts features of a vector map on values of a chosen field.
+#% keywords: vector, attributes, sorting, ordering
+#%End
+
+#%Flag
+#%  key: e
+#%  description: Empty field values allowed
+#%End
+
+#%Flag
+#%  key: i
+#%  description: Ignore leading blanks in field values
+#%End
+
+#%Flag
+#%  key: n
+#%  description: Numeric sorting (forced)
+#%End
+
+#%Flag
+#%  key: u
+#%  description: Unique field values required
+#%End
+
+
+
+#%Option
+#% key: input
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: name
+#% description: Input vector map
+#% gisprompt: old,vector,vector
+#%End
+
+#%option G_OPT_V_FIELD
+#% key: layer
+#%end
+
+#%Option
+#% key: output
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: name
+#% description: Sorted output vector map
+#% gisprompt: new,vector,vector
+#%End
+
+#%option G_OPT_DB_COLUMN
+#% key: by
+#% required: no
+#% description: Input map's attribute table column by which to sort (default: primary key)
+#% gisprompt: old,dbcolumn,dbcolumn
+#%end
+
+#%Option
+#% key: order
+#% type: string
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% options: asc,desc
+#% description: Sort order
+#% answer: asc
+#%End
+
+#%Option
+#% key: delimiter
+#% type: string
+#% required: no
+#% multiple: no
+#% key_desc: name
+#% description: Delimiter for text field parsing (change in case of errors)
+#% answer: |
+#%End
+
+
+# System setup: Modify if needed.
+if [ -n "${MSYSPATH}" ] ; then
+	# "MSYSPATH" was set by the Windows ".bat" script that called
+	# this script. It contains the path to the "bin" folder of
+	# the local MSYS(2) installation, using Linux style "/" separators
+	# but NOT INCLUDING the final path separator, like so:
+	# "/c/msys64/usr/bin"
+	# That means we are running under MS Windows,
+	# and we must make some adjustments to external program calls!
+	CUT="${MSYSPATH}/cut"
+	DATE="${MSYSPATH}/date"
+	EXPR="${MSYSPATH}/expr"	
+	GREP="${MSYSPATH}/grep"
+	SORT="${MSYSPATH}/sort"
+	PKILL="${MSYSPATH}/pkill"
+	WC="${MSYSPATH}/wc"
+	# Scripted GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
+	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
+	V_DB_ADDTABLE="v.db.addtable.bat"
+else
+	CUT="cut"
+	DATE="date"
+	EXPR="expr"
+	GREP="grep"	
+	SORT="sort"
+	PKILL="pkill"
+	WC="wc"
+	# These are the GRASS commands that are actually Shell/Python scripts.
+	# On Linux/macOS they are executed through the shell, just like binaries.
+	V_DB_ADDCOLUMN="v.db.addcolumn"
+	V_DB_ADDTABLE="v.db.addtable"
+fi
+
+# Basic module setup.
+MODULE_NAME="v_sort" # for prefixing temporary object names
+MODULE_NAME_EXEC="v.sort" # name as run on the command line
+MODULE_VERSION="1.0.0"
+
+# Exit status variables.
+EXIT_OK=0
+EXIT_CTRL_C=1
+EXIT_TERMINATED=2
+EXIT_ERROR=3
+
+# Processing states.
+RUNMODE_COST="FALSE" # Cost-based processing mode
+
+# DBMS backend idiosyncracies
+DBMS_LOCKS_REQUIRED=0   # DBMS locking off (will be set later, as required)
+DBMS_THREAD_SAFE=0		# Indicates whether the DBMS is thread safe (in the context of this script)
+DBMS_INDEX_SUPPORTED=0  # Indicates whether the DBMS supports building an index.
+DBMS_PRESERVES_ORDER=0  # Indicates whether the DBMS preserves order of record insertion reliably.
+DBMS_FILE_PATH=0		# Indicates whether the DBMS driver uses a file path to specify the location of a database.
+
+# Basic sanity checks.
+if [ -z "$GISBASE" ] ; then
+    echo "ERROR: You must be in GRASS GIS to run this program." 1>&2
+    exit ${EXIT_ERROR}
+fi
+
+if [ "$1" != "@ARGS_PARSED@" ] ; then
+    exec g.parser "$0" "$@"
+fi
+
+# Check if we are running under old GRASS 6
+GRASS_V6=`g.version -e | "${GREP}" "GRASS 6"`
+
+# Check if we are running under old GRASS 7
+GRASS_V7=`g.version -e | "${GREP}" "GRASS 7"`
+
+# Check if we are running under old GRASS 8
+GRASS_V8=`g.version -e | "${GREP}" "GRASS 8"`
+
+if [ -n "$GRASS_V6" ] ; then
+	g.message -e "This script requires GRASS GIS version 7 or higher."
+	exit ${EXIT_ERROR}
+fi
+
+# Create prefix for all temporary maps
+TMP_PREFIX="tmp_${MODULE_NAME}_`echo $$`_d"
+
+# Names of temporary maps (VECTOR)
+TMP_VECT_EXTRACT="${TMP_PREFIX}_v_extract" 				# Feature(s) extracted from input vector map
+
+
+# FUNCTION
+# clean_up: Remove temporary maps, reset region to what it was, etc.
+clean_up () {	
+	# Feature(s) extracted from input vector map.
+	type="vector"
+	elem="${TMP_VECT_EXTRACT}"
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
+	fi
+}
+	
+
+# Make sure we get to clean up!
+trap "g.message -i 'Terminated by user (CTRL+C).' ; clean_up ; exit ${EXIT_CTRL_C}" 2 # user interrupt (CTRL+C)
+#trap "'Unexpected termination.' ; clean_up ; exit ${EXIT_TERMINATED}" 1 # external interrupt
+
+
+# FUNCTION
+# check_error: Check last return status, issue an error message and abort if appropriate.
+#
+# Arguments:
+#
+# $1 - Error message to display (mandatory)
+# $2 - PID (optional)
+#
+# At least $1 must be provided (error message) for this function to
+# work correctly.
+#
+# If $2 is also provided, then its value will be interpreted as
+# an integer type PID, and a 'kill' command with Signal type '1'
+# will be issued to terminate the corresponding job.
+#
+check_error () {
+	if [ ! "$?" -eq "0" ] ; then
+		g.message -e "$1"
+		if [ -n $2 ] && [ "$2" != "" ] ; then
+			# PID passed: kill!
+			clean_up
+			g.message -e "Terminating job with PID $2 and all subprocesses."	
+			"${PKILL}" --signal 9 -P $2 &
+			exit ${EXIT_ERROR}
+		else
+			clean_up
+			exit ${EXIT_ERROR}
+		fi		
+	fi
+}
+
+
+# FUNCTION
+# check_warn: Check last return status, issue a warning message if appropriate.
+check_warn () {
+	if [ ! "$?" -eq "0" ] ; then
+		g.message -w "$1"
+	fi
+}
+
+
+# FUNCTION
+# exit_error: Display an error message and exit with default error code.
+# 
+# Arguments:
+#
+# $1 - Error message to display (mandatory)
+# $2 - PID (optional)
+#
+# At least $1 must be provided (error message) for this function to
+# work correctly.
+#
+# If $2 is also provided, then its value will be interpreted as
+# an integer type PID, and a 'kill' command with Signal type '1'
+# will be issued to terminate the corresponding job.
+#
+exit_error () {
+	g.message -e "$1"	
+	if [ -n $2 ] && [ "$2" != "" ] ; then
+	    # PID passed: kill!
+	    # Note: The trap set at the beginning of this script will make
+	    # sure that all clean-up functions are run.
+	    g.message -e "Terminating job with PID $2."
+		#kill -s 1 $2
+		clean_up
+		exit ${EXIT_ERROR}
+	else
+		clean_up
+		exit ${EXIT_ERROR}
+	fi	
+}
+
+
+# FUNCTION
+# eval_ws_safe:  White-space resilient setting of variables from command output.
+#                This is useful for many GRASS commands that produce shell style
+#				  output (like 'g.region -pg') of the form:
+#                   var1=abc
+#                   var2=123
+#                   ...
+#                Pass string with a command's full output as $1.
+#                Pass name of a variable to set from output as $2.
+#                This function will then grep the _first_ occurrence
+#                of the variable name (case sensitive!) from the command output
+#                and set it to the value following "=" (equal sign).
+#				  As opposed to a simple 'eval', this function is able
+#                to correctly set variable values that contain whitespace!
+#				  This is also the safer option to use if an 'eval' statement would
+#                potentially encounter values with white space for variables other
+#			 	  than the target variable.
+#                The contents for setting the variable are returend in "EVAL_RESULT".
+eval_ws_safe () {
+	OLD_IFS_EVAL_WS_SAFE="$IFS"
+	# Set list separator to newline and line break characters.
+	# This used to be: 
+	# IFS=$(echo -en "\n\b")
+	# However, macOS' shell does not interpret that form correctly.
+	IFS=$'\n\b'
+	# Process (list of) input line(s):
+	str=`echo "$1" | "${GREP}" "$2="`
+	for i in $str
+	do
+		IFS="="
+		CUR=$i
+		for j in $CUR
+		do			
+			EVAL_RESULT="$j"
+		done
+	done	
+	IFS="$OLD_IFS_EVAL_WS_SAFE"
+}
+
+
+# FUNCTION
+# check_setup: Check system setup (required external programs available?).
+check_setup () {
+	
+	message="Failed to run required program: "
+	
+	# Date
+	prg="${DATE}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Expr
+	prg="${EXPR}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Grep
+	prg="${GREP}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Sort
+	prg="${SORT}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Wc
+	prg="${WC}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+}
+
+
+# FUNCTION
+# check_environment: Query GRASS environment for some important variables.
+check_environment () {
+	
+	# Get essential GRASS environment settings
+	GISDBASE=`g.gisenv get=GISDBASE`
+	LOCATION_NAME=`g.gisenv get=LOCATION_NAME`
+	MAPSET=`g.gisenv get=MAPSET`
+	
+	# Get current region settings.
+	eval `g.region -p -g`	
+
+	# Store projection (to differentiate x/y and lat/lon)
+	GRASS_REG_PROJECTION="${projection}"
+	if [ "${GRASS_REG_PROJECTION}" = "3" ] ; then
+		g.message -w "Running in lat/lon mode. Expect reduced performance."
+	fi
+
+	# Get current GRASS database connection	
+	cmd=`db.connect -pg`
+	check_error "Failed to query GRASS session for current database connection ('db.connect')."
+	eval_ws_safe "${cmd}" "driver"
+	GRASS_DB_driver="${EVAL_RESULT}"
+	eval_ws_safe "${cmd}" "database"
+	GRASS_DB_database="${EVAL_RESULT}"
+	
+	# Ensure that we are running with a supported DBMS!
+	# A supported DBMS must have sufficient SQL capabilities for this script's attribute data
+	# operations.
+	DBMS_SUPPORTED=0
+	DBMS_NAME="unsupported"
+	# SQLite: Sufficient SQL capabilities, but not thread-safe with default setup
+	# (=one SQLite database per mapset).
+	if [ "${GRASS_DB_driver}" = "sqlite" ] ; then
+		DBMS_SUPPORTED=1
+		DBMS_NAME="SQLite"		
+		DBMS_INDEX_SUPPORTED=1
+		DBMS_PRESERVES_ORDER=1
+		# It is possible to force the SQLite backend driver to use one
+		# DB per vector map instead of one DB per mapset.
+		result=`echo "$GRASS_DB_database" | "${GREP}" '/vector/$MAP/' -c`
+		if [ ${result} -gt 0 ] ; then
+			DBMS_THREAD_SAFE=1
+			g.message -w "SQLite backend appears to be in per-map mode. Expect errors."
+		else
+			g.message -i "SQLite backend appears to be in default mode (single database)."
+		fi
+		DBMS_FILE_PATH=1
+	fi
+	# PostgreSQL: Full SQL capabilities and thread safe
+	if [ "${GRASS_DB_driver}" = "pg" ] ; then
+		DBMS_SUPPORTED=1
+		DBMS_NAME="PostgreSQL"
+		DBMS_THREAD_SAFE=1
+		DBMS_INDEX_SUPPORTED=1
+		DBMS_PRESERVES_ORDER=0
+	fi
+	# MySQL/MariaDB: Full SQL capabilities and thread safe
+	if [ "${GRASS_DB_driver}" = "mysql" ] ; then
+		g.message -w "MySQL/MariaDB used: Use input data with minimal number of attribute fields to avoid storage size errors."
+		DBMS_SUPPORTED=1
+		DBMS_NAME="MySQL/MariaDB"		
+		DBMS_THREAD_SAFE=1
+		DBMS_INDEX_SUPPORTED=1
+		DBMS_PRESERVES_ORDER=1
+	fi
+	# Embedded version of MySQL/MariaDB: Full SQL capabilities and thread safe
+	if [ "${GRASS_DB_driver}" = "mesql" ] ; then
+		DBMS_SUPPORTED=1
+		DBMS_NAME="MySQL/MariaDB (embedded)"
+		DBMS_THREAD_SAFE=1
+		DBMS_INDEX_SUPPORTED=1
+		DBMS_PRESERVES_ORDER=1
+	fi
+	if [ ${DBMS_SUPPORTED} -lt 1 ] ; then
+		exit_error "Current mapset does not use a supported DBMS."
+	fi
+	g.message -i "Running with DBMS driver '${GRASS_DB_driver}' (${DBMS_NAME})."
+	
+	# If the DBMS cannot preserve record insertion order, then we might expect some trouble.
+	if [ ${DBMS_PRESERVES_ORDER} -eq 0 ] ; then
+		g.message -w "DBMS does not strictly preserve record insertion order. Please check output for correct order."
+	fi
+}
+
+
+# FUNCTION
+# MAIN():	This is a bogus function. It exists only so that text
+#			editors will find this as a mark when parsing the source
+#		   	code in SH mode, and it will be added to the document outline. 
+MAIN () {
+	echo ""
+}
+
+########
+# MAIN #
+########
+
+
+# Go!
+g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
+
+# Check GRASS environment:
+check_environment
+
+# Run all pre-flight checks:
+check_setup
+
+# Keep track of starting time.
+START=`"${DATE}"`
+
+# GO! GO!
+
+# Get GRASS primary key field first:
+cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
+check_error "Failed to query input vector map '${GIS_OPT_INPUT}' for extended metadata."
+eval_ws_safe "${cmd}" "attribute_primary_key"
+if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of GRASS primary key column for input vector map '${GIS_OPT_INPUT}'."
+fi
+
+# If user does NOT provide the name of a field for sorting, then we sort on the primary key field:
+if [ -z "${GIS_OPT_BY}" ] ; then
+	GIS_OPT_BY="${EVAL_RESULT}"	
+fi
+
+# We use the 'sort' command to sort the attribute table records.
+# Like many essential GNU/BSD tools, sort is extremely powerful on current Linux and rudimentary at best on macOS.
+# The following are switches that even the most primitive implementations of sort should honour:
+# -b (ignore leading blanks)
+# -c (check for sorted input; do not sort)
+# -n (numeric sorting)
+# -r (reverse sorting)
+# -u (check for unique values)
+#
+# Configure options for 'sort' command.
+sort_opts=""
+# Sort order descending?
+if [ "${GIS_OPT_ORDER}" = "desc" ] ; then
+	# Use reverse sorting.
+	sort_opts="${sort_opts} -r"
+fi
+# Ignore leading blanks in field values?
+if [ ${GIS_FLAG_I} -eq 1 ] ; then
+	# Use reverse sorting.
+	sort_opts="${sort_opts} -b"
+fi
+# Need to use numeric sorting?
+if [ ${GIS_FLAG_N} -eq 1 ] ; then
+	# Numeric sorting is forced!
+	sort_opts="${sort_opts} -n"
+else
+	# Check if the field to sort on is numeric, in which case we
+	# automatically switch to numeric sorting.
+	fld_test_result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" | "${GREP}" "INTEGER|${GIS_OPT_BY}" -w -c`
+	if [ ${fld_test_result} -eq 1 ] ; then
+		sort_opts="${sort_opts} -n"
+	else
+		fld_test_result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" | "${GREP}" "DOUBLE PRECISION|${GIS_OPT_BY}" -w -c`
+		if [ ${fld_test_result} -eq 1 ] ; then
+			sort_opts="${sort_opts} -n"
+		fi
+	fi
+fi
+
+# Get the sorted list of "value|primary key" pairs first:
+vals=`v.db.select map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" col="${GIS_OPT_BY},${EVAL_RESULT}" -c separator="${GIS_OPT_DELIMITER}"`
+check_error "Failed to retrieve list of sorted key-value pairs for input vector map '${GIS_OPT_INPUT}'."
+sorted_pairs=`echo "${vals}" | "${SORT}" ${sort_opts} 2>/dev/null`
+# Now get only the list of sort field values:
+sorted_vals=`echo "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 1`
+check_error "Failed to retrieve list of sorted field values for input vector map '${GIS_OPT_INPUT}'."
+# Now get only the list of associated primary keys in the same order.
+sorted_keys=`echo "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 2`
+check_error "Failed to retrieve list of sorted primary key values for input vector map '${GIS_OPT_INPUT}'."
+# Now check if there is a field #3 when using the current separator character. If so, then
+# we have a problem!
+check_sep=`echo "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 3`
+num_words_check=`echo "${check_sep}" | "${WC}" -w`
+if [ ${num_words_check} -gt 0 ] ; then
+	exit_error "Use option 'delimiter=' to set a field separator that does not occur as part of the data in column '${GIS_OPT_BY}'!"
+fi
+
+# Check for empty field values, unless "-e" given!
+# At least one empty field value is assumed to exist, if the
+# list of values returned by "sort" is longer than the number
+# of variables in ${sorted_vals} which the DO loop iterates over.
+if [ ${GIS_FLAG_E} -eq 0 ] ; then
+	if [ ${GIS_FLAG_U} -eq 1 ] ; then
+		# Non-empty and unique field value options contradict each other!
+		exit_error "Flags -e(mpty allowed) and -u(nique) must not both be provided."
+	fi
+	num_lines_sort=`echo "${sorted_vals}" | "${WC}" -l`
+	check_error "Failed to determine number of lines in output of 'sort' command."
+	OLD_IFS="$IFS"
+	IFS=$'\n\b'
+	num_vals=0
+	for val in ${sorted_vals} ; do
+		num_vals=`"${EXPR}" ${num_vals} + 1`
+	done
+	if [ ${num_lines_sort} -ne ${num_vals} ] ; then
+		exit_error "Empty field value(s) detected."
+	fi	
+	IFS="$OLD_IFS"
+fi
+
+# Unique values required? Then we check for duplicates in the sorted list of values now!
+if [ ${GIS_FLAG_U} -eq 1 ] ; then
+	i=1
+	OLD_IFS="$IFS"
+	IFS=$'\n\b'
+	for val in ${sorted_vals} ; do
+		if [ $i -gt 1 ] ; then
+			if [ "${val}" = "${previous}" ] ; then
+				exit_error "Duplicate field values detected."
+			fi
+		fi
+		i=`expr $i + 1`
+		previous="${val}"
+	done
+	IFS="$OLD_IFS"
+fi
+
+#
+# Now create sorted map by extracting first node and then patching the remaining ones to it.
+# Note that v.patch will create a "cat" sequences with gaps if the attribute
+# records are also patched. In addition, "v.extract" will preserve the "cat" value of
+# the extracted node. In combination, both behaviours will likely lead to a "cat" sequence
+# that does NOT start at "1" and has gaps. This violates our assumption about unbroken
+# primary key values starting at "1". Therefore, we will extract and patch only the geometries
+# at this point, discarding all attribute data. A properly sorted attribute table will be
+# re-attached in the next step.
+#
+eval `v.info -t map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
+check_error "Failed to get topology info for input vector map."
+i=1
+num_features=`echo "${sorted_keys}" | "${WC}" -l`
+g.message -i "Extracting ordered features to new output map:"
+for cur_key in ${sorted_keys} ; do
+	if [ $i -eq 1 ] ; then
+		# First node: Extract into new map!
+		v.extract -t input="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" where="${EVAL_RESULT}=${cur_key}" output="${GIS_OPT_OUTPUT}" new="$i" --overwrite --quiet 2>/dev/null
+		check_error "Failed to extract point with primary key value '${cur_key}' from input vector map."
+	else
+		# Every following node: Extract and patch into existing map!
+		v.extract -t input="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" where="${EVAL_RESULT}=${cur_key}" output="${TMP_VECT_EXTRACT}" new="$i" --overwrite --quiet 2>/dev/null
+		check_error "Failed to extract point with primary key value '${cur_key}' from input vector map."
+		v.patch -a input="${TMP_VECT_EXTRACT}" output="${GIS_OPT_OUTPUT}" --o --quiet
+		check_error "Failed to add input node #${cur_key} to sorted map of input nodes."
+	fi
+	g.message -p "${i} ${num_features} 1"
+	i=`expr $i + 1`
+done
+
+# We now have the geometries, in correct order and with a brand new primary
+# key ("cat") sequence [1..n], but without an attribute table for the output map.
+# So let's take care of that next.
+#
+# Get name of primary key field in input map
+cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
+check_error "Failed to query input vector map for extended metadata (primary key name)."
+eval_ws_safe "${cmd}" "attribute_primary_key"
+if [ -z "${EVAL_RESULT}" ] ; then
+	exit_error "Failed to retrieve name of GRASS primary key column from input map."
+fi
+input_map_pkey="${EVAL_RESULT}"
+# Create empty table with with primary key of same name for output map:
+${V_DB_ADDTABLE} map="${GIS_OPT_OUTPUT}" layer="1" key="${input_map_pkey}" --quiet 2>/dev/null
+
+# Retrieve the DB connection info from the input and output maps:
+if [ ${DBMS_FILE_PATH} -gt 0 ] ; then
+	# Input map:
+	from_db_path=`v.db.connect -g map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" | "${CUT}" -d "|" -f 4`
+	if [ -z "${from_db_path}" ] ; then
+		exit_error "Failed to resolve attribute database path of input map."	
+	fi
+	# Output map:
+	to_db_path=`v.db.connect -g map="${GIS_OPT_OUTPUT}" layer="1" | "${CUT}" -d "|" -f 4`
+	if [ -z "${to_db_path}" ] ; then
+		exit_error "Failed to resolve attribute database path of output map."
+	fi	
+fi
+
+#DEBUG
+#echo "${from_db_path} -> ${to_db_path}"
+
+# Check whether both tables are in the same attribute database!
+if [ "${from_db_path}" != "${to_db_path}" ] ; then
+	exit_error "Input and output maps must have their attribute tables in the same database."
+fi
+
+# Copy the attribute table schema of the input map to that of the output map:
+FIELDS=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet`
+num_fields=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet | "${WC}" -l`
+OLD_IFS="$IFS"
+IFS=$'\n\b'
+g.message -i "Adding ${num_fields} fields to output map's attribute table:"
+i=1
+for field in ${FIELDS} ; do
+	type=`echo "${field}" | "${CUT}" -d "|" -f 1`	
+	name=`echo "${field}" | "${CUT}" -d "|" -f 2`
+	# If there is a third field, then the field name contains "|" in which case we can
+	# only bail out!
+	check=`echo "${field}" | "${CUT}" -d "|" -f 3`
+	num_words_check=`echo "${check}" | "${WC}" -w`
+	if [ ${num_words_check} -gt 0 ] ; then
+	exit_error "Field '${name}|${check}' contains '|' as part of its name. Please rename field."
+fi
+	if [ "${name}" != "${input_map_pkey}" ] ; then
+		#DEBUG
+		#echo "type='$type'; name='$name'"
+		${V_DB_ADDCOLUMN} map="${GIS_OPT_OUTPUT}" layer="1" columns="'${name}' '${type}'" --quiet 
+	fi
+	g.message -p "${i} ${num_fields} 1"
+	i=`expr $i + 1`
+done
+IFS="$OLD_IFS"
+
+# Get name of attribute table attached to the chosen layer of input map:
+cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
+check_error "Failed to query input vector map for extended metadata (attribute table name)."
+eval_ws_safe "${cmd}" "attribute_table"
+if [ -z "${EVAL_RESULT}" ] ; then
+	exit_error "Failed to retrieve name of attribute table in layer '${GIS_OPT_LAYER}' of input map."
+fi
+in_table="${EVAL_RESULT}"
+
+# Get name of attribute table attached to the chosen layer of output map:
+cmd=`v.info -e map="${GIS_OPT_OUTPUT}" layer="1"`
+check_error "Failed to query output vector map for extended metadata (attribute table name)."
+eval_ws_safe "${cmd}" "attribute_table"
+if [ -z "${EVAL_RESULT}" ] ; then
+	exit_error "Failed to retrieve name of attribute table in layer 1 of output map."
+fi
+out_table="${EVAL_RESULT}"
+
+#DEBUG
+#echo "in_table=$in_table; out_table=$out_table"
+
+# Copy all field values from the input to the output attribute table, and sort them at the same time:
+num_records=`v.db.select -c map="${GIS_OPT_OUTPUT}" layer="1" | "${WC}" -l`
+check_error "Failed to determine number of records in output map."
+
+#DEBUG
+#echo "RECORDS: $num_records"
+g.message -i "Sorting and updating ${num_records} records:"
+i=1
+while [ $i -le $num_records ] ; do
+	# Get current primary key of input map
+	j=1
+	for cur_key in $sorted_keys ; do
+		if [ $j -eq $i ] ; then
+			pkey="${cur_key}"
+			break;
+		fi
+		j=`expr $j + 1`
+	done;
+	# Step through all fields of input map, copy all values to corresponding fields of output map:
+	OLD_IFS="$IFS"
+	IFS=$'\n\b'
+	for field in ${FIELDS} ; do
+		# Get value from field in input map
+		name=`echo "${field}" | "${CUT}" -d "|" -f 2`
+		if [ "${name}" != "${input_map_pkey}" ] ; then # We copy anything, except the GRASS primary key!
+			echo "UPDATE ${out_table} SET ${name} = (SELECT ${name} FROM ${in_table} where ${input_map_pkey}=${pkey}) WHERE ${input_map_pkey}=${i}" | db.execute input="-"
+			check_error "Failed to update value of field '$name' for record #$i of output map."
+		fi
+	done
+	IFS="$OLD_IFS"
+	g.message -p "${i} ${num_records} 1"
+	i=`expr $i + 1`
+done
+
+# DONE!
+
+# Remove temp. maps, restore region, etc.
+clean_up
+
+# Show processing time.
+g.message -i "Success."
+g.message -i "Started: ${START}"
+END=`"${DATE}"`
+g.message -i "Completed: ${END}"
+
+# Exit with status "OK"
+exit ${EXIT_OK}
