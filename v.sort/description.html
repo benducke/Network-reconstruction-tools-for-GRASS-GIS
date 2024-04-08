@@ -54,9 +54,7 @@
       (i.e. not linked to any rows of an attribute table via a GRASS primary
       key) will <em>not</em> be preserved in the output map.</p>
     <div id="h2_further_usage_notes"></div>
-    <h1 style="background-color: rgb(255, 204, 0);"><a class="mozTocH2" name="mozTocId405554"></a></h1>
-    <div id="h2_input"></div>
-    <h1 style="background-color: rgb(255, 204, 0);">OUTPUT</h1>
+    <h1 style="background-color: rgb(255, 204, 0);"><a class="mozTocH2" name="mozTocId405554"></a>OUTPUT</h1>
     <p>The output consists of a single vector map, in which all features are
       sorted and indexed by an unbroken, steadily increasing primary key
       sequence "1,2,...,n".</p>
@@ -69,6 +67,11 @@
       does not appear in the sort column's data!</p>
     <p>Likewise, no column of the input map's attribute table must include the
       "|" character as part of its name.</p>
+    <p>When sorting on the input map's primary key column, some
+      restrictions/limitations apply: Only ascending sort order is supported,
+      and the <em>"-e", "-i", "-n"</em> and <em>"-u"</em> flags (see <a href="#flags_and_parameters">"Flags
+        and parameters"</a>) will have no effect (by definition, the primary key
+      column contains numeric, unique and non-empty values).</p>
     <p>This program makes heavy use of direct SQL execution using the DBMS of
       the current GRASS session. It will only run if the current GRASS session
       is using one of the supported DBMS backends. GRASS' default SQLite backend
@@ -77,9 +80,7 @@
       for <em><a href="db.connect.html">db.connect</a></em>).<br>
     </p>
     <div id="h2_output"></div>
-    <h1 style="background-color: rgb(255, 204, 0);"><a class="mozTocH1" name="mozTocId324027"></a></h1>
-    <div id="h2_flags_and_parameters"></div>
-    <h1 style="background-color: rgb(255, 204, 0);"><a class="mozTocH2" name="flags_and_parameters"></a>FLAGS
+    <h1 style="background-color: rgb(255, 204, 0);"><a class="mozTocH1" name="mozTocId324027"></a>FLAGS
       AND PARAMETERS</h1>
     The following is a complete list of the flags and options (=parameters)
     available in <em>v.sort</em>. Extended descriptions are provided for those

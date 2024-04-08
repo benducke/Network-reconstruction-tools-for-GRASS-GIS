@@ -503,6 +503,18 @@ if [ -z "${GIS_OPT_BY}" ] ; then
 	GIS_OPT_BY="${EVAL_RESULT}"	
 fi
 
+# When sorting on primary field, a few restrictions/limitations apply:
+if [ "${GIS_OPT_BY}" = "${EVAL_RESULT}" ] ; then
+	if [ "${GIS_OPT_ORDER}" != "asc" ] ; then
+		# Only 'asc' sorting allowed on primary field!
+		exit_error "Primary field '${GIS_OPT_BY}' can only be sorted in order 'asc'."
+	fi
+	# Flags can be set but will have no effect.
+	if [ ${GIS_FLAG_E} -eq 1 ] || [ ${GIS_FLAG_I} -eq 1 ] || [ ${GIS_FLAG_N} -eq 1 ] || [ ${GIS_FLAG_U} -eq 1 ] ; then
+		g.message -w "Sorting on primary field: flags, '-e,-i,-n,-u' have no effect."
+	fi
+fi
+
 # We use the 'sort' command to sort the attribute table records.
 # Like many essential GNU/BSD tools, sort is extremely powerful on current Linux and rudimentary at best on macOS.
 # The following are switches that even the most primitive implementations of sort should honour:
@@ -525,8 +537,8 @@ if [ ${GIS_FLAG_I} -eq 1 ] ; then
 	sort_opts="${sort_opts} -b"
 fi
 # Need to use numeric sorting?
-if [ ${GIS_FLAG_N} -eq 1 ] ; then
-	# Numeric sorting is forced!
+if [ ${GIS_FLAG_N} -eq 1 ] || [ "${GIS_OPT_BY}" = "${EVAL_RESULT}" ] ; then
+	# Numeric sorting is forced if '-n' is set OR we are sorting in primary key!
 	sort_opts="${sort_opts} -n"
 else
 	# Check if the field to sort on is numeric, in which case we
@@ -564,11 +576,7 @@ fi
 # At least one empty field value is assumed to exist, if the
 # list of values returned by "sort" is longer than the number
 # of variables in ${sorted_vals} which the DO loop iterates over.
-if [ ${GIS_FLAG_E} -eq 0 ] ; then
-	if [ ${GIS_FLAG_U} -eq 1 ] ; then
-		# Non-empty and unique field value options contradict each other!
-		exit_error "Flags -e(mpty allowed) and -u(nique) must not both be provided."
-	fi
+if [ ${GIS_FLAG_E} -eq 0 ] ; then	
 	num_lines_sort=`echo "${sorted_vals}" | "${WC}" -l`
 	check_error "Failed to determine number of lines in output of 'sort' command."
 	OLD_IFS="$IFS"
@@ -578,9 +586,16 @@ if [ ${GIS_FLAG_E} -eq 0 ] ; then
 		num_vals=`"${EXPR}" ${num_vals} + 1`
 	done
 	if [ ${num_lines_sort} -ne ${num_vals} ] ; then
-		exit_error "Empty field value(s) detected."
+		exit_error "Empty value(s) detected in sorting field '${GIS_OPT_BY}'."
 	fi	
 	IFS="$OLD_IFS"
+else
+	if [ ${GIS_FLAG_U} -eq 1 ] ; then
+		if [ "${GIS_OPT_BY}" != "${EVAL_RESULT}" ] ; then
+			# Non-empty and unique field value options contradict each other!
+			exit_error "Flags -e(mpty allowed) and -u(nique) must not both be set."
+		fi
+	fi
 fi
 
 # Unique values required? Then we check for duplicates in the sorted list of values now!
@@ -591,7 +606,7 @@ if [ ${GIS_FLAG_U} -eq 1 ] ; then
 	for val in ${sorted_vals} ; do
 		if [ $i -gt 1 ] ; then
 			if [ "${val}" = "${previous}" ] ; then
-				exit_error "Duplicate field values detected."
+				exit_error "Duplicate field values detected in sorting field '${GIS_OPT_BY}'."
 			fi
 		fi
 		i=`expr $i + 1`
