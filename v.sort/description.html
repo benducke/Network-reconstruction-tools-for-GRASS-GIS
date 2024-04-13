@@ -104,6 +104,9 @@
         column's type correctly, or if a text column stores (mixed) numeric
         representations. (alphabetic sorting of the sequence "2,10,1" would
         result in "1,10,2", whereas numeric sorting would give "1,2,10").</dd>
+      <dt><em>-p</em> [Print known and supported DBMS]</dt>
+      <dd>Prints a list of all DBMS that are known to work correctly with <em>v.sort</em>
+        (then quits). The list contains GRASS driver names for use via <em><a href="db.connect.html">db.connect</a></em>.</dd>
       <dt><em>-u</em> [Unique field values required]</dt>
       <dd>If this flag is set, then <em>v.sort</em> will refuse to continue
         operating if it encounters duplicate data in the field values of the
@@ -146,8 +149,20 @@
     </dl>
     <div id="h2_usage_examples"></div>
     <h1 style="background-color: rgb(255, 204, 0);"><a class="mozTocH2" name="mozTocId292588"></a>CAVEATS</h1>
-    This program is a Bourne Shell script that relies on the following external
-    tools:
+    <p>GRASS GIS supports a variety of database systems (DBMS) to store the
+      attribute tables for the current mapset's vector maps (exactly which ones
+      are available depends on the individual GRASS installation/setup).
+      However, each DBMS comes with its own idiosyncrasies, and <em>v.sort</em>
+      only supports those DBMS that are known to provide the features necessary
+      for its correct operation (such as sufficient SQL support and predictable
+      record insertion order).</p>
+    <p>If the current mapset uses a DBMS that is unknown to <em>v.sort</em> or
+      known to cause problems, the program will refuse to run. In addition,
+      individual advise might be displayed to avoid known issues with a
+      particular DBMS. To print a list of all fully support DBMS (GRASS driver
+      names), set flag <em>"-p"</em>.</p>
+    <p> This program is a Bourne Shell script that relies on the following
+      external tools: </p>
     <ul>
       <li>cut</li>
       <li>date</li>
