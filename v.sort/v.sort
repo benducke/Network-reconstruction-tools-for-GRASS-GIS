@@ -26,15 +26,8 @@
 #############################################################################
 
 # CAVEATS/TODO/LIMITATIONS
-# * input map geometries without attribute records in the input map will not be preserved in the output map
-# * the output map will always have all of its features in layer 1.
-# * Since "db.execute" allows to specify only one database for both source and target tables, this script
-#   won't work if the input map stores its attribute tables in a different datatase than that used
-#   by the current GRASS session.
 # * This script makes heavy use of direct SQL execution. It will only run if the current GRASS session is
 #   using one of the supported DBMS backends.
-# * If the column on which to sort contains "|" for any record, then the operation will fail and "delimiter="
-#   must be used to choose a field delimiter that does not appear in the data.
 
 #
 # REQUIRED EXTERNAL PROGRAMS:
@@ -66,6 +59,11 @@
 #%Flag
 #%  key: n
 #%  description: Numeric sorting (forced)
+#%End
+
+#%Flag
+#%  key: p
+#%  description: Print known and supported DBMS (then quit)
 #%End
 
 #%Flag
@@ -181,6 +179,10 @@ DBMS_THREAD_SAFE=0		# Indicates whether the DBMS is thread safe (in the context 
 DBMS_INDEX_SUPPORTED=0  # Indicates whether the DBMS supports building an index.
 DBMS_PRESERVES_ORDER=0  # Indicates whether the DBMS preserves order of record insertion reliably.
 DBMS_FILE_PATH=0		# Indicates whether the DBMS driver uses a file path to specify the location of a database.
+DBMS_IDENT_QUOTE='"'	# Quoting character for field/table names that (might) contain spaces
+
+# List of fully supported DBMS (GRASS driver names):
+DBMS_SUPPORT_LIST="mesql,mysql,sqlite"
 
 # Basic sanity checks.
 if [ -z "$GISBASE" ] ; then
@@ -401,7 +403,7 @@ check_environment () {
 	eval_ws_safe "${cmd}" "driver"
 	GRASS_DB_driver="${EVAL_RESULT}"
 	eval_ws_safe "${cmd}" "database"
-	GRASS_DB_database="${EVAL_RESULT}"
+	GRASS_DB_database="${EVAL_RESULT}"		
 	
 	# Ensure that we are running with a supported DBMS!
 	# A supported DBMS must have sufficient SQL capabilities for this script's attribute data
@@ -415,6 +417,7 @@ check_environment () {
 		DBMS_NAME="SQLite"		
 		DBMS_INDEX_SUPPORTED=1
 		DBMS_PRESERVES_ORDER=1
+		DBMS_IDENT_QUOTE="'"
 		# It is possible to force the SQLite backend driver to use one
 		# DB per vector map instead of one DB per mapset.
 		result=`echo "$GRASS_DB_database" | "${GREP}" '/vector/$MAP/' -c`
@@ -433,6 +436,7 @@ check_environment () {
 		DBMS_THREAD_SAFE=1
 		DBMS_INDEX_SUPPORTED=1
 		DBMS_PRESERVES_ORDER=0
+		DBMS_IDENT_QUOTE='"'
 	fi
 	# MySQL/MariaDB: Full SQL capabilities and thread safe
 	if [ "${GRASS_DB_driver}" = "mysql" ] ; then
@@ -442,6 +446,7 @@ check_environment () {
 		DBMS_THREAD_SAFE=1
 		DBMS_INDEX_SUPPORTED=1
 		DBMS_PRESERVES_ORDER=1
+		DBMS_IDENT_QUOTE='`'
 	fi
 	# Embedded version of MySQL/MariaDB: Full SQL capabilities and thread safe
 	if [ "${GRASS_DB_driver}" = "mesql" ] ; then
@@ -450,16 +455,18 @@ check_environment () {
 		DBMS_THREAD_SAFE=1
 		DBMS_INDEX_SUPPORTED=1
 		DBMS_PRESERVES_ORDER=1
+		DBMS_IDENT_QUOTE='`'
 	fi
 	if [ ${DBMS_SUPPORTED} -lt 1 ] ; then
-		exit_error "Current mapset does not use a supported DBMS."
-	fi
-	g.message -i "Running with DBMS driver '${GRASS_DB_driver}' (${DBMS_NAME})."
+		exit_error "Current mapset does not use a known DBMS."
+	fi	
 	
 	# If the DBMS cannot preserve record insertion order, then we might expect some trouble.
 	if [ ${DBMS_PRESERVES_ORDER} -eq 0 ] ; then
-		g.message -w "DBMS does not strictly preserve record insertion order. Please check output for correct order."
+		exit_error "Current DBMS '${GRASS_DB_driver}' (${DBMS_NAME}) does not strictly preserve record insertion order."
 	fi
+	
+	g.message -i "Running with DBMS driver '${GRASS_DB_driver}' (${DBMS_NAME})."
 }
 
 
@@ -475,6 +482,12 @@ MAIN () {
 # MAIN #
 ########
 
+# Only print supported DBMS?
+if [ ${GIS_FLAG_P} -eq 1 ] ; then
+	g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) supports these GRASS DB drivers:"
+	g.message -i "${DBMS_SUPPORT_LIST}"
+	exit ${EXIT_OK}
+fi
 
 # Go!
 g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
@@ -703,7 +716,7 @@ fi
 	if [ "${name}" != "${input_map_pkey}" ] ; then
 		#DEBUG
 		#echo "type='$type'; name='$name'"
-		${V_DB_ADDCOLUMN} map="${GIS_OPT_OUTPUT}" layer="1" columns="'${name}' '${type}'" --quiet 
+		${V_DB_ADDCOLUMN} map="${GIS_OPT_OUTPUT}" layer="1" columns="${DBMS_IDENT_QUOTE}${name}${DBMS_IDENT_QUOTE} ${type}" --quiet 
 	fi
 	g.message -p "${i} ${num_fields} 1"
 	i=`expr $i + 1`
