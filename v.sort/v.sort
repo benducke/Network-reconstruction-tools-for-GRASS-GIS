@@ -7,8 +7,8 @@
 #				This script takes a vector map as input and creates a new vector map
 #				in which the data storage order confirms to user-defined criteria.
 #             	At the same time, this script ensures that all primary keys of the
-#				new vector maps are stored as an unbroken sequence "1,2,3,..,n".
-#				Thus, v.sort can be used to fix GRASS vector maps that have "messy"
+#				new vector map are stored as an unbroken sequence "1,2,3,..,n".
+#				Thus, v.sort can be used to "fix" GRASS vector maps that have "messy"
 #				primary key sequences or to enforce a specific data order on vector
 #				maps.
 #
@@ -169,9 +169,6 @@ EXIT_OK=0
 EXIT_CTRL_C=1
 EXIT_TERMINATED=2
 EXIT_ERROR=3
-
-# Processing states.
-RUNMODE_COST="FALSE" # Cost-based processing mode
 
 # DBMS backend idiosyncracies
 DBMS_LOCKS_REQUIRED=0   # DBMS locking off (will be set later, as required)
@@ -571,6 +568,7 @@ fi
 vals=`v.db.select map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" col="${GIS_OPT_BY},${EVAL_RESULT}" -c separator="${GIS_OPT_DELIMITER}"`
 check_error "Failed to retrieve list of sorted key-value pairs for input vector map '${GIS_OPT_INPUT}'."
 sorted_pairs=`echo "${vals}" | "${SORT}" ${sort_opts} 2>/dev/null`
+check_error "Failed to retrieve list of sorted field values for input vector map '${GIS_OPT_INPUT}'."
 # Now get only the list of sort field values:
 sorted_vals=`echo "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 1`
 check_error "Failed to retrieve list of sorted field values for input vector map '${GIS_OPT_INPUT}'."
@@ -596,7 +594,11 @@ if [ ${GIS_FLAG_E} -eq 0 ] ; then
 	IFS=$'\n\b'
 	num_vals=0
 	for val in ${sorted_vals} ; do
-		num_vals=`"${EXPR}" ${num_vals} + 1`
+		if [ -n $BASH_VERSION ] ; then
+			let num_vals=${num_vals}+1
+		else
+			num_vals=`"${EXPR}" ${num_vals} + 1`
+		fi
 	done
 	if [ ${num_lines_sort} -ne ${num_vals} ] ; then
 		exit_error "Empty value(s) detected in sorting field '${GIS_OPT_BY}'."
@@ -622,7 +624,11 @@ if [ ${GIS_FLAG_U} -eq 1 ] ; then
 				exit_error "Duplicate field values detected in sorting field '${GIS_OPT_BY}'."
 			fi
 		fi
-		i=`expr $i + 1`
+		if [ -n $BASH_VERSION ] ; then
+			let i=${i}+1
+		else
+			i=`${EXPR} $i + 1`
+		fi
 		previous="${val}"
 	done
 	IFS="$OLD_IFS"
@@ -656,7 +662,11 @@ for cur_key in ${sorted_keys} ; do
 		check_error "Failed to add input node #${cur_key} to sorted map of input nodes."
 	fi
 	g.message -p "${i} ${num_features} 1"
-	i=`expr $i + 1`
+	if [ -n $BASH_VERSION ] ; then
+		let i=${i}+1
+	else
+		i=`${EXPR} $i + 1`
+	fi
 done
 
 # We now have the geometries, in correct order and with a brand new primary
@@ -706,6 +716,8 @@ i=1
 for field in ${FIELDS} ; do
 	type=`echo "${field}" | "${CUT}" -d "|" -f 1`	
 	name=`echo "${field}" | "${CUT}" -d "|" -f 2`
+	# DEBUG
+	#echo "$type|$name"
 	# If there is a third field, then the field name contains "|" in which case we can
 	# only bail out!
 	check=`echo "${field}" | "${CUT}" -d "|" -f 3`
@@ -716,12 +728,18 @@ fi
 	if [ "${name}" != "${input_map_pkey}" ] ; then
 		#DEBUG
 		#echo "type='$type'; name='$name'"
-		${V_DB_ADDCOLUMN} map="${GIS_OPT_OUTPUT}" layer="1" columns="${DBMS_IDENT_QUOTE}${name}${DBMS_IDENT_QUOTE} ${type}" --quiet 
+		${V_DB_ADDCOLUMN} map="${GIS_OPT_OUTPUT}" layer="1" columns="${name} ${type}" --quiet 
 	fi
 	g.message -p "${i} ${num_fields} 1"
-	i=`expr $i + 1`
+	if [ -n $BASH_VERSION ] ; then
+		let i=${i}+1
+	else
+		i=`${EXPR} $i + 1`
+	fi
 done
 IFS="$OLD_IFS"
+# DEBUG
+#v.info -c $GIS_OPT_OUTPUT
 
 # Get name of attribute table attached to the chosen layer of input map:
 cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
@@ -760,7 +778,11 @@ while [ $i -le $num_records ] ; do
 			pkey="${cur_key}"
 			break;
 		fi
-		j=`expr $j + 1`
+		if [ -n $BASH_VERSION ] ; then
+			let j=${j}+1
+		else
+			j=`${EXPR} $j + 1`
+		fi
 	done;
 	# Step through all fields of input map, copy all values to corresponding fields of output map:
 	OLD_IFS="$IFS"
@@ -775,7 +797,11 @@ while [ $i -le $num_records ] ; do
 	done
 	IFS="$OLD_IFS"
 	g.message -p "${i} ${num_records} 1"
-	i=`expr $i + 1`
+	if [ -n $BASH_VERSION ] ; then
+		let i=${i}+1
+	else
+		i=`${EXPR} $i + 1`
+	fi
 done
 
 # DONE!
