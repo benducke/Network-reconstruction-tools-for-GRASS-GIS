@@ -1,1 +1,1212 @@
+#!/bin/sh
+############################################################################
+#
+# MODULE:     	v.points.thin
+# AUTHOR(S): 	Benjamin Ducke <benducke AT fastmail.fm>
+# PURPOSE:		Thinning of point vector maps.
+#				This script takes a vector map with points as input and creates
+#				a new points vector map, in which only those points are preserved
+#				that are located beyond a threshold distance from other points.
+#
+#				The GRASS standard 'where=' option is supported to limit (or define)
+# 				the set of deletion candidate points.
+#
+#				The computational efficiency of this script is not sufficient for the
+#				thinning of large point clouds. Rather, it has been designed for 
+#				'semantic' thinning of point data where certain points should be preserved.
+#
+# CAVEATS:
+#				- Only points with a primary key (GRASS 'cat' column) will be processed.
+#				- Input map must contain only points.	
+#
+# COMPATIBILITY:
+#				This script has been written to run under GRASS 8 (and possibly
+#				any later version that retains the GRASS 8 syntax for the GRASS
+#				commands called by this script).
+#
+# COPYRIGHT:    (C) 2024 by Benjamin Ducke
+#
+#               This program is free software under the GNU General Public
+#               License (>=v2). Read the file COPYING that comes with GRASS
+#               for details.
+#
+#############################################################################
+
+
+#
+# REQUIRED EXTERNAL PROGRAMS:
+# - awk
+# - grep
+# - expr
+# - date
+# - cut
+# - pkill
+# - tail
+# - wc
+#
+
+
+#%Module
+#% description: Systematically thins a points vector map.
+#% keywords: vector, points, thinning
+#%End
+
+
+#%Option
+#% key: input
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: name
+#% description: Input (points) vector map
+#% gisprompt: old,vector,vector
+#%End
+
+#%option G_OPT_V_FIELD
+#% key: layer
+#%end
+
+#%option G_OPT_DB_WHERE
+#% key: where
+#%end
+
+#%Option
+#% key: dist
+#% type: double
+#% required: yes
+#% multiple: no
+#% key_desc: value
+#% description: Absolute thinning distance threshold (must be >= 0.0)
+#%End
+
+#%Option
+#% key: order
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: value
+#% options: pkeyasc,pkeydesc,random
+#% description: Order of thinning (default: by primary key, asc.)
+#% answer: pkeyasc
+#%End
+
+#%Option
+#% key: output
+#% type: string
+#% required: yes
+#% multiple: no
+#% key_desc: name
+#% description: Thinned output (points) vector map
+#% gisprompt: new,vector,vector
+#%End
+
+#%Flag
+#%  key: i
+#%  description: Invert effec of 'where=' option (if given)
+#%End
+
+
+# System setup: Modify if needed.
+if [ -n "${MSYSPATH}" ] ; then
+	# "MSYSPATH" was set by the Windows ".bat" script that called
+	# this script. It contains the path to the "bin" folder of
+	# the local MSYS(2) installation, using Linux style "/" separators
+	# but NOT INCLUDING the final path separator, like so:
+	# "/c/msys64/usr/bin"
+	# That means we are running under MS Windows,
+	# and we must make some adjustments to external program calls!
+	AWK="${MSYSPATH}/awk"
+	CUT="${MSYSPATH}/cut"
+	DATE="${MSYSPATH}/date"
+	EXPR="${MSYSPATH}/expr"	
+	GREP="${MSYSPATH}/grep"
+	SORT="${MSYSPATH}/sort"
+	PKILL="${MSYSPATH}/pkill"
+	TAIL="${MSYSPATH}/tail"
+	WC="${MSYSPATH}/wc"
+	# Scripted GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
+	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
+	V_DB_ADDTABLE="v.db.addtable.bat"
+else
+	AWK="awk"
+	CUT="cut"
+	DATE="date"
+	EXPR="expr"
+	GREP="grep"	
+	SORT="sort"
+	PKILL="pkill"
+	TAIL="tail"
+	WC="wc"
+	# These are the GRASS commands that are actually Shell/Python scripts.
+	# On Linux/macOS they are executed through the shell, just like binaries.
+	V_DB_ADDCOLUMN="v.db.addcolumn"
+	V_DB_ADDTABLE="v.db.addtable"
+fi
+
+# Basic module setup.
+MODULE_NAME="v_points_thin" # for prefixing temporary object names
+MODULE_NAME_EXEC="v.points.thin" # name as run on the command line
+MODULE_VERSION="1.0.0"
+
+# Exit status variables.
+EXIT_OK=0
+EXIT_CTRL_C=1
+EXIT_TERMINATED=2
+EXIT_ERROR=3
+
+
+# Basic sanity checks.
+if [ -z "$GISBASE" ] ; then
+    echo "ERROR: You must be in GRASS GIS to run this program." 1>&2
+    exit ${EXIT_ERROR}
+fi
+
+if [ "$1" != "@ARGS_PARSED@" ] ; then
+    exec g.parser "$0" "$@"
+fi
+
+# Check if we are running under old GRASS 6
+GRASS_V6=`g.version -e | "${GREP}" "GRASS 6"`
+
+# Check if we are running under old GRASS 7
+GRASS_V7=`g.version -e | "${GREP}" "GRASS 7"`
+
+# Check if we are running under old GRASS 8
+GRASS_V8=`g.version -e | "${GREP}" "GRASS 8"`
+
+if [ -n "$GRASS_V6" ] ; then
+	g.message -e "This script requires GRASS GIS version 7 or higher."
+	exit ${EXIT_ERROR}
+fi
+
+# Create prefix for all temporary maps
+TMP_PREFIX="tmp_${MODULE_NAME}_`echo $$`_d"
+
+# Names of temporary maps (VECTOR)
+TMP_VECT_EXTRACT="${TMP_PREFIX}_v_extract" 				# Feature(s) extracted from input vector map
+TMP_VECT_COPY="${TMP_PREFIX}_v_copy" 				# Copy of input map
+
+
+# FUNCTION
+# clean_up: Remove temporary maps, reset region to what it was, etc.
+clean_up () {	
+	# Feature(s) extracted from input vector map.
+	type="vector"
+	elem="${TMP_VECT_EXTRACT}"
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
+	fi
+	elem="${TMP_VECT_COPY}"
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
+	fi
+}
+	
+
+# Make sure we get to clean up!
+trap "g.message -i 'Terminated by user (CTRL+C).' ; clean_up ; exit ${EXIT_CTRL_C}" 2 # user interrupt (CTRL+C)
+#trap "'Unexpected termination.' ; clean_up ; exit ${EXIT_TERMINATED}" 1 # external interrupt
+
+
+# FUNCTION
+# check_error: Check last return status, issue an error message and abort if appropriate.
+#
+# Arguments:
+#
+# $1 - Error message to display (mandatory)
+# $2 - PID (optional)
+#
+# At least $1 must be provided (error message) for this function to
+# work correctly.
+#
+# If $2 is also provided, then its value will be interpreted as
+# an integer type PID, and a 'kill' command with Signal type '1'
+# will be issued to terminate the corresponding job.
+#
+check_error () {
+	if [ ! "$?" -eq "0" ] ; then
+		g.message -e "$1"
+		if [ -n $2 ] && [ "$2" != "" ] ; then
+			# PID passed: kill!
+			clean_up
+			g.message -e "Terminating job with PID $2 and all subprocesses."	
+			"${PKILL}" --signal 9 -P $2 &
+			exit ${EXIT_ERROR}
+		else
+			clean_up
+			exit ${EXIT_ERROR}
+		fi		
+	fi
+}
+
+
+# FUNCTION
+# check_warn: Check last return status, issue a warning message if appropriate.
+check_warn () {
+	if [ ! "$?" -eq "0" ] ; then
+		g.message -w "$1"
+	fi
+}
+
+
+# FUNCTION
+# exit_error: Display an error message and exit with default error code.
+# 
+# Arguments:
+#
+# $1 - Error message to display (mandatory)
+# $2 - PID (optional)
+#
+# At least $1 must be provided (error message) for this function to
+# work correctly.
+#
+# If $2 is also provided, then its value will be interpreted as
+# an integer type PID, and a 'kill' command with Signal type '1'
+# will be issued to terminate the corresponding job.
+#
+exit_error () {
+	g.message -e "$1"	
+	if [ -n $2 ] && [ "$2" != "" ] ; then
+	    # PID passed: kill!
+	    # Note: The trap set at the beginning of this script will make
+	    # sure that all clean-up functions are run.
+	    g.message -e "Terminating job with PID $2."
+		#kill -s 1 $2
+		clean_up
+		exit ${EXIT_ERROR}
+	else
+		clean_up
+		exit ${EXIT_ERROR}
+	fi	
+}
+
+
+# FUNCTION
+# get_tbl_info: Retrieves essential information attribute table's DB connection
+#			    connected to a GRASS vector map. The information is read from
+#				the output of 'v.info'.
+#
+#            	This function reads one or two arguments:
+#					$1 -- name of GRASS vector map that has the attibute table of interest
+#				    $2 -- layer (default="1", if $2 is not provided)
+#
+#            	This function sets three variables:
+#               	attribute_database_driver = GRASS database driver used for the connection
+#												(same as used/listed by 'db.connect')
+#					attribute_database = the name of the actual DB that stores the table
+#					attribute_table = the name of the linked attribute table in the DB
+#
+#				 It will abort the program if there is a problem with the map and/or its table.            
+#
+get_tbl_info () {
+	
+	if [ -n "$2" ] ; then
+		cmd=`v.info -e map="${1}" layer="${2}"`
+	else
+		cmd=`v.info -e map="${1}" layer="1"`
+	fi
+	check_error "Failed to query vector map '$1' for extended metadata."
+	
+	# Get DB driver name:
+	eval_ws_safe "${cmd}" "attribute_database_driver"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve driver of database connection for vector map '1'."
+	fi
+	attribute_database_driver="${EVAL_RESULT}"
+	
+	# Get name of connected database:
+	eval_ws_safe "${cmd}" "attribute_database"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of database connection for vector map '$1'."
+	fi
+	attribute_database="${EVAL_RESULT}"
+	
+	# Get name of linked table in conntected DB:
+	eval_ws_safe "${cmd}" "attribute_table"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of database table for vector map '1'."
+	fi
+	attribute_table="${EVAL_RESULT}"
+}
+
+
+# FUNCTION
+# eval_ws_safe:  White-space resilient setting of variables from command output.
+#                This is useful for many GRASS commands that produce shell style
+#				  output (like 'g.region -pg') of the form:
+#                   var1=abc
+#                   var2=123
+#                   ...
+#                Pass string with a command's full output as $1.
+#                Pass name of a variable to set from output as $2.
+#                This function will then grep the _first_ occurrence
+#                of the variable name (case sensitive!) from the command output
+#                and set it to the value following "=" (equal sign).
+#				  As opposed to a simple 'eval', this function is able
+#                to correctly set variable values that contain whitespace!
+#				  This is also the safer option to use if an 'eval' statement would
+#                potentially encounter values with white space for variables other
+#			 	  than the target variable.
+#                The contents for setting the variable are returend in "EVAL_RESULT".
+eval_ws_safe () {
+	OLD_IFS_EVAL_WS_SAFE="$IFS"
+	# Set list separator to newline and line break characters.
+	# This used to be: 
+	# IFS=$(echo -en "\n\b")
+	# However, macOS' shell does not interpret that form correctly.
+	IFS=$'\n\b'
+	# Process (list of) input line(s):
+	str=`echo "$1" | "${GREP}" "$2="`
+	for i in $str
+	do
+		IFS="="
+		CUR=$i
+		for j in $CUR
+		do			
+			EVAL_RESULT="$j"
+		done
+	done	
+	IFS="$OLD_IFS_EVAL_WS_SAFE"
+}
+
+
+# FUNCTION
+# list_len:		Computes the length of a list of values (array).
+#				This function takes only one argument:
+#				
+#				$1 -- a list/array
+#
+#				REMEMBER to put "$1" in quotes of the list values are separated by whitespace!
+#
+#				The result will be returned as an integer in the variable LIST_LEN.
+#
+list_len () {
+	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller's
+	# loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_LEN="$IFS"
+	IFS=$'\n\b'
+	
+	LIST_LEN=0
+	for item in $1 ; do
+		if [ -n $BASH_VERSION ] ; then
+			let LIST_LEN=${LIST_LEN}+1
+		else
+			LIST_LEN=`"${EXPR}" ${LIST_LEN} + 1`
+		fi
+	done
+	
+	# IMPORTANT: Reset IFS!
+	IFS="$OLD_IFS_LIST_LEN"
+}
+
+
+# FUNCTION
+# list_rand: Creates a new version of a list with randomized order of elements.
+#
+# 				This function takes one argument:
+#				
+#				$1 -- a list of values (of any type)
+#
+#				REMEMBER to pass "$1" in quotes if the list values are separated by whitespace!
+#
+#				A randomized version of the list in $1 will be returned as $LIST_NEW_RAND.
+#
+#				This function will use BASH array functions, if available, to speed up things.
+#
+list_rand () {
+	OLD_IFS_LIST_RAND="$IFS"
+	IFS=$'\n\b'	
+	# TODO: Check commented-out code that has "if [ -n $BASH_VERSION ]" conditions.
+	#       This is required for array-based picking of random index values, which
+	#       is at leat 10x faster than the current method!
+	#		However, the current approach does not work. It seems that BASH does
+	#       no allow dynamic re-sizing of arrays via repeated "list_arry=()" statements.
+	#		A working algorithm must not produce any warning messages about redundant
+	#		random element draws.
+	#
+	# UNTIL random list is as long as $1:
+	#	1. draw random element E from $1
+	#	2. IF E is not on random list yet:
+	#		- add E to end of random list	
+	#		- update length of random list
+	#		ELSE: GOTO 1			
+	#	3. GOTO 1
+	#
+	# (Using an array can speed up step 1!)	
+	list_len "$1"
+	input_list_len=$LIST_LEN
+	# Error condition?
+	if [ -z $input_list_len ] ; then
+		exit_error "Attempted to randomize empty list."
+	fi
+	# Special case?
+	if [ $input_list_len -eq 0 ] ; then
+		LIST_NEW_RAND=
+		return # Return empty list
+	fi
+	if [ $input_list_len -eq 1 ] ; then
+		LIST_NEW_RAND="$1"
+		return # Result contains the same single element that $1 contains
+	fi
+	
+	# Randomize input list.
+	PICKLIST=$1 # Picklist starts as a copy of input list
+	# Have BASH? Then we build a faster look-up array:
+	#if [ -n $BASH_VERSION ] ; then
+	#	list_array=()
+	#	for item in $PICKLIST ; do
+	#		list_array+=("${item}")
+	#	done
+	#fi
+	picklist_len=${input_list_len}
+	list_rand_min=0 # Minimum index value of random element that can be drawn from picklist
+	list_rand_max=${input_list_len} # Maximum index value of random element that can be drawn from picklist
+	rand_list_len=0 # Current length of new list with random elements
+	LIST_NEW_RAND= # New randomized list
+	g.message -i "Randomizing $LIST_LEN elements:"
+	while [ $rand_list_len -lt $input_list_len ] ; do
+		#echo "PICK: rand_int $list_rand_min $list_rand_max"
+		rand_int $list_rand_min $list_rand_max # Generate random int index value		
+		#if [ -n $BASH_VERSION ] ; then
+		#	LIST_ITEM="${list_array[$RANDINT]}"			
+		#else
+			list_get "$PICKLIST" ${RANDINT} ${picklist_len}
+		#fi
+		#echo "Pick: '$LIST_ITEM'"
+		list_item_new="$LIST_ITEM" # Randomly picked candidate element for addition to randomized list
+		list_find "$LIST_NEW_RAND" "$list_item_new" # Check if the candidate element is already on the randomized list
+		if [ -z "$LIST_ITEM" ] ; then
+			# Element value does not yet exist on randomized list: Add it!			
+			LIST_NEW_RAND="$LIST_NEW_RAND
+$list_item_new"	
+			# Reduce pick list by the drawn element:
+			COPYLIST=$PICKLIST
+			#if [ -n $BASH_VERSION ] ; then
+			#	list_array=()
+			#	first_pick=0
+			#	for item in $COPYLIST ; do
+			#		#echo "Item: '$item'"
+			#		#if [ "$item" = "$list_item_new" ] && [ ${first_pick} -eq 0 ]; then
+			#		#	first_pick=1
+			#		#else
+			#		if [ ${item} -ne ${list_item_new} ] ; then
+			#			#echo "Add: '$item'"
+			#			list_array+=(${item})
+			#		fi
+			#	done
+			#else
+				PICKLIST=
+				first_pick=0
+				for item in $COPYLIST ; do				
+					#echo "Item: '$item'"
+					if [ "$item" = "$list_item_new" ] && [ ${first_pick} -eq 0 ] ; then
+						first_pick=1
+					else					
+						#echo "Add: '$item'"
+						PICKLIST="$PICKLIST
+$item"
+					fi				
+				done
+			#fi
+			#if [ -n $BASH_VERSION ] ; then
+				# Rebuild look-up array
+				#list_array=()
+				#for item in $PICKLIST ; do
+				#	list_array+=("${item}")
+				#done
+			#	let picklist_len=${picklist_len}-1
+			#else
+				picklist_len=`"${EXPR}" ${picklist_len} - 1`
+			#fi
+			list_rand_max=${picklist_len}
+			# Count up length of random list:
+			#if [ -n $BASH_VERSION ] ; then
+			#	let rand_list_len=${rand_list_len}+1
+			#else
+				rand_list_len=`"${EXPR}" ${rand_list_len} + 1`
+			#fi
+			g.message -p "${rand_list_len} ${input_list_len} 1"
+		else
+			# TODO: Remove after array optimizations are done.
+			# DEBUG
+			g.message -w "Redundant random element draw in 'list_rand()'."
+		fi
+	done
+	return 
+	# IMPORTANT: Reset IFS!
+	IFS="$OLD_IFS_LIST_RAND"
+}
+
+
+# FUNCTION
+# list_find: Attempts to find an item in a list of values.
+#
+# 				This function takes two arguments:
+#				
+#				$1 -- a list of values
+#				$2 -- the value for which to look in the list
+#
+#				REMEMBER to put "$1" in quotes if the list values are separated by whitespace!
+#
+#				If the look-up value exist on the list, then LIST_ITEM is set to that value.
+#				Otherwise, LIST_ITEM will be returned as EMPTY.
+#
+list_find () {	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller
+	# caller loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_FIND="$IFS"
+	IFS=$'\n\b'
+	for item in $1 ; do
+		if [ "${item}" = "${2}" ] ; then
+			# Found match: Return immediately.
+			LIST_ITEM="${2}"
+			IFS="$OLD_IFS_LIST_FIND"	
+			return
+		fi
+	done
+	# Return empty value
+	LIST_ITEM=
+	# IMPORTANT: Reset IFS!
+	IFS="$OLD_IFS_LIST_FIND"
+}
+
+
+# FUNCTION
+# list_find_int: Attempts to find an item in a list of integer values.
+#				The following MUST be true:			    
+#
+#				- all items on the list are INTEGER NUMBERS
+#
+# 				This function takes two arguments:
+#				
+#				$1 -- a list of integer values
+#				$2 -- the integer value for which to look in the list
+#
+#				REMEMBER to put "$1" in quotes if the list values are separated by whitespace!
+#
+#				If the look-up value exist on the list, then LIST_ITEM is set to that value.
+#				Otherwise, LIST_ITEM will be returned as EMPTY.
+#
+list_find_int () {	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller
+	# caller loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_FIND="$IFS"
+	IFS=$'\n\b'	
+	LIST_ITEM=
+	for item in $1 ; do
+		if [ ${item} -eq ${2} ] ; then
+			# Found match: Return immediately.
+			LIST_ITEM="${2}"
+			IFS="$OLD_IFS_LIST_FIND"	
+			return
+		fi
+	done
+	# IMPORTANT: Reset IFS!
+	IFS="$OLD_IFS_LIST_FIND"
+}
+
+
+# FUNCTION
+# list_find_int_asc: Attempts to find an item in a list of integer values.
+#				This function is optimized for the specific case where the following
+#			    MUST be true:
+#
+#				- all items on the list are INTEGER NUMBERS
+#				- the list is sorted, in ASCENDING ORDER
+#
+# 				This function takes two arguments:
+#				
+#				$1 -- a list of integer values
+#				$2 -- the integer value for which to look in the list
+#
+#				REMEMBER to put "$1" in quotes if the list values are separated by whitespace!
+#
+#				If the look-up value exist on the list, then LIST_ITEM is set to that value.
+#				Otherwise, LIST_ITEM will be returned as EMPTY.
+#
+list_find_int_asc () {	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller's
+	# loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_FIND="$IFS"
+	IFS=$'\n\b'	
+	LIST_ITEM=
+	for item in $1 ; do
+		if [ ${item} -eq ${2} ] ; then
+			# Found match: Return immediately.
+			LIST_ITEM="${2}"
+			IFS="$OLD_IFS_LIST_FIND"	
+			return
+		fi
+		if [ ${item} -gt ${2} ] ; then
+			# The current list item is already larger than the look-up value:
+			# Further iterations will be pointless, since the list is assumed
+			# to be sorted in ascending order: Return immediately with empty result.			
+			IFS="$OLD_IFS_LIST_FIND"
+			LIST_ITEM=
+			return
+		fi
+	done	
+	# IMPORTANT: Reset IFS!
+	IFS="$OLD_IFS_LIST_FIND"	
+}
+
+
+# FUNCTION
+# list_find_int_desc: Attempts to find an item in a list of integer values.
+#				This function is optimized for the specific case where the following
+#			    MUST be true:
+#
+#				- all items on the list are INTEGER NUMBERS
+#				- the list is sorted, in DESCENDING ORDER
+#
+# 				This function takes two arguments:
+#				
+#				$1 -- a list of integer values
+#				$2 -- the integer value for which to look in the list
+#
+#				REMEMBER to put "$1" in quotes if the list values are separated by whitespace!
+#
+#				If the look-up value exist on the list, then LIST_ITEM is set to that value.
+#				Otherwise, LIST_ITEM will be returned as EMPTY.
+#
+list_find_int_desc () {	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller's
+	# loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_FIND="$IFS"
+	IFS=$'\n\b'	
+	LIST_ITEM=
+	for item in $1 ; do
+		if [ ${item} -eq ${2} ] ; then
+			# Found match: Return immediately.
+			LIST_ITEM="${2}"
+			IFS="$OLD_IFS_LIST_FIND"	
+			return
+		fi
+		if [ ${item} -lt ${2} ] ; then
+			# The current list item is already less than the look-up value:
+			# Further iterations will be pointless, since the list is assumed
+			# to be sorted in descending order: Return immediately with empty result.			
+			IFS="$OLD_IFS_LIST_FIND"
+			LIST_ITEM=
+			return
+		fi
+	done	
+	# IMPORTANT: Reset IFS!
+	IFS="$OLD_IFS_LIST_FIND"	
+}
+
+
+# FUNCTION
+# list_get:		Retrieves an item from a list of values (array).
+# 				This function takes three arguments:
+#				
+#				$1 -- a list/array
+#				$2 -- an integer that is the number of the item to get (0 or larger)
+#				$3 -- length of list (int)
+#
+#				REMEMBER to put "$1" in quotes if the list values are separated by whitespace!
+#
+#				The requested value will be returned in variable LIST_ITEM.
+#				LIST_ITEM can be empty if the list is empty.
+#				An error will be thrown if $2 contains an invalid index value.
+#
+list_get () {	
+
+	#DEBUG
+	#echo "list_get $2/$3"
+	
+	# IMPORTANT! We change IFS, but save the current value to a local(ly named)
+	# variable, so that this will work without clashes from within a caller's
+	# loop that also fiddles around with IFS (not uncommon)!
+	OLD_IFS_LIST_GET="$IFS"
+	IFS=$'\n\b'
+	
+	LIST_ITEM=
+	if [ $2 -lt 0 ] ; then
+		exit_error "list_get(): Attempted to read list/array using negative index value."
+	fi
+	if [ $2 -gt $3 ] ; then
+		exit_error "list_get(): Attempted to read list/array using out-of-bounds index value ($2)."
+	fi
+
+	cur_list_item=0
+	for item in $1 ; do
+		LIST_ITEM="${item}"
+		if [ ${cur_list_item} -eq $2 ] ; then
+			# Got item: Return.
+			break
+		else
+			# Get next item.
+			if [ -n $BASH_VERSION ] ; then
+				let cur_list_item=${cur_list_item}+1
+			else
+				cur_list_item=`"${EXPR}" ${cur_list_item} + 1`
+			fi
+		fi
+	done
+	
+	# IMPORTANT: Reset IFS!
+	IFS="$OLD_IFS_LIST_GET"	
+}
+
+
+# FUNCTION
+# rand_int: Generates a random integer value between $1 and $2 (both inclusive).
+#           Uses GNU awk to do the actual work.
+#           Returns result in variable $RANDINT.
+rand_int () {
+	if [ $1 -gt $2 ] ; then
+		exit_error "Random integer generation failed: first argument is larger than second argument."
+	fi
+	# Special case upper and lower values are identical:
+	if [ $1 -eq $2 ] ; then
+		RANDINT=$1
+		return
+	fi
+	awk_rseed=`${DATE} +%N`
+	RANDINT=`"${AWK}" "BEGIN{rseed=$awk_rseed; srand(rseed); print int(($2-$1)*rand()+0.5)+$1;}"`
+}
+
+
+# FUNCTION
+# check_setup: Check system setup (required external programs available?).
+check_setup () {
+	
+	message="Failed to run required program: "
+	
+	# Date
+	prg="${DATE}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Expr
+	prg="${EXPR}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Grep
+	prg="${GREP}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	
+	# Sort
+	prg="${SORT}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+	# Sort with randomization capability?
+	echo -e "1\n2\n3\n4\n5" | ${SORT} -R >/dev/null
+	if [ $? -eq 0 ] ; then
+		SORT_RANDOM="true"
+	fi
+	
+	# Wc
+	prg="${WC}"
+	: $(${prg} --help)
+	check_error "${message} '${prg}'."
+}
+
+
+# FUNCTION
+# check_environment: Query GRASS environment for some important variables.
+check_environment () {	
+	# Get essential GRASS environment settings
+	GISDBASE=`g.gisenv get=GISDBASE`
+	LOCATION_NAME=`g.gisenv get=LOCATION_NAME`
+	MAPSET=`g.gisenv get=MAPSET`
+	
+	# Get current region settings.
+	eval `g.region -p -g`	
+
+	# Store projection (to differentiate x/y and lat/lon)
+	GRASS_REG_PROJECTION="${projection}"
+	if [ "${GRASS_REG_PROJECTION}" = "3" ] ; then
+		g.message -w "Running in lat/lon mode. Expect reduced performance."
+	fi
+}
+
+
+check_params () {	
+	# Flag '-i' requires option "where=".
+		if [ ${GIS_FLAG_I} -eq 1 ] && [ -z "${GIS_OPT_WHERE}" ] ; then
+		g.message -e "Flag '-i(invert selection)' is only useful if option 'where=' is also provided."
+		exit ${EXIT_ERROR}
+	fi
+	
+	# Value for 'dist=' must be >= 0.0
+	check_value=`echo "${GIS_OPT_DIST}" | "${GREP}" -Ei '[+0-9]' | "${GREP}" -Eiv '[-]'`
+	if [ -z "$check_value" ] ; then
+		g.message -e "Option 'dist=' must be set to a value of 0 or larger."
+		exit ${EXIT_ERROR}		
+	fi
+}
+
+
+# FUNCTION
+# check_input: Check input data for validity. ORDER MATTERS!
+check_input () {	
+	# Check that input vector map has chosen layer.
+	eval `v.info -e map="${GIS_OPT_INPUT}" | "${GREP}" "num_dblinks="`
+	check_error "Failed to get basic info for chosen layer of input vector map."
+	if [ -z ${num_dblinks} ] ; then
+		exit_error "Failed to get basic info for chosen layer of input vector map."
+	fi
+	if [ ${num_dblinks} -lt ${GIS_OPT_LAYER} ] ; then
+		exit_error "Chosen layer (${GIS_OPT_LAYER}) does not exist in input vector map."
+	fi
+	eval `v.info -t map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
+	check_error "Failed to get topology info for chosen layer of input vector map."
+	if [ ${points} -lt 1 ] ; then
+		exit_error "No points found in chosen layer of input vector map."
+	fi
+	if [ ${points} -lt 2 ] ; then
+		exit_error "Less than two points found in chosen layer of input vector map."
+	fi
+	if [ ${points} -ne ${primitives} ] ; then
+		exit_error "Input map must contain only points."
+	fi
+}
+
+
+# FUNCTION
+# MAIN():	This is a bogus function. It exists only so that text
+#			editors will find this as a mark when parsing the source
+#		   	code in SH mode, and it will be added to the document outline. 
+MAIN () {
+	echo ""
+}
+
+########
+# MAIN #
+########
+
+# Go!
+g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
+
+# Check GRASS environment:
+check_environment
+
+# Run all pre-flight checks:
+check_setup
+
+# Check parametrization for plausibility:
+check_params
+
+# Check input map for validity:
+check_input
+
+# Keep track of starting time.
+START=`"${DATE}"`
+
+# GO! GO!
+
+# Main algorithm:
+#
+# INITIALIZE
+# - copy entire input map to map COPY
+# - (build list of protected cats if required)
+# - in random mode: pick random point with valid cat
+#		rand_int 1 10
+# - in ordered mode: pick point with lowest cat value
+#
+# 1. Extract picked point:
+#    - Copy picked point from COPY into new map EXTRACT (v.extract)
+# 
+# 2. Check if the current point has neighbours within scanning distance:
+#		v.distance
+#		(number of lines returned must be > 2)
+#   
+# 3. If YES, then delete all neighbours within scanning distance from COPY --
+#    UNLESS it is the same as the picked point; AND
+#    UNLESS they are on list of protected cats (or ONLY if so, when -i flag set)!
+#
+# 4. REPEAT
+#      - in random mode: pick next point from COPY that has not yet been picked; goto step 1
+#      - in ordered mode: find next-highest, valid cat value; goto step 1
+#    UNTIL
+#      - in random mode: all points in COPY are on the list that have already been picked
+#      - in ordered mode: there is no next point in COPY
+#
+# RESULT
+# - rename COPY to OUTPUT (overwrite existing)
+
+# Create temporary copy of input map:
+g.copy vect="${GIS_OPT_INPUT}","${TMP_VECT_COPY}" --o --quiet 2>/dev/null
+check_error "Failed to create temporary copy of input map '${GIS_OPT_INPUT}'."
+
+# Get GRASS primary key field:
+cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
+check_error "Failed to query input vector map '${GIS_OPT_INPUT}' for extended metadata."
+eval_ws_safe "${cmd}" "attribute_primary_key"
+if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of GRASS primary key column for input vector map '${GIS_OPT_INPUT}'."
+fi
+primary_key_field="${EVAL_RESULT}"
+
+# Extract all valid primary keys for the chosen layer of the input map.
+# The '-f'(feature) flag makes sure that we only pick up records that have point geometry attached!
+pkey_list=`v.db.select map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" columns="${primary_key_field}" -f -c --quiet`
+check_error "Failed to retrieve primary keys of input map."
+# Build sorted list of input map's primary key values.
+# This is the list from which primary keys are picked to process the input features. 
+# The actual sorting order depends on the value of $GIS_OPT_ORDER:
+if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] ; then
+	sorted_pkey_list=`echo "${pkey_list}" | "${SORT}" -n 2>/dev/null`
+fi
+if [ "${GIS_OPT_ORDER}" = "pkeydesc" ] ; then
+	sorted_pkey_list=`echo "${pkey_list}" | "${SORT}" -n -r 2>/dev/null`
+fi
+if [ "${GIS_OPT_ORDER}" = "random" ] ; then
+	sorted_pkey_list=`echo "${pkey_list}" | "${SORT}" -n 2>/dev/null`
+fi
+check_error "Failed to sort list of primary key values for input vector map '${GIS_OPT_INPUT}'."
+
+
+# Get length, minimum and maximum values for primary key lists:
+# A) Sorted primary keys of input map:
+list_len "${sorted_pkey_list}"
+if [ -z "${LIST_LEN}" ] || [ ${LIST_LEN} -eq 0 ] ; then
+	exit_error "Failed to create list of ordered primary keys."
+fi
+sorted_pkey_list_len=${LIST_LEN}
+sorted_pkey_list_min=-1
+sorted_pkey_list_max=-1
+if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] ; then
+	list_get "${sorted_pkey_list}" 0 ${LIST_LEN}
+	sorted_pkey_list_min=${LIST_ITEM}
+	list_get "${sorted_pkey_list}" ${LIST_LEN} ${LIST_LEN}
+	sorted_pkey_list_max=${LIST_ITEM}
+fi
+if [ "${GIS_OPT_ORDER}" = "pkeydesc" ] ; then
+	list_get "${sorted_pkey_list}" 0 ${LIST_LEN}
+	sorted_pkey_list_max=${LIST_ITEM}
+	list_get "${sorted_pkey_list}" ${LIST_LEN} ${LIST_LEN}
+	sorted_pkey_list_min=${LIST_ITEM}
+fi
+if [ "${GIS_OPT_ORDER}" = "random" ] ; then
+	list_get "${sorted_pkey_list}" 0 ${LIST_LEN}
+	sorted_pkey_list_min=${LIST_ITEM}
+	list_get "${sorted_pkey_list}" ${LIST_LEN} ${LIST_LEN}
+	sorted_pkey_list_max=${LIST_ITEM}
+fi
+
+# If BASHisms are allowed, then we also build an array representation of the key values,
+# which can be used alternatively to speed up things: ITEM=${ARRAY[$IDX]}
+if [ -n $BASH_VERSION ] ; then
+	OLD_IFS="$IFS"
+	IFS=$'\n\b'
+	sorted_pkey_array=()
+	for item in $sorted_pkey_list ; do
+		sorted_pkey_array+=(${item})
+	done
+	IFS="$OLD_IFS"
+fi
+
+# B) Sorted protected keys ('where=' option):
+# Build sorted list of (un)protected points if 'where=' is given:
+sorted_protected_list=
+sorted_protected_list_len=0
+sorted_protected_list_min=-1
+sorted_protected_list_max=-1
+if [ -n "${GIS_OPT_WHERE}" ] ; then
+	protected_list=`v.db.select map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" where="${GIS_OPT_WHERE}" columns="${primary_key_field}" -c --quiet`
+	check_error "Failed to retrieve protected primary keys of input map."
+	sorted_protected_list=`echo "${protected_list}" | "${SORT}" -n 2>/dev/null`
+	check_error "Failed to sort list of protected primary key values for input vector map '${GIS_OPT_INPUT}'."	
+	list_len "${sorted_protected_list}"
+	if [ -z "${sorted_protected_list}" ] ; then
+		g.message -w "Specified 'where=' option did not match any input data. No points protected from deletion."		
+	else
+		# Get statistics of protected keys list:
+		sorted_protected_list_len=${LIST_LEN}
+		list_get "${sorted_protected_list}" 0 ${LIST_LEN}
+		sorted_protected_list_min=${LIST_ITEM}
+		list_get "${sorted_protected_list}" ${LIST_LEN} ${LIST_LEN}
+		sorted_protected_list_max=${LIST_ITEM}
+	fi
+fi
+
+# DEBUG
+#echo "DEBUG"
+#echo "sorted_pkey_list_len=$sorted_pkey_list_len"
+#echo "sorted_pkey_list_min=$sorted_pkey_list_min"
+#echo "sorted_pkey_list_max=$sorted_pkey_list_max"
+#echo "sorted_protected_list_len=$sorted_protected_list_len"
+#echo "sorted_protected_list_min=$sorted_protected_list_min"
+#echo "sorted_protected_list_max=$sorted_protected_list_max"
+
+# Randomize list input elements (primary keys)?
+if [ "${GIS_OPT_ORDER}" = "random" ] ; then
+	if [ -z $SORT_RANDOM ] ; then
+		# We need to use our own (slow) sorting function.
+		g.message -w "System 'sort' command does not support randomization. This will be SLOW..."
+		list_rand "$sorted_pkey_list"
+	else
+		# We can use the much more efficient '-R' option of 'sort'.
+		sorted_pkey_list=`echo "${pkey_list}" | "${SORT}" -R 2>/dev/null`
+	fi
+fi
+
+# Set first primary key.
+# This depends on which 'order=' has been chosen.
+if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] || [ "${GIS_OPT_ORDER}" = "pkeydesc" ] || [ "${GIS_OPT_ORDER}" = "random" ] ; then
+	CURRENT=0	# First key is simply first entry in list of primary keys (index=0)
+fi
+
+# Get info for attribute table connected to use-chosen layer (will be
+# needed later, in the main loop):
+get_tbl_info "${TMP_VECT_COPY}" ${GIS_OPT_LAYER}
+
+# Main loop: Extract a point, scan its neighbourhood at a user-set distance
+# and delete all other points that are within the scanning distance.
+# We repeat this, until the STOP criterion is reached.
+# What exactly that criterion is, depends on the user-set scanning order:
+# pkey (default) = stop when all input points have been scanned, in order from
+#                  lowest to highest primary key value.
+# random = stop when the complete set N of randomly sampled point has been scanned
+#
+list_len "${pkey_list}"
+num_points=${LIST_LEN}
+g.message -i "Thinning ${num_points} points (order: '${GIS_OPT_ORDER}'):"
+STOP=0
+while [ ${STOP} -lt 1 ] ; do
+	#
+	# Retrieve primary key value (depending on order mode):
+	if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] || [ "${GIS_OPT_ORDER}" = "pkeydesc" ] || [ "${GIS_OPT_ORDER}" = "random" ] ; then
+		if [ -n $BASH_VERSION ] ; then
+			LIST_ITEM=${sorted_pkey_array[$CURRENT]}
+		else
+			list_get "$sorted_pkey_list" ${CURRENT} ${sorted_pkey_list_len}
+		fi		
+	fi
+	PKEY_VALUE="${LIST_ITEM}" # From now on, we use $PKEY_VALUE to refer to the current primary key!
+	if [ -z "${PKEY_VALUE}" ] ; then
+		exit_error "Failed to retrieve primary key value in step #$CURRENT."
+	fi
+	
+	# DEBUG	
+	#echo "CURRENT item [$CURRENT] = ${PKEY_VALUE}"
+	
+	# Extract current point into new temporary map:
+	v.extract input="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" type="point" cats="${PKEY_VALUE}" output="${TMP_VECT_EXTRACT}" --overwrite --quiet 2>/dev/null
+	check_error "Failed to extract point with primary key value '${PKEY_VALUE}' from input vector map."
+	# Measure distance of extracted point to all points of input map COPY:
+	vdist_result=`v.distance from="${TMP_VECT_EXTRACT}" to="${TMP_VECT_COPY}" -p from_type="point" to_type="point" dmax="$GIS_OPT_DIST" upload="cat" separator="|" -a --quiet | ${TAIL} --lines=+3`
+	check_error "Failed to measure distance from point with primary key value '${PKEY_VALUE}' to all points of input vector map."
+	if [ -n "$vdist_result" ] ; then
+		# Got one or more deletion candidate points
+		OLD_IFS="$IFS"
+		IFS=$'\n\b'
+		#echo "$vdist_result"
+		# Process all candidates.
+		for item in $vdist_result ; do
+			pkey=`echo "${item}" | ${CUT} -d"|" -f3 `			
+			pkey_protected=0
+			# Check if primary key is on protected list (if 'where=' option given).
+			if [ ${sorted_protected_list_len} -gt 0 ] ; then
+				list_find_int_asc "${sorted_protected_list}" ${pkey}
+				if [ -n "${LIST_ITEM}" ] ; then
+					# DEBUG
+					#echo "PROTECTED: $pkey"
+					pkey_protected=1
+				fi
+			fi			
+			# Check if feature still exists in temp output map, and if so, delete it:
+			feature=`v.db.select map="${TMP_VECT_COPY}" layer="${GIS_OPT_LAYER}" columns="${primary_key_field}" where="${primary_key_field} = ${PKEY_VALUE}" -f -c --quiet`
+			if [ -n "$feature" ] && [ ${pkey_protected} -eq 0 ]; then
+				# DEBUG
+				#echo "DELETE $pkey"
+				# Remove feature 1/2 (geometry):
+				v.edit map="${TMP_VECT_COPY}" layer="${GIS_OPT_LAYER}" type="point" cats="${PKEY_VALUE}" tool="delete" --overwrite --quiet
+				check_error "Failed to delete point geometry for primary key value '${PKEY_VALUE}' from temporary copy of input map."
+				# Remove feature 2/2 (attribute record)
+				# (note that $attribute_table and $attribute_database were set previously by 'get_tbl_info'):
+				SQL="DELETE FROM $attribute_table WHERE ${primary_key_field} = ${PKEY_VALUE};"
+				echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+				check_error "Failed to delete attribute record for primary key value '${PKEY_VALUE}' from temporary copy of input map."
+			fi
+		done
+		IFS="$OLD_IFS"
+	fi
+
+	# Get next point around which to scan (again, how to do this depends
+	# on the chosen order mode).
+	if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] || [ "${GIS_OPT_ORDER}" = "pkeydesc" ] || [ "${GIS_OPT_ORDER}" = "random" ] ; then
+		# Just get next existing primary key value.
+		if [ -n $BASH_VERSION ] ; then
+			let CURRENT=${CURRENT}+1
+		else
+			CURRENT=`"${EXPR}" ${CURRENT} + 1`
+		fi
+	fi
+		
+	# Check whether we have reached the (mode-dependent) STOP criterion.
+	if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] ; then
+		if [ ${PKEY_VALUE} -eq ${sorted_pkey_list_max} ] || [ -z "${PKEY_VALUE}" ] ; then
+			STOP=1
+		fi
+	fi
+	if [ "${GIS_OPT_ORDER}" = "pkeydesc" ] ; then
+		if [ ${PKEY_VALUE} -eq ${sorted_pkey_list_min} ] || [ -z "${PKEY_VALUE}" ] ; then
+			STOP=1
+		fi
+	fi
+	if [ "${GIS_OPT_ORDER}" = "random" ] ; then
+		if [ ${CURRENT} -eq ${num_points} ] || [ -z "${PKEY_VALUE}" ] ; then
+			STOP=1
+		fi
+	fi
+	
+	# Update progress report.
+	if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] || [ "${GIS_OPT_ORDER}" = "pkeydesc" ] || [ "${GIS_OPT_ORDER}" = "random" ] ; then
+		g.message -p "${CURRENT} ${num_points} 1"
+	fi
+	
+done # END OF MAIN LOOP
+
+# Create output map, simply by renaming temporary map:
+g.rename vector="${TMP_VECT_COPY}","${GIS_OPT_OUTPUT}" --quiet --overwrite 2>/dev/null
+check_error "Unable to create output map from temporary map."
+
+# DONE!
+
+# Remove temp. maps, restore region, etc.
+clean_up
+
+# Count number of points removed:
+eval `v.info -t map="${GIS_OPT_OUTPUT}" layer="${GIS_OPT_LAYER}"`
+check_error "Failed to get topology info for output vector map."
+result=`"${EXPR}" ${num_points} - ${points}`
+if [ -n "${result}" ] ; then
+	g.message -i "Points removed: ${result}."
+	if [ ${points} -eq 0 ] ; then
+		g.message -w "No points removed."
+	else
+		if [ ${points} -lt 0 ] ; then
+			exit_error "Number of points removed is negative."
+		else
+			if [ ${num_points} -lt ${points} ] ; then
+				exit_error "Count of points removed exceeds number in input map."
+			fi
+		fi
+	fi
+else
+	exit_error "Unable to determine number of points removed."
+fi
+
+# Show processing time.
+g.message -i "Success."
+g.message -i "Started: ${START}"
+END=`"${DATE}"`
+g.message -i "Completed: ${END}"
+
+# Exit with status "OK"
+exit ${EXIT_OK}
 
