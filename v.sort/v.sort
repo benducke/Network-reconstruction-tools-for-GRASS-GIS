@@ -345,7 +345,7 @@ eval_ws_safe () {
 
 # FUNCTION
 # check_setup: Check system setup (required external programs available?).
-check_setup () {
+check_setup () {	
 	
 	message="Failed to run required program: "
 	
@@ -385,6 +385,11 @@ check_environment () {
 	LOCATION_NAME=`g.gisenv get=LOCATION_NAME`
 	MAPSET=`g.gisenv get=MAPSET`
 	
+	# Set GRASS verbosity (no --q or --v given):
+	if [ -z "$GRASS_VERBOSE" ] ; then
+		GRASS_VERBOSE=1
+	fi
+	
 	# Get current region settings.
 	eval `g.region -p -g`	
 
@@ -422,7 +427,9 @@ check_environment () {
 			DBMS_THREAD_SAFE=1
 			g.message -w "SQLite backend appears to be in per-map mode. Expect errors."
 		else
-			g.message -i "SQLite backend appears to be in default mode (single database)."
+			if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+				g.message -i "SQLite backend appears to be in default mode (single database)."
+			fi
 		fi
 		DBMS_FILE_PATH=1
 	fi
@@ -462,8 +469,9 @@ check_environment () {
 	if [ ${DBMS_PRESERVES_ORDER} -eq 0 ] ; then
 		exit_error "Current DBMS '${GRASS_DB_driver}' (${DBMS_NAME}) does not strictly preserve record insertion order."
 	fi
-	
-	g.message -i "Running with DBMS driver '${GRASS_DB_driver}' (${DBMS_NAME})."
+	if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+		g.message -i "Running with DBMS driver '${GRASS_DB_driver}' (${DBMS_NAME})."
+	fi
 }
 
 
@@ -486,11 +494,13 @@ if [ ${GIS_FLAG_P} -eq 1 ] ; then
 	exit ${EXIT_OK}
 fi
 
-# Go!
-g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
-
 # Check GRASS environment:
 check_environment
+
+# Go!
+if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+	g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
+fi
 
 # Run all pre-flight checks:
 check_setup
@@ -648,7 +658,9 @@ eval `v.info -t map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
 check_error "Failed to get topology info for input vector map."
 i=1
 num_features=`echo "${sorted_keys}" | "${WC}" -l`
-g.message -i "Extracting ordered features to new output map:"
+if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+	g.message -i "Extracting ordered features to new output map:"
+fi
 for cur_key in ${sorted_keys} ; do
 	if [ $i -eq 1 ] ; then
 		# First node: Extract into new map!
@@ -661,7 +673,9 @@ for cur_key in ${sorted_keys} ; do
 		v.patch -a input="${TMP_VECT_EXTRACT}" output="${GIS_OPT_OUTPUT}" --o --quiet
 		check_error "Failed to add input node #${cur_key} to sorted map of input nodes."
 	fi
-	g.message -p "${i} ${num_features} 1"
+	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+		g.message -p "${i} ${num_features} 1"
+	fi
 	if [ -n $BASH_VERSION ] ; then
 		let i=${i}+1
 	else
@@ -711,7 +725,12 @@ FIELDS=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet`
 num_fields=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet | "${WC}" -l`
 OLD_IFS="$IFS"
 IFS=$'\n\b'
-g.message -i "Adding ${num_fields} fields to output map's attribute table:"
+if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+	g.message -i "Adding ${num_fields} fields to output map's attribute table:"
+fi
+if [ ${num_fields} -gt 0 ] ; then
+	g.message -w "The input map's attribute layer has a lot of columns (fields). Consider dropping some for better performance."
+fi
 i=1
 for field in ${FIELDS} ; do
 	type=`echo "${field}" | "${CUT}" -d "|" -f 1`	
@@ -730,7 +749,9 @@ fi
 		#echo "type='$type'; name='$name'"
 		${V_DB_ADDCOLUMN} map="${GIS_OPT_OUTPUT}" layer="1" columns="${name} ${type}" --quiet 
 	fi
-	g.message -p "${i} ${num_fields} 1"
+	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+		g.message -p "${i} ${num_fields} 1"
+	fi
 	if [ -n $BASH_VERSION ] ; then
 		let i=${i}+1
 	else
@@ -768,7 +789,9 @@ check_error "Failed to determine number of records in output map."
 
 #DEBUG
 #echo "RECORDS: $num_records"
-g.message -i "Sorting and updating ${num_records} records:"
+if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+	g.message -i "Sorting and updating ${num_records} records:"
+fi
 i=1
 while [ $i -le $num_records ] ; do
 	# Get current primary key of input map
@@ -796,7 +819,9 @@ while [ $i -le $num_records ] ; do
 		fi
 	done
 	IFS="$OLD_IFS"
-	g.message -p "${i} ${num_records} 1"
+	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+		g.message -p "${i} ${num_records} 1"
+	fi
 	if [ -n $BASH_VERSION ] ; then
 		let i=${i}+1
 	else
@@ -810,10 +835,12 @@ done
 clean_up
 
 # Show processing time.
-g.message -i "Success."
-g.message -i "Started: ${START}"
-END=`"${DATE}"`
-g.message -i "Completed: ${END}"
+if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+	g.message -i "Success."
+	g.message -i "Started: ${START}"
+	END=`"${DATE}"`
+	g.message -i "Completed: ${END}"
+fi
 
 # Exit with status "OK"
 exit ${EXIT_OK}
