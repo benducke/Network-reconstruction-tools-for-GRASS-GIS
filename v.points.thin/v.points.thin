@@ -822,6 +822,11 @@ check_environment () {
 	LOCATION_NAME=`g.gisenv get=LOCATION_NAME`
 	MAPSET=`g.gisenv get=MAPSET`
 	
+	# Set GRASS verbosity (no --q or --v given):
+	if [ -z "$GRASS_VERBOSE" ] ; then
+		GRASS_VERBOSE=1
+	fi
+	
 	# Get current region settings.
 	eval `g.region -p -g`	
 
@@ -887,11 +892,13 @@ MAIN () {
 # MAIN #
 ########
 
-# Go!
-g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
-
 # Check GRASS environment:
 check_environment
+
+# Go!
+if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+	g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
+fi
 
 # Run all pre-flight checks:
 check_setup
@@ -1074,7 +1081,9 @@ get_tbl_info "${TMP_VECT_COPY}" ${GIS_OPT_LAYER}
 #
 list_len "${pkey_list}"
 num_points=${LIST_LEN}
-g.message -i "Thinning ${num_points} points (order: '${GIS_OPT_ORDER}'):"
+if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+	g.message -i "Thinning ${num_points} points (order: '${GIS_OPT_ORDER}'):"
+fi
 STOP=0
 while [ ${STOP} -lt 1 ] ; do
 	#
@@ -1165,8 +1174,10 @@ while [ ${STOP} -lt 1 ] ; do
 	fi
 	
 	# Update progress report.
-	if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] || [ "${GIS_OPT_ORDER}" = "pkeydesc" ] || [ "${GIS_OPT_ORDER}" = "random" ] ; then
-		g.message -p "${CURRENT} ${num_points} 1"
+	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+		if [ "${GIS_OPT_ORDER}" = "pkeyasc" ] || [ "${GIS_OPT_ORDER}" = "pkeydesc" ] || [ "${GIS_OPT_ORDER}" = "random" ] ; then
+			g.message -p "${CURRENT} ${num_points} 1"
+		fi
 	fi
 	
 done # END OF MAIN LOOP
@@ -1185,7 +1196,9 @@ eval `v.info -t map="${GIS_OPT_OUTPUT}" layer="${GIS_OPT_LAYER}"`
 check_error "Failed to get topology info for output vector map."
 result=`"${EXPR}" ${num_points} - ${points}`
 if [ -n "${result}" ] ; then
-	g.message -i "Points removed: ${result}."
+	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+		g.message -i "Points removed: ${result}."
+	fi
 	if [ ${points} -eq 0 ] ; then
 		g.message -w "No points removed."
 	else
@@ -1202,11 +1215,12 @@ else
 fi
 
 # Show processing time.
-g.message -i "Success."
-g.message -i "Started: ${START}"
-END=`"${DATE}"`
-g.message -i "Completed: ${END}"
+if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+	g.message -i "Success."
+	g.message -i "Started: ${START}"
+	END=`"${DATE}"`
+	g.message -i "Completed: ${END}"
+fi
 
 # Exit with status "OK"
 exit ${EXIT_OK}
-
