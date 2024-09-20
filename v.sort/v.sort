@@ -71,8 +71,6 @@
 #%  description: Unique field values required
 #%End
 
-
-
 #%Option
 #% key: input
 #% type: string
@@ -113,6 +111,16 @@
 #% options: asc,desc
 #% description: Sort order
 #% answer: asc
+#%End
+
+#%Option
+#% key: sqlbuflen
+#% type: integer
+#% required: no
+#% multiple: no
+#% key_desc: value
+#% answer: 20
+#% description: Number of SQL statements to buffer (performance)
 #%End
 
 #%Option
@@ -162,7 +170,7 @@ fi
 # Basic module setup.
 MODULE_NAME="v_sort" # for prefixing temporary object names
 MODULE_NAME_EXEC="v.sort" # name as run on the command line
-MODULE_VERSION="1.0.0"
+MODULE_VERSION="1.1.0"
 
 # Exit status variables.
 EXIT_OK=0
@@ -377,8 +385,22 @@ check_setup () {
 
 
 # FUNCTION
+# check_params:		Check parametrization for validity.
+#					This is done before any data is produced.
+#					So we can use g.message -e/exit here to abort without
+#					triggering any clean-ups!
+check_params () {
+	
+	if [ ${GIS_OPT_SQLBUFLEN} -lt 1 ] ; then
+		exit_error "SQL buffer size must be > 0 (option 'sqlbuflen=')."
+	fi
+
+}
+
+
+# FUNCTION
 # check_environment: Query GRASS environment for some important variables.
-check_environment () {
+check_environment () {	
 	
 	# Get essential GRASS environment settings
 	GISDBASE=`g.gisenv get=GISDBASE`
@@ -406,6 +428,11 @@ check_environment () {
 	GRASS_DB_driver="${EVAL_RESULT}"
 	eval_ws_safe "${cmd}" "database"
 	GRASS_DB_database="${EVAL_RESULT}"		
+	
+	# Check shell capabilities
+	if [ -z $BASH_VERSION ] ; then
+		g.warning "BASH not available. Falling back to SLOW Bourn Shell compatibility mode."
+	fi
 	
 	# Ensure that we are running with a supported DBMS!
 	# A supported DBMS must have sufficient SQL capabilities for this script's attribute data
@@ -504,6 +531,7 @@ fi
 
 # Run all pre-flight checks:
 check_setup
+check_params
 
 # Keep track of starting time.
 START=`"${DATE}"`
@@ -515,7 +543,7 @@ cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
 check_error "Failed to query input vector map '${GIS_OPT_INPUT}' for extended metadata."
 eval_ws_safe "${cmd}" "attribute_primary_key"
 if [ -z "${EVAL_RESULT}" ] ; then
-		exit_error "Failed to retrieve name of GRASS primary key column for input vector map '${GIS_OPT_INPUT}'."
+	exit_error "Failed to retrieve name of GRASS primary key column for input vector map '${GIS_OPT_INPUT}'."
 fi
 
 # If user does NOT provide the name of a field for sorting, then we sort on the primary key field:
@@ -787,13 +815,42 @@ out_table="${EVAL_RESULT}"
 num_records=`v.db.select -c map="${GIS_OPT_OUTPUT}" layer="1" | "${WC}" -l`
 check_error "Failed to determine number of records in output map."
 
+# Before SQL optimizations:
+#Started: Fri 20 Sep 11:54:10 CEST 2024
+#Completed: Fri 20 Sep 12:08:42 CEST 2024
+# After combining all field updates into one SQL statement:
+#Started: Fri 20 Sep 12:13:13 CEST 2024
+#Completed: Fri 20 Sep 12:17:52 CEST 2024
+
+
+# Initialize chunk-based SQL statement collation
+if [ ${GIS_OPT_SQLBUFLEN} -gt ${num_records} ] ; then
+	g.message -w "Adjusted SQL buffer size to number of input records."
+fi
+chunk_size=${GIS_OPT_SQLBUFLEN} # Number of SQL statements to collate before executing them (initialize to default)
+chunk_left=${chunk_size} # Number SQL statements left to collate in current chunk
+# Set Threshold variable for determining when to execute leftover statements in single mode:
+chunk_remainder=`"${EXPR}" ${num_records} % ${chunk_size}`
+# Initialize contents of first SQL_CHUNK to 'empty':
+SQL_CHUNK=""
 #DEBUG
 #echo "RECORDS: $num_records"
 if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 	g.message -i "Sorting and updating ${num_records} records:"
 fi
 i=1
-while [ $i -le $num_records ] ; do
+while [ ${i} -le ${num_records} ] ; do
+	# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
+	if [ -n $BASH_VERSION ] ; then
+		let records_left=${num_records}-${i}
+	else
+		records_left=`${EXPR} ${num_records} - ${i}`
+	fi
+	if [ ${records_left} -lt ${chunk_remainder} ] ; then
+		chunk_size=1
+	fi
+	# DEBUG
+	#echo "i=$i chunk_size=$chunk_size"
 	# Get current primary key of input map
 	j=1
 	for cur_key in $sorted_keys ; do
@@ -810,14 +867,45 @@ while [ $i -le $num_records ] ; do
 	# Step through all fields of input map, copy all values to corresponding fields of output map:
 	OLD_IFS="$IFS"
 	IFS=$'\n\b'
+	# Create SQL statement for attribute record update
+	SQL=""
 	for field in ${FIELDS} ; do
 		# Get value from field in input map
 		name=`echo "${field}" | "${CUT}" -d "|" -f 2`
-		if [ "${name}" != "${input_map_pkey}" ] ; then # We copy anything, except the GRASS primary key!
-			echo "UPDATE ${out_table} SET ${name} = (SELECT ${name} FROM ${in_table} where ${input_map_pkey}=${pkey}) WHERE ${input_map_pkey}=${i}" | db.execute input="-"
-			check_error "Failed to update value of field '$name' for record #$i of output map."
+		if [ "${name}" != "${input_map_pkey}" ] ; then # We copy anything, except the GRASS primary key!				
+			SQL="${SQL}
+UPDATE ${out_table} SET ${name} = (SELECT ${name} FROM ${in_table} where ${input_map_pkey}=${pkey}) WHERE ${input_map_pkey}=${i};"
 		fi
 	done
+	#
+	if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
+		# Keep collecting statements for current chunk.
+		SQL_CHUNK="${SQL_CHUNK}
+${SQL}"	
+		if [ -n $BASH_VERSION ] ; then
+			let chunk_left=${chunk_left}-1
+		else
+			chunk_left=`${EXPR} ${chunk_left}-1`
+		fi
+	else
+		if [ ${chunk_size} -eq 1 ] ; then
+			SQL_CHUNK="$SQL" # Chunk contains only one piece.
+		else
+			# Add final chunk piece:
+			SQL_CHUNK="${SQL_CHUNK}
+${SQL}"	
+		fi
+		#DEBUG
+		#echo "SQL_CHUNK="
+		#echo "$SQL_CHUNK"
+		# Update all attribute fields of all records in current chunk at once:
+		echo "${SQL_CHUNK}" | db.execute input="-"
+		check_error "Failed to update SQL chunk of size ${chunk_size}."
+		# Empty chunk contents:
+		SQL_CHUNK=""
+		chunk_left=${chunk_size}
+	fi
+	#
 	IFS="$OLD_IFS"
 	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 		g.message -p "${i} ${num_records} 1"
