@@ -185,6 +185,8 @@ DBMS_INDEX_SUPPORTED=0  # Indicates whether the DBMS supports building an index.
 DBMS_PRESERVES_ORDER=0  # Indicates whether the DBMS preserves order of record insertion reliably.
 DBMS_FILE_PATH=0		# Indicates whether the DBMS driver uses a file path to specify the location of a database.
 DBMS_IDENT_QUOTE='"'	# Quoting character for field/table names that (might) contain spaces
+DBMS_BEGIN="BEGIN;"		# Opening statement for an SQL transction; most DBMS should understand "BEGIN;"
+DBMS_COMMIT="COMMIT;"	# Closing statement for an SQL transction; most DBMS should understand "COMMIT;"
 
 # List of fully supported DBMS (GRASS driver names):
 DBMS_SUPPORT_LIST="mesql,mysql,sqlite"
@@ -815,24 +817,18 @@ out_table="${EVAL_RESULT}"
 num_records=`v.db.select -c map="${GIS_OPT_OUTPUT}" layer="1" | "${WC}" -l`
 check_error "Failed to determine number of records in output map."
 
-# Before SQL optimizations:
-#Started: Fri 20 Sep 11:54:10 CEST 2024
-#Completed: Fri 20 Sep 12:08:42 CEST 2024
-# After combining all field updates into one SQL statement:
-#Started: Fri 20 Sep 12:13:13 CEST 2024
-#Completed: Fri 20 Sep 12:17:52 CEST 2024
-
-
 # Initialize chunk-based SQL statement collation
 if [ ${GIS_OPT_SQLBUFLEN} -gt ${num_records} ] ; then
 	g.message -w "Adjusted SQL buffer size to number of input records."
+	chunk_size=${num_records}
+else
+	chunk_size=${GIS_OPT_SQLBUFLEN} # Number of SQL statements to collate before executing them (initialize to default)
 fi
-chunk_size=${GIS_OPT_SQLBUFLEN} # Number of SQL statements to collate before executing them (initialize to default)
 chunk_left=${chunk_size} # Number SQL statements left to collate in current chunk
 # Set Threshold variable for determining when to execute leftover statements in single mode:
 chunk_remainder=`"${EXPR}" ${num_records} % ${chunk_size}`
 # Initialize contents of first SQL_CHUNK to 'empty':
-SQL_CHUNK=""
+SQL_CHUNK="${DBMS_BEGIN}"
 #DEBUG
 #echo "RECORDS: $num_records"
 if [ ${GRASS_VERBOSE} -gt 0 ] ; then
@@ -893,7 +889,8 @@ ${SQL}"
 		else
 			# Add final chunk piece:
 			SQL_CHUNK="${SQL_CHUNK}
-${SQL}"	
+${SQL}
+${DBMS_COMMIT}"
 		fi
 		#DEBUG
 		#echo "SQL_CHUNK="
@@ -902,7 +899,7 @@ ${SQL}"
 		echo "${SQL_CHUNK}" | db.execute input="-"
 		check_error "Failed to update SQL chunk of size ${chunk_size}."
 		# Empty chunk contents:
-		SQL_CHUNK=""
+		SQL_CHUNK="${DBMS_BEGIN}"
 		chunk_left=${chunk_size}
 	fi
 	#
