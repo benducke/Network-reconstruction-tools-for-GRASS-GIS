@@ -52,6 +52,12 @@
 #%End
 
 
+#%Flag
+#%  key: i
+#%  description: Invert effec of 'where=' option (if given)
+#%End
+
+
 #%Option
 #% key: input
 #% type: string
@@ -98,11 +104,6 @@
 #% key_desc: name
 #% description: Thinned output (points) vector map
 #% gisprompt: new,vector,vector
-#%End
-
-#%Flag
-#%  key: i
-#%  description: Invert effec of 'where=' option (if given)
 #%End
 
 
@@ -153,6 +154,17 @@ EXIT_OK=0
 EXIT_CTRL_C=1
 EXIT_TERMINATED=2
 EXIT_ERROR=3
+
+
+# DBMS backend idiosyncracies
+DBMS_LOCKS_REQUIRED=0   # DBMS locking off (will be set later, as required)
+DBMS_THREAD_SAFE=0		# Indicates whether the DBMS is thread safe (in the context of this script)
+DBMS_INDEX_SUPPORTED=0  # Indicates whether the DBMS supports building an index.
+DBMS_PRESERVES_ORDER=0  # Indicates whether the DBMS preserves order of record insertion reliably.
+DBMS_FILE_PATH=0		# Indicates whether the DBMS driver uses a file path to specify the location of a database.
+DBMS_IDENT_QUOTE='"'	# Quoting character for field/table names that (might) contain spaces
+DBMS_BEGIN="BEGIN;"		# Opening statement for an SQL transction; most DBMS should understand "BEGIN;"
+DBMS_COMMIT="COMMIT;";	# Closing statement for an SQL transction; most DBMS should understand "COMMIT;"
 
 
 # Basic sanity checks.
@@ -835,6 +847,11 @@ check_environment () {
 	if [ "${GRASS_REG_PROJECTION}" = "3" ] ; then
 		g.message -w "Running in lat/lon mode. Expect reduced performance."
 	fi
+	
+	# Check shell capabilities
+	if [ -z $BASH_VERSION ] ; then
+		g.warning "BASH not available. Falling back to SLOW Bourn Shell compatibility mode."
+	fi
 }
 
 
@@ -1093,7 +1110,7 @@ while [ ${STOP} -lt 1 ] ; do
 			LIST_ITEM=${sorted_pkey_array[$CURRENT]}
 		else
 			list_get "$sorted_pkey_list" ${CURRENT} ${sorted_pkey_list_len}
-		fi		
+		fi
 	fi
 	PKEY_VALUE="${LIST_ITEM}" # From now on, we use $PKEY_VALUE to refer to the current primary key!
 	if [ -z "${PKEY_VALUE}" ] ; then
@@ -1137,7 +1154,11 @@ while [ ${STOP} -lt 1 ] ; do
 				check_error "Failed to delete point geometry for primary key value '${PKEY_VALUE}' from temporary copy of input map."
 				# Remove feature 2/2 (attribute record)
 				# (note that $attribute_table and $attribute_database were set previously by 'get_tbl_info'):
-				SQL="DELETE FROM $attribute_table WHERE ${primary_key_field} = ${PKEY_VALUE};"
+				SQL="${DBMS_BEGIN}"
+				SQL="$SQL
+DELETE FROM $attribute_table WHERE ${primary_key_field} = ${PKEY_VALUE};"
+				SQL="$SQL
+${DBMS_COMMIT}"
 				echo "${SQL}" | db.execute database="${attribute_database}" input="-"
 				check_error "Failed to delete attribute record for primary key value '${PKEY_VALUE}' from temporary copy of input map."
 			fi
