@@ -159,7 +159,7 @@ GIS_FLAG_S=0
 #%Option G_OPT_DB_COLUMN
 #% key: key
 #% required: yes
-#% description: Name of integer key field in input points' attribute table
+#% description: Name of INTEGER key field in input points' attribute table
 #% gisprompt: old,dbcolumn,dbcolumn
 #%End
 
@@ -1042,26 +1042,20 @@ get_label_no_spaces () {
 #						key.
 #						The name of the primary key is read from ${GIS_OPT_KEY}.
 #						The resulting clause will be written into the variable WHERE.
+#
 get_where_clause () {
-	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-		WHERE="${GIS_OPT_KEY}='$1'"
-	else
-		WHERE="${GIS_OPT_KEY}=$1"
-	fi
+	WHERE="${GIS_OPT_KEY}=$1"
 }
 
 
 # FUNCTION
 # get_where_clause_inv:	Same as get_where_clause, but with inverted result, i.e.
-#							This function generates a 'where' clauses suitable for
-#							retrieving all features that do _not_ match the primary
-#							key value.
+#						This function generates a 'where' clauses suitable for
+#						retrieving all features that do _not_ match the primary
+#						key value.
+#
 get_where_clause_inv () {
-	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-		WHERE="${GIS_OPT_KEY}<>'$1'"
-	else
-		WHERE="${GIS_OPT_KEY}<>$1"
-	fi
+	WHERE="${GIS_OPT_KEY}<>$1"
 }
 
 
@@ -1727,6 +1721,8 @@ check_environment () {
 #
 check_field () {
 	
+	FLD_TEST_KEY_TYPE="${3}"
+	
 	# Initialize return value:	
 	RET_FLD_TEST=""
 	
@@ -1738,38 +1734,38 @@ check_field () {
 		return
 	fi
 	
-	# 2. Check for given field type (run if at least 3 arguments given)
+	# 2. Check for given field type (run if at least three arguments given)
 	if [ $# -gt 2 ] ; then
 		fld_test_key_type="UNKNOWN"
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "INTEGER|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="INTEGER"
-			if [ "$3" != "INTEGER" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
-				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+			if [ "$FLD_TEST_KEY_TYPE" != "INTEGER" ] && [ "$FLD_TEST_KEY_TYPE" != "NUMERIC" ] && [ "$FLD_TEST_KEY_TYPE" != "ANY" ] ; then
+				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$FLD_TEST_KEY_TYPE'."
 				return
 			fi
 		fi
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "DOUBLE PRECISION|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="DOUBLE PRECISION"
-			if [ "$3" != "DOUBLE PRECISION" ] && [ "$3" != "NUMERIC" ] && [ "$3" != "ANY" ] ; then
-				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+			if [ "$FLD_TEST_KEY_TYPE" != "DOUBLE PRECISION" ] && [ "$FLD_TEST_KEY_TYPE" != "NUMERIC" ] && [ "$FLD_TEST_KEY_TYPE" != "ANY" ] ; then
+				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$FLD_TEST_KEY_TYPE'."
 				return
 			fi
 		fi
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "CHARACTER|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="CHARACTER"
-			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
-				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+			if [ "$FLD_TEST_KEY_TYPE" != "TEXT" ] && [ "$FLD_TEST_KEY_TYPE" != "ANY" ] ; then
+				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$FLD_TEST_KEY_TYPE'."
 				return
 			fi
 		fi
 		fld_test_result=`v.info -c --quiet map="${1}" layer="1" | "${GREP}" "TEXT|${2}" -w -c`
 		if [ ${fld_test_result} -eq 1 ] ; then
 			fld_test_key_type="TEXT"
-			if [ "$3" != "TEXT" ] && [ "$3" != "ANY" ] ; then
-				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$3'."
+			if [ "$FLD_TEST_KEY_TYPE" != "TEXT" ] && [ "$FLD_TEST_KEY_TYPE" != "ANY" ] ; then
+				RET_FLD_TEST="Field '$2' in attribute table of map '$1' is not of type '$FLD_TEST_KEY_TYPE'."
 				return
 			fi
 		fi
@@ -2262,8 +2258,6 @@ check_input () {
 	g.message -i "Checking key (and label) field/content validity..."
 	# - must exist (case sensitive, white space possible)
 	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | ${CUT} -f 2 -d "|" | "${GREP}" "${GIS_OPT_KEY}" -w`
-	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "|${GIS_OPT_KEY}" -o`
-	#if [ "${result}" != "|${GIS_OPT_KEY}" ] ; then
 	if [ "${result}" != "${GIS_OPT_KEY}" ] ; then
 		exit_error "Chosen 'key' field '${GIS_OPT_KEY}' does not exist in input points map (option 'key=')."
 	fi
@@ -2274,27 +2268,10 @@ check_input () {
 		exit_error "Number of primary key records (option 'key=') does not match number of input points (${num_keys} keys vs ${points} points)."
 	fi
 	# - must be of type INTEGER
-	KEY_TYPE="UNKNOWN"
 	result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "INTEGER|${GIS_OPT_KEY}" -w -c`
-	if [ ${result} -eq 1 ] ; then
-		KEY_TYPE="INTEGER"
-	fi
-	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "DOUBLE PRECISION|${GIS_OPT_KEY}" -w -c`
-	#if [ ${result} -eq 1 ] ; then
-	#		KEY_TYPE="DOUBLE PRECISION"
-	#fi
-	#UPDATE: We now accept only numeric primary keys, since this makes a lot of data ops tighter.
-	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "CHARACTER|${GIS_OPT_KEY}" -w -c`
-	#if [ ${result} -eq 1 ] ; then
-	#		KEY_TYPE="CHARACTER"
-	#fi
-	#result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "TEXT|${GIS_OPT_KEY}" -w -c`
-	#if [ ${result} -eq 1 ] ; then
-	#	KEY_TYPE="TEXT"
-	#fi
-	if [ "${KEY_TYPE}" = "UNKNOWN" ] ; then
+	if [ ${result} -ne 1 ] ; then
 		exit_error "Type of 'key' field in input points layer is not integer (option 'key=')."
-	fi	
+	fi
 	# - must be UNIQUE for each feature: We us sort's abiliity to remove duplicate lines after sorting.
 	#   At the same time, this will make sure that empty field values will be discarded.
 	count_total=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | ${SORT} | ${WC} -l`
@@ -2307,21 +2284,6 @@ check_input () {
 	if [ ${NUM_INPUT_NODES} -ne ${count_total} ] ; then
 		exit_error "Primary key column '$key' does not contain as many values as there are input points, (only $count_total values present)."
 	fi
-	#KEYS=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$'`
-	#KEYS=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$'`
-	#for key in ${KEYS} ; do
-	#	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-	#		num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}='$key'" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
-	#	else
-	#		num_matches=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" where="${GIS_OPT_KEY}=$key" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
-	#	fi
-	#	if [ ${num_matches} -eq 0 ] ; then
-	#		exit_error "Primary key value '$key' not found: Please ensure that primary key values do not contain whitespace (option 'key=')."
-	#	fi
-	#	if [ ${num_matches} -ne 1 ] ; then
-	#		exit_error "Primary key value '$key' is not unique, with ${num_matches} occurrences in (filtered) input data (option 'key=')."
-	#	fi
-	#done
 	# - must not be the same as GRASS primary key for this layer	
 	cmd=`v.info -e map="${GIS_OPT_INPUT}"`	
 	check_error "Failed to query (filtered) input layer for extended metadata."
@@ -2371,28 +2333,7 @@ check_input () {
 		# If number of unique lines after sorting key list != total number of lines: We have duplicates!
 		if [ ${count_unique} -ne ${count_total} ] ; then
 			g.message -w "Label field '${GIS_OPT_LABEL}' contains at least on duplicate entry (option 'label=')."
-		fi			
-		#OLD_IFS="$IFS"
-		#IFS=$'\n\b'
-		# This will use 'grep' to filter out all lines that are _not_ blank lines:
-		# '^$' matches blank lines, and '-v' reverses the selection:
-		#KEYS=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$'`
-		# Now check all non-empty result lines:
-		#for key in ${KEYS} ; do
-		#	if [ "${LABEL_TYPE}" = "CHARACTER" ] || [ "${LABEL_TYPE}" = "TEXT" ] ; then
-		#		num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}='$key'" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
-		#	else
-		#		num_matches=`v.db.select -c --quiet columns="${GIS_OPT_LABEL}" where="${GIS_OPT_LABEL}=$key" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
-		#	fi
-		#	if [ ${num_matches} -eq 0 ] ; then
-		#		exit_error "Label value '$key' not valid: Please ensure that labels do not contain newline characters (option 'label=')."
-		#	fi
-		#	if [ ${num_matches} -ne 1 ] ; then
-		#		g.message -w "Label field value '$key' is not unique, with ${num_matches} occurrences in (filtered) input data (option 'label=')."
-		#		break
-		#	fi
-		#done
-		#IFS="$OLD_IFS"		
+		fi
 		# - must not be the same as GRASS primary key for this layer	
 		cmd=`v.info -e map="${GIS_OPT_INPUT}"`	
 		check_error "Failed to query (filtered) input layer for extended metadata."
@@ -2403,7 +2344,7 @@ check_input () {
 	else
 		# Default: label field = key field
 		GIS_OPT_LABEL="${GIS_OPT_KEY}"
-		LABEL_TYPE="${KEY_TYPE}"
+		LABEL_TYPE="INTEGER"
 	fi
 
 	# Model 'attsim': check that all fields exist in input
@@ -2692,8 +2633,7 @@ check_input () {
 			#DEBUG
 			#echo "KEY=${key}"
 			#echo "CONNS=${num_connections_total}"
-			if [ ${num_connections_total} -lt 1 ] ; then				
-				#exit_error "Node with primary key '${GIS_OPT_KEY}=${key}' is unconnected in 'initial' links map."
+			if [ ${num_connections_total} -lt 1 ] ; then
 				g.message -w "Node with primary key '${GIS_OPT_KEY}=${key}' is unconnected in 'initial' links map."
 			fi
 		done
@@ -2734,9 +2674,7 @@ check_input () {
 		#
 		# 4. Check that the same two nodes are not linked more than once in INITIAL:
 		#
-		#INIT_KEY_LIST=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" columns="${GIS_OPT_KEY}" -c --quiet`
 		get_grass_cats "${GIS_OPT_INITIAL}"
-		#for cat in ${INIT_KEY_LIST} ; do
 		for cat in ${GRASS_CATS} ; do
 			init_from_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_FROM_ID}" -c`
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_FROM_ID}') from 'initial' links input map."
@@ -3330,18 +3268,10 @@ model_attsim () {
 			val=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${WHERE}" columns="${fld}" -c --quiet`
 			check_error "Failed to query attribute field '${fld}' for key='$key' in nodes input map."
 			#echo "  val='$val'"
-			if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-				if [ "${fld_type}" = "CHARACTER" ] || [ "${fld_type}" = "TEXT" ] ; then
-					where="${GIS_OPT_KEY}<>'$key' AND ${fld}='$val'"
-				else
-					where="${GIS_OPT_KEY}<>'$key' AND ${fld}=$val"
-				fi				
+			if [ "${fld_type}" = "CHARACTER" ] || [ "${fld_type}" = "TEXT" ] ; then
+				where="${GIS_OPT_KEY}<>$key AND ${fld}='$val'"
 			else
-				if [ "${fld_type}" = "CHARACTER" ] || [ "${fld_type}" = "TEXT" ] ; then
-					where="${GIS_OPT_KEY}<>$key AND ${fld}='$val'"
-				else
-					where="${GIS_OPT_KEY}<>$key AND ${fld}=$val"
-				fi
+				where="${GIS_OPT_KEY}<>$key AND ${fld}=$val"
 			fi
 			# Get list of keys of nodes with identical attributes 
 			LIST=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${where}" columns="${GIS_OPT_KEY}" -c --quiet`
@@ -3356,11 +3286,7 @@ model_attsim () {
 					# NOT the other way around (or links don't have directionality!). That way, we make sure
 					# to only count every similarity once (from one end of the link).
 					# Then update that link with the current link strength!
-					if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-						where="${LINKS_FLD_FROM_ID}='$item' AND ${LINKS_FLD_TO_ID}='$key'"
-					else
-						where="${LINKS_FLD_FROM_ID}=$item AND ${LINKS_FLD_TO_ID}=$key"
-					fi
+					where="${LINKS_FLD_FROM_ID}=$item AND ${LINKS_FLD_TO_ID}=$key"
 					cat=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${where}" columns="cat" -c --quiet`
 					check_error "Failed to query attribute field '${LINKS_FLD_FROM_ID}' for link with cat='$cat' in links output vector map."					
 					if [ -n "${cat}" ] ; then
@@ -3986,10 +3912,10 @@ model_complete () {
 		v.random output="${TMP_VECT_LINKS_COSTS}" column="${LINKS_FLD_COST}" npoints="${num_links}" --quiet --overwrite
 		check_error "Failed to create temporary vector map for storing link costs."
 		# Now we need to create attributes of the correct type for storing "from_id" and "to_id" fields
-		${V_DB_ADDCOLUMN} map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_FROM_ID} ${KEY_TYPE}" --quiet
-		check_error "Failed to add attribute field '${LINKS_FLD_FROM_ID}' (type '${KEY_TYPE}') to temporary vector map for storing link costs."
-		${V_DB_ADDCOLUMN} map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_TO_ID} ${KEY_TYPE}" --quiet
-		check_error "Failed to add attribute field '${LINKS_FLD_TO_ID}' (type '${KEY_TYPE}') to temporary vector map for storing link costs."
+		${V_DB_ADDCOLUMN} map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_FROM_ID} INTEGER" --quiet
+		check_error "Failed to add attribute field '${LINKS_FLD_FROM_ID}' (type 'integer') to temporary vector map for storing link costs."
+		${V_DB_ADDCOLUMN} map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_TO_ID} INTEGER" --quiet
+		check_error "Failed to add attribute field '${LINKS_FLD_TO_ID}' (type 'integer') to temporary vector map for storing link costs."
 		# Set primary key (GRASS default 'cat' column) value for first upload of cost value.
 		cat_cost=1
 	else
@@ -4199,10 +4125,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# Attach an (empty except for 'cat') attribute table.	
 	${V_DB_ADDTABLE} map="${GIS_OPT_LINKS}" layer="1" key="${LINKS_FLD_KEY}" --quiet 2>/dev/null
 	check_error "Failed to add attribute table to links output vector map."
-	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID} ${KEY_TYPE}" --quiet
-	check_error "Failed to add attribute field '${LINKS_FLD_FROM_ID}' (type '${KEY_TYPE}') to links output vector map."
-	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID} ${KEY_TYPE}" --quiet
-	check_error "Failed to add attribute field '${LINKS_FLD_TO_ID}' (type '${KEY_TYPE}') to links output vector map."
+	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID} INTEGER" --quiet
+	check_error "Failed to add attribute field '${LINKS_FLD_FROM_ID}' (type 'integer') to links output vector map."
+	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID} INTEGER" --quiet
+	check_error "Failed to add attribute field '${LINKS_FLD_TO_ID}' (type 'integer') to links output vector map."
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_LBL} ${LABEL_TYPE_OUT}" --quiet
 	check_error "Failed to add attribute field '${LINKS_FLD_FROM_LBL}' (type '${LABEL_TYPE_OUT}') to links output vector map."
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_LBL} ${LABEL_TYPE_OUT}" --quiet
@@ -4442,12 +4368,8 @@ ${DBMS_COMMIT}"
 			from_id=`db.select database="${attribute_database}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
 			#to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
 			to_id=`db.select database="${attribute_database}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
-			#echo "FROM:TO = $from_id:$to_id"			
-			if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-				WHERE="${LINKS_FLD_FROM_ID}='$from_id' AND ${LINKS_FLD_TO_ID}='$to_id'"
-			else
-				WHERE="${LINKS_FLD_FROM_ID}=$from_id AND ${LINKS_FLD_TO_ID}=$to_id" 
-			fi			
+			#echo "FROM:TO = $from_id:$to_id"
+			WHERE="${LINKS_FLD_FROM_ID}=$from_id AND ${LINKS_FLD_TO_ID}=$to_id" 
 			#echo "WHERE='$WHERE'"			
 			#costval=`v.db.select map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_COST}" where="${WHERE}" -c --quiet`
 			costval=`db.select database="${attribute_database}" sql="SELECT ${LINKS_FLD_COST} FROM ${TMP_VECT_LINKS_COSTS} WHERE ${WHERE};" -c --quiet`
@@ -4532,11 +4454,7 @@ ${DBMS_COMMIT}"
 		new_cat_old=-1
 		step=1 # This one is just for progress reporting.
 		for key in $PRIMARY_KEYS ; do
-			if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-				WHERE="${LINKS_FLD_FROM_ID}='$key'"
-			else
-				WHERE="${LINKS_FLD_FROM_ID}=$key"
-			fi
+			WHERE="${LINKS_FLD_FROM_ID}=$key"
 			#RECS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" column="cat" where="${WHERE}" -c`
 			RECS=`db.select database="${attribute_database}" sql="SELECT cat FROM ${GIS_OPT_LINKS} WHERE ${WHERE};" -c --quiet`
 			check_error "Failed to query attribute table of links output map."
@@ -4828,11 +4746,7 @@ model_nn () {
 	for key in $PRIMARY_KEYS ; do
 		if [ -n "${GIS_OPT_SIZE}" ] ; then
 			# Read number of nearest neighbors from 'size' field of current node			
-			if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-				GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}='${key}'" -c --quiet`		
-			else
-				GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${key}" -c --quiet`			
-			fi		
+			GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${key}" -c --quiet`
 			check_error "Failed to query field '${GIS_OPT_SIZE}' of input nodes map (key='$key')."
 			grep_is_positive "${GIS_OPT_NEIGHBORS}"
 			if [ -z ${GREP_VALUE} ] ; then
@@ -4844,18 +4758,10 @@ model_nn () {
 		fi
 		# Get sorted list of lengths for all links connected to current node via 'from_id' or 'to_id'.
 		# We look at 'from_id' first:
-		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-			lengths_from=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_FROM_ID='$key'" -c`
-		else
-			lengths_from=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_FROM_ID=$key" -c`
-		fi
+		lengths_from=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_FROM_ID=$key" -c`
 		check_error "Failed to query fields '${FLD_DIST}' and '${LINKS_FLD_FROM_ID}' of links output map (key='${key}')."
 		# Now 'to_id':
-		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-			lengths_to=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_TO_ID='$key'" -c`
-		else
-			lengths_to=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_TO_ID=$key" -c`
-		fi
+		lengths_to=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_TO_ID=$key" -c`
 		check_error "Failed to query fields '${FLD_DIST}' and '${LINKS_FLD_TO_ID}' of links output map (key='${key}')."
 lengths="${lengths_from}
 ${lengths_to}"
@@ -4866,18 +4772,10 @@ ${lengths_to}"
 			if [ -n "${LIST}" ] ; then
 				#echo "$LIST"
 				# Now get GRASS primary keys (cat) for all links connected FROM this node via 'from_id':
-				if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-					CATS_FROM=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_FROM_ID}='$key'" -c`
-				else
-					CATS_FROM=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_FROM_ID}=$key" -c`
-				fi			
+				CATS_FROM=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_FROM_ID}=$key" -c`
 				check_error "Failed to query field '${LINKS_FLD_FROM_ID}' of links output map (key='${key}')."
 				# Now get GRASS primary keys (cat) for all links connected TO this node via 'to_id':				
-				if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-					CATS_TO=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_TO_ID}='$key'" -c`
-				else
-					CATS_TO=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_TO_ID}=$key" -c`
-				fi	
+				CATS_TO=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_TO_ID}=$key" -c`
 				check_error "Failed to query field '${LINKS_FLD_TO_ID}' of links output map (key='${key}')."
 CATS="${CATS_FROM}
 ${CATS_TO}"
@@ -5005,11 +4903,7 @@ model_xtent () {
 		# Get size of "from node"
 		from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
 		check_error "Failed to query field '${LINKS_FLD_FROM_ID}' of output nodes map (cat='${cat}')."
-		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-			from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}='${from_id}'" -c --quiet`
-		else
-			from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${from_id}" -c --quiet`			
-		fi
+		from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${from_id}" -c --quiet`
 		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		grep_is_positive "${from_size}"
 		if [ -z ${GREP_VALUE} ] ; then
@@ -5018,13 +4912,8 @@ model_xtent () {
 		# Get size of "to node"
 		to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
 		check_error "Failed to query field '${LINKS_FLD_TO_ID}' of output nodes map ('${GRASS_PKEY}=${cat}')."
-		if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-			to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}='${to_id}'" -c --quiet`
-			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
-		else
-			to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${to_id}" -c --quiet`
-			check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
-		fi
+		to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${to_id}" -c --quiet`
+		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		grep_is_positive "${to_size}"
 		if [ -z ${GREP_VALUE} ] ; then
 			exit_error "Invalid 'size' for input point with 'key'='${to_id}': Must be larger than '0'."
@@ -5520,67 +5409,36 @@ for key in ${PRIMARY_KEYS} ; do
 	# key is stored in either the "from_id" or "to_id" field.
 	# NOTE: Since the SQL WHERE clauses used below may return an empty result and thus
 	# an error value from grep, we CANNOT CHECK for errors and abort here!
-	# TODO: We do not allow types != INTEGER for ${GIS_OPT_KEYS} any more, so type checks
-	#       like the below (i.e. anything that checks ${KEY_TYPE}) can be removed!
-	if [ "${KEY_TYPE}" = "CHARACTER" ] || [ "${KEY_TYPE}" = "TEXT" ] ; then
-		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-			NLIST=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID='$key' OR $LINKS_FLD_TO_ID='$key'" columns="${LINKS_FLD_STRENGTH}" -c`
-			n_strength=0
-			#echo $NLIST
-			for val in $NLIST ; do
-				if [ -n $BASH_VERSION ] ; then
-					let n_strength=${n_strength}+${val}
-				else
-					n_strength=`"${EXPR}" ${n_strength} + ${val}`
-				fi				
-			done
-			#echo "[$key] NSTR = $n_strength"
-		fi
-		# TODO: Use SQL OR here, instead of querying from/to separately!
-		#from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID='$key'" -c | "${GREP}" "${key}" -c`
-		from_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID='$key';" -c --quiet | "${GREP}" "${key}" -c`
-		#to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID='$key'" -c | "${GREP}" "${key}" -c`
-		to_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID='$key';" -c --quiet | "${GREP}" "${key}" -c`
-		#from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_FROM_ID='$key'" -c`
-		from_len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID='$key';" -c --quiet`
-		#to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_TO_ID='$key'" -c`
-		to_len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID='$key';" -c --quiet`
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			#from_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_FROM_ID='$key'" -c`
-			from_cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID='$key';" -c --quiet`
-			#to_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_TO_ID='$key'" -c`
-			to_cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID='$key';" -c --quiet`
-		fi
-	else
-		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-			NLIST=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key" columns="${LINKS_FLD_STRENGTH}" -c`
-			n_strength=0
-			#echo $NLIST
-			for val in $NLIST ; do
-				if [ -n $BASH_VERSION ] ; then
-					let n_strength=${n_strength}+${val}
-				else
-					n_strength=`"${EXPR}" ${n_strength} + ${val}`
-				fi
-			done
-			#echo "[$key] NSTR = $n_strength"
-		fi
-		# TODO: Use SQL OR here, instead of querying from/to separately!
-		#from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID=$key" -c | "${GREP}" "${key}" -c`
-		from_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key;" -c --quiet | "${GREP}" "${key}" -c`
-		#to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID=$key" -c | "${GREP}" "${key}" -c`
-		to_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID=$key;" -c --quiet | "${GREP}" "${key}" -c`
-		#from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_FROM_ID=$key" -c`
-		from_len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key;" -c --quiet`
-		#to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_TO_ID=$key" -c`
-		to_len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID=$key;" -c --quiet`
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			#from_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_FROM_ID=$key" -c`
-			from_cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key;" -c --quiet`
-			#to_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_TO_ID=$key" -c`
-			to_cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID=$key;" -c --quiet`
-		fi
+	#
+	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
+		NLIST=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key" columns="${LINKS_FLD_STRENGTH}" -c`
+		n_strength=0
+		#echo $NLIST
+		for val in $NLIST ; do
+			if [ -n $BASH_VERSION ] ; then
+				let n_strength=${n_strength}+${val}
+			else
+				n_strength=`"${EXPR}" ${n_strength} + ${val}`
+			fi
+		done
+		#echo "[$key] NSTR = $n_strength"
 	fi
+	# TODO: Use SQL OR here, instead of querying from/to separately!
+	#from_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_FROM_ID=$key" -c | "${GREP}" "${key}" -c`
+	from_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key;" -c --quiet | "${GREP}" "${key}" -c`
+	#to_links=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="$LINKS_FLD_TO_ID=$key" -c | "${GREP}" "${key}" -c`
+	to_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID=$key;" -c --quiet | "${GREP}" "${key}" -c`
+	#from_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_FROM_ID=$key" -c`
+	from_len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key;" -c --quiet`
+	#to_len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="$LINKS_FLD_TO_ID=$key" -c`
+	to_len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID=$key;" -c --quiet`
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+		#from_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_FROM_ID=$key" -c`
+		from_cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key;" -c --quiet`
+		#to_cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="$LINKS_FLD_TO_ID=$key" -c`
+		to_cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_TO_ID=$key;" -c --quiet`
+	fi
+	#
 	# Update subnetwork metrics: number of links, total length and cost of links connected to current node.
 	if [ -n $BASH_VERSION ] ; then
 		let num_links=${from_links}+${to_links}
@@ -5748,7 +5606,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	
 	# DEBUG
 	#MARK=`date`
-	#echo "5 COMPUTE STATS REDUCED START: '$MARK'"
+	#echo "6 COMPUTE STATS REDUCED START: '$MARK'"
 	
 	# Compute simple metrics
 	for cat in ${GRASS_CATS} ; do
@@ -5780,7 +5638,7 @@ if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
 	
 	# DEBUG
 	#MARK=`date`
-	#echo "5 COMPUTE STATS REDUCED DONE: '$MARK'"
+	#echo "6 COMPUTE STATS REDUCED DONE: '$MARK'"
 	
 	net_links_reduced="${lines}"
 	net_len_reduced="${total_len}"
