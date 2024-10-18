@@ -60,11 +60,6 @@ GIS_FLAG_L=0
 #%End
 
 #%Flag
-#%  key: g
-#%  description: Global network statistics output in shell script style
-#%End
-
-#%Flag
 #%  key: k
 #%  description: 'Knight's move' for more accurate (but slower) cost computations
 #%End
@@ -2157,22 +2152,7 @@ check_input () {
 		# attach it to the new, ordered points map. This will work, because we have already made sure
 		# that the attribute table data is well-ordered by validating the primary key sequence at
 		# the start of "check_input"!
-		
-		#-- DELETE ME --
-		#BUG!
-		#If the points were filtered, then we cannot rely on having an unbroken cat sequence starting at 1 in
-		#the input map. V.extract will happily keep extracting and won't throw an error if the cat is
-		#not found. This will result in too few extracted geometries.
-		#SOLUTION: CALL v.sort to postprocess the output of ALL filtering stages:
-		#- if -r(educe) flag is given
-		#- if costmap is given
-		#The entry point for both cases is line #1929, where it reads:		
-		#	"# Reduce points to those in current region (either cost raster or '-r' flag)?"
-		#	"if [ -n "${GIS_OPT_COSTMAP}" ] || [ ${GIS_FLAG_R} -eq 1 ] ; then"
-		#- Maybe introduce v.sort as an external dependency in check_setup()
-		#- Leave a note here about input data requirements!
-		#-- DELETE ME --
-				
+		#		
 		min=1
 		max=${points}
 		g.message -i "Ensuring strict order of adjusted input nodes [$min..$max]:"
@@ -3123,99 +3103,6 @@ nodes_droprow () {
 	check_error "Failed to drop attribute table row with cat='$1' from nodes output map."	
 	# Now set GIS_OPT_NODES to new map with one dropped attribute!
 	GIS_OPT_NODES="${droprow_out}"
-}
-
-
-# FUNCTION
-# stats_unreduced: 	Computes statistics for unreduced network (to be printed later).
-#					MUST be called before any function to reduce the network is called,
-#					since these may rely on the stats computed here!
-#
-stats_unreduced () {
-	# Get attribute table info for output links map:	
-	# attribute_table
-	# attribute_database_driver
-	# attribute_database
-	get_tbl_info "${GIS_OPT_LINKS}"
-	# Get global statistics for unreduced network.
-	# We will output these at the end of the program run!
-	g.message -i "Computing statistics for unreduced network:"
-	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
-	get_grass_cats "${GIS_OPT_LINKS}"
-	total_cost=0
-	total_len=0
-	# min/max initially empty strings
-	min_len=""
-	max_len=""
-	min_cost=""
-	max_cost=""
-	step=1 # This one is just for progress reporting.
-	# Compute simple metrics
-	for cat in ${GRASS_CATS} ; do
-		#len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-		len=`db.select sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
-		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GRASS_PKEY}='${cat}')"
-		awk_min "${min_len}" "${len}"
-		min_len="${AWK_VALUE}"
-		awk_max "${max_len}" "${len}"
-		max_len="${AWK_VALUE}"
-		awk_calc "$total_len+$len"
-		total_len="${AWK_VALUE}"
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			#cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-			cost=`db.select sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
-			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GRASS_PKEY}='${cat}')"
-			awk_min "${min_cost}" "${cost}"
-			min_cost="${AWK_VALUE}"
-			awk_max "${max_cost}" "${cost}"
-			max_cost="${AWK_VALUE}"			
-			awk_calc "$total_cost+$cost"
-			total_cost="${AWK_VALUE}"
-		fi
-		g.message -p "${step} ${lines} 1"
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
-		fi		
-	done	
-	net_nodes_undreduced="${NUM_INPUT_NODES}"
-	net_links_unreduced="${lines}"
-	net_len_unreduced="${total_len}"
-	net_len_min_unreduced="${min_len}"
-	net_len_max_unreduced="${max_len}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		net_cost_unreduced="${total_cost}"
-		net_cost_min_unreduced="${min_cost}"
-		net_cost_max_unreduced="${max_cost}"
-		net_cost_max_unreduced="${max_cost}"
-	fi
-	# Compute means
-	awk_calc "(($lines*2)/$NUM_INPUT_NODES)" # 1 link = 2 connections (one at each end!)
-	net_cons_mean_unreduced="${AWK_VALUE}"
-	awk_calc "$total_len/$lines"
-	net_len_mean_unreduced="${AWK_VALUE}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		awk_calc "$total_cost/$lines"
-		net_cost_mean_unreduced="${AWK_VALUE}"
-	fi
-	# Compute median(s)
-	lengths=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" -c`
-	check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GIS_OPT_LINKS})."
-	awk_median "$lengths"	
-	if [ -z "${AWK_VALUE}" ] ; then
-		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
-	fi
-	net_len_median_unreduced="${AWK_VALUE}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" -c`
-		check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GIS_OPT_LINKS})."
-		awk_median "$costs"	
-		if [ -z "${AWK_VALUE}" ] ; then
-			exit_error "No cost data found in attribute table of links output layer (${GIS_OPT_LINKS})."
-		fi
-		net_cost_median_unreduced="${AWK_VALUE}"
-	fi
 }
 
 
@@ -5085,6 +4972,9 @@ MAIN () {
 # MAIN #
 ########
 
+# Keep track of starting time.
+START=`"${DATE}"`
+
 # Check GRASS environment:
 check_environment
 
@@ -5108,9 +4998,6 @@ fi
 
 # Perform input data pre-processing:
 preprocess
-
-# Keep track of starting time.
-START=`"${DATE}"`
 
 # GO! GO!
 #GIS_OPT_INPUT is the input points map: Its handle has been set by check_input()!
@@ -5304,17 +5191,6 @@ else
 	model_complete
 fi
 
-# Compute statistics of unreduced network
-
-# DEBUG
-#MARK=`date`
-#echo "4 COMPUTE STATS UNREDUCED START: '$MARK'"
-
-stats_unreduced
-# DEBUG
-#MARK=`date`
-#echo "4 COMPUTE STATS UNREDUCED DONE: '$MARK'"
-
 # Decide which attribute field to read for distance threshold
 FLD_DIST="${LINKS_FLD_LEN_M}" # Default
 UNITS_DIST="m"
@@ -5390,7 +5266,7 @@ subnet_cost=0
 
 # DEBUG
 #MARK=`date`
-#echo "5 WRITE OUTPUT NODES START: '$MARK'"
+#echo "4 WRITE OUTPUT NODES START: '$MARK'"
 
 # Get and store attribute table info for output maps:
 get_tbl_info "${GIS_OPT_LINKS}"
@@ -5578,210 +5454,8 @@ done
 
 # DEBUG
 #MARK=`date`
-#echo "5 WRITE OUTPUT NODES DONE: '$MARK'"
+#echo "4 WRITE OUTPUT NODES DONE: '$MARK'"
 
-# Compute statistics for reduced network (if applicable)
-if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
-	# Update output nodes count
-	eval `v.info -t map="${GIS_OPT_NODES}" layer="1"`
-	check_error "Failed to get topology info for nodes output vector map ('${GIS_OPT_NODES}')."
-	net_nodes_reduced="${points}"
-	# Compute statistics
-	# Get global statistics for reduced network.
-	g.message -i "Computing statistics for reduced network:"
-	# Update output links count
-	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
-	check_error "Failed to get topology info for nodes output vector map ('${GIS_OPT_NODES}')."
-	get_grass_cats "${GIS_OPT_LINKS}"
-	total_cost=0
-	total_len=0
-	# min/max initially empty strings
-	min_len=""
-	max_len=""
-	min_cost=""
-	max_cost=""
-	min_cons=""
-	max_cons=""
-	step=1 # This one is just for progress reporting.
-	
-	# DEBUG
-	#MARK=`date`
-	#echo "6 COMPUTE STATS REDUCED START: '$MARK'"
-	
-	# Compute simple metrics
-	for cat in ${GRASS_CATS} ; do
-		len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (where '${GRASS_PKEY}=${cat}')"
-		awk_min "${min_len}" "${len}"
-		min_len="${AWK_VALUE}"
-		awk_max "${max_len}" "${len}"
-		max_len="${AWK_VALUE}"
-		awk_calc "$total_len+$len"
-		total_len="${AWK_VALUE}"
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			cost=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (where '${GRASS_PKEY}=${cat}')"
-			awk_min "${min_cost}" "${cost}"
-			min_cost="${AWK_VALUE}"
-			awk_max "${max_cost}" "${cost}"
-			max_cost="${AWK_VALUE}"
-			awk_calc "$total_cost+$cost"
-			total_cost="${AWK_VALUE}"
-		fi
-		g.message -p "${step} ${lines} 1"
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
-		fi
-	done
-	
-	# DEBUG
-	#MARK=`date`
-	#echo "6 COMPUTE STATS REDUCED DONE: '$MARK'"
-	
-	net_links_reduced="${lines}"
-	net_len_reduced="${total_len}"
-	net_len_min_reduced="${min_len}"
-	net_len_max_reduced="${max_len}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		net_cost_reduced="${total_cost}"
-		net_cost_min_reduced="${min_cost}"
-		net_cost_max_reduced="${max_cost}"
-	fi
-	# Compute mean(s)
-	awk_calc "(${lines}*2)/${net_nodes_reduced}"
-	net_cons_mean_reduced="${AWK_VALUE}"
-	awk_calc "$total_len/$lines"
-	net_len_mean_reduced="${AWK_VALUE}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		awk_calc "$total_cost/$lines"
-		net_cost_mean_reduced="${AWK_VALUE}"
-	fi
-	# Compute median(s)
-	lengths=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" -c`
-	check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GIS_OPT_LINKS})."
-	awk_median "$lengths"	
-	if [ -z "${AWK_VALUE}" ] ; then
-		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
-	fi
-	net_len_median_reduced="${AWK_VALUE}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" -c`
-		check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GIS_OPT_LINKS})."
-		awk_median "$costs"	
-		if [ -z "${AWK_VALUE}" ] ; then
-			exit_error "No cost data found in attribute table of links output layer (${GIS_OPT_LINKS})."
-		fi
-		net_cost_median_reduced="${AWK_VALUE}"
-	fi
-fi
-
-# Output global network statistics
-# 1. For unreduced network (these were already computed in 'model_complete' and are
-#    always available):
-if [ ${GIS_FLAG_G} -eq 1 ] ; then
-	echo "net_nodes_unreduced=${net_nodes_undreduced}"
-	echo "net_links_unreduced=${net_links_unreduced}"	
-	echo "net_len_unreduced=${net_len_unreduced}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		echo "net_cost_unreduced=${net_cost_unreduced}"
-	fi
-	echo "net_cons_mean_unreduced=${net_cons_mean_unreduced}"
-	echo "net_len_min_unreduced=${net_len_min_unreduced}"
-	echo "net_len_max_unreduced=${net_len_max_unreduced}"	
-	echo "net_len_mean_unreduced=${net_len_mean_unreduced}"
-	echo "net_len_median_unreduced=${net_len_median_unreduced}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		echo "net_cost_min_unreduced=${net_cost_min_unreduced}"
-		echo "net_cost_max_unreduced=${net_cost_max_unreduced}"
-		echo "net_cost_mean_unreduced=${net_cost_mean_unreduced}"
-		echo "net_cost_median_unreduced=${net_cost_median_unreduced}"
-	fi
-else
-	g.message -i "Unreduced ('complete') network properties:"
-	g.message -i "Nodes: ${net_nodes_undreduced}"
-	g.message -i "Links: ${net_links_unreduced}"
-	g.message -i "Total network length(m): ${net_len_unreduced}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		g.message -i "Total network cost: ${net_cost_unreduced}"
-	fi		
-	g.message -i "Mean connections/node: ${net_cons_mean_unreduced}"
-	g.message -i "Min. link length: ${net_len_min_unreduced}"
-	g.message -i "Max. link length: ${net_len_max_unreduced}"
-	g.message -i "Mean link length: ${net_len_mean_unreduced}"
-	g.message -i "Median link length: ${net_len_median_unreduced}"	
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		g.message -i "Min. link cost: ${net_cost_min_unreduced}"
-		g.message -i "Max. link cost: ${net_cost_max_unreduced}"
-		g.message -i "Mean link cost: ${net_cost_mean_unreduced}"
-		g.message -i "Median link cost: ${net_cost_median_unreduced}"
-	fi
-fi
-# 2. For reduced network: Only available if a model other than COMPLETE was chosen.
-if [ "${GIS_OPT_MODEL}" != "complete" ] || [ -n "${GIS_OPT_MAXDIST}" ] ; then
-	# Attempt to get contents of column in ${NODES_FLD_LINKS} from output nodes map.
-	# We need this to compute the min/max number of connections across all nodes.
-	net_cons_min_reduced=""
-	net_cons_max_reduced=""
-	result=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LINKS}" | "${GREP}" -c "|${NODES_FLD_LINKS}"`
-	check_error "Failed to get columns info for nodes output vector map ('${GIS_OPT_NODES}')."
-	if [ ${result} -gt 0 ] ; then		
-		LINKS=`v.db.select map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LINKS}" -c --quiet`
-		for link in ${LINKS} ; do
-			awk_min "${net_cons_min_reduced}" "${link}"
-			net_cons_min_reduced="${AWK_VALUE}"
-			awk_max "${net_cons_max_reduced}" "${link}"
-			net_cons_max_reduced="${AWK_VALUE}"
-		done
-	fi
-	if [ ${GIS_FLAG_G} -eq 1 ] ; then
-		echo "net_nodes_reduced=${net_nodes_reduced}"
-		echo "net_links_reduced=${net_links_reduced}"	
-		echo "net_len_reduced=${net_len_reduced}"
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			echo "net_cost_reduced=${net_cost_reduced}"
-		fi
-		if [ -n "${net_cons_min_reduced}" ] ; then
-			echo "net_cons_min_reduced=${net_cons_min_reduced}"
-			echo "net_cons_max_reduced=${net_cons_max_reduced}"
-		fi
-		echo "net_cons_mean_reduced=${net_cons_mean_reduced}"
-		echo "net_len_min_reduced=${net_len_min_reduced}"
-		echo "net_len_max_reduced=${net_len_max_reduced}"
-		echo "net_len_mean_reduced=${net_len_mean_reduced}"
-		echo "net_len_median_reduced=${net_len_median_reduced}"
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			echo "net_cost_min_reduced=${net_cost_min_reduced}"
-			echo "net_cost_max_reduced=${net_cost_max_reduced}"
-			echo "net_cost_mean_reduced=${net_cost_mean_reduced}"
-			echo "net_cost_median_reduced=${net_cost_median_reduced}"
-		fi
-	else
-		g.message -i "Reduced ('${GIS_OPT_MODEL}') network properties:"
-		g.message -i "Nodes: ${net_nodes_reduced}"
-		g.message -i "Links: ${net_links_reduced}"
-		g.message -i "Total length(m): ${net_len_reduced}"	
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			g.message -i "Cost: ${net_cost_reduced}"
-		fi
-		if [ -n "${net_cons_min_reduced}" ] ; then
-			echo "Min. connections/node: ${net_cons_min_reduced}"
-			echo "Max. connections/node: ${net_cons_max_reduced}"
-		fi
-		g.message -i "Mean connections/node: ${net_cons_mean_reduced}"
-		g.message -i "Min. link length: ${net_len_min_reduced}"
-		g.message -i "Max. link length: ${net_len_max_reduced}"
-		g.message -i "Mean link length: ${net_len_mean_reduced}"
-		g.message -i "Median link length: ${net_len_median_reduced}"
-		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			g.message -i "Min. link cost: ${net_cost_min_reduced}"
-			g.message -i "Max. link cost: ${net_cost_max_reduced}"
-			g.message -i "Mean link cost: ${net_cost_mean_reduced}"
-			g.message -i "Median link cost: ${net_cost_median_reduced}"
-		fi
-	fi
-fi
 
 # In case that any rows were dropped, we need to copy the temporary
 # map with reduced attribute table back to the original output map!
