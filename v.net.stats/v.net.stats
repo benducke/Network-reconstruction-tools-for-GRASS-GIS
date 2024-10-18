@@ -54,7 +54,7 @@
 
 #%Flag
 #%  key: s
-#%  description: Skip links:nodes consistency checks
+#%  description: Skip input data consistency checks
 #%End
 
 
@@ -1224,10 +1224,6 @@ check_params () {
 	
 	if [ -z "$GIS_OPT_LINKS" ] && [ -z "$GIS_OPT_NODES" ] ; then
 		exit_error "At least one of options 'links=' and 'nodes=' must be specified."
-	fi
-	
-	if [ ${GIS_OPT_SQLBUFLEN} -lt 1 ] ; then
-		exit_error "SQL buffer size must be > 0 (option 'sqlbuflen=')."
 	fi
 
 }
