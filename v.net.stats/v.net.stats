@@ -48,6 +48,11 @@
 #%End
 
 #%Flag
+#%  key: f
+#%  description: Force overwrite of input map's existing field values
+#%End
+
+#%Flag
 #%  key: g
 #%  description: Print statistics in shell script style
 #%End
@@ -148,7 +153,6 @@ DBMS_BEGIN="BEGIN;"		# Opening statement for an SQL transction; most DBMS should
 DBMS_COMMIT="COMMIT;";	# Closing statement for an SQL transction; most DBMS should understand "COMMIT;"
 
 # Reserved names of attribute table fields in LINKS input map
-LINKS_FLD_KEY="cat"				# Default GRASS primary key
 LINKS_FLD_FROM_ID="from_id"		# ID of start node
 LINKS_FLD_TO_ID="to_id"			# ID of end node
 LINKS_FLD_FROM_LBL="from_lbl"	# Label (name) of start node
@@ -160,17 +164,13 @@ LINKS_FLD_TO_Y="to_y"			# Y coordinates of end node.
 LINKS_FLD_LEN_M="length_m"		# Total length of link in meters
 LINKS_FLD_LEN_KM="length_km" 	# Total length of link in kilometers
 LINKS_FLD_COST="cost"			# Total cost of link in unspecified units (will only exist if 'costmap=" provided)
-LINKS_FLD_STRENGTH="strength"	# Link strength (number of similarities: will only exist for model 'attsim')
 
 # Reserved names of attribute table fields in NODES input map
-NODES_FLD_COORD_X="coordx" 		# Input node X coordinate
-NODES_FLD_COORD_Y="coordy" 		# Input node Y coordinate
 NODES_FLD_LINKS="links" 		# Number of links connected to node
 NODES_FLD_LEN_SUM="len_sum" 	# Sum of lengths of links connected to node
 NODES_FLD_LEN_AVG="len_mean" 	# Mean length of links connected to node
 NODES_FLD_COST_SUM="cost_sum" 	# Sum of costs of links connected to node
 NODES_FLD_COST_AVG="cost_mean" 	# Mean cost of links connected to node
-NODES_FLD_NSTRENGTH="nstrength"	# Sum of 'strength' of all links connected to node (model 'attsim')
 
 # Basic sanity checks.
 if [ -z "$GISBASE" ] ; then
@@ -926,7 +926,153 @@ check_input () {
 	if [ "${EVAL_RESULT}" = "${GIS_OPT_KEY}" ] ; then
 		exit_error "Name of 'key' field ('$key') is the same as GRASS primary key of input nodes layer (option 'key=')."
 	fi
-	
+	#
+	# Check whether node statistics fields are already present in NODES input map.
+	# 'links' (INTEGER)
+	fld=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LINKS}"`
+	if [ -n "${fld}" ] ; then
+		if [ ${GIS_FLAG_F} -eq 1 ] ; then
+			# Field exists and -f flag given: Drop field and re-create it with correct type (INTEGER) if necessary.
+			fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "INTEGER|${NODES_FLD_LINKS}" -w -c`
+			if [ ${fld_test_result} -ne 1 ] ; then
+				# Field is not of correct type: Drop and re-create it!				
+				g.message -w "Found attribute with reserved field name '${NODES_FLD_LINKS}' but wrong type."
+				g.message -w "Field will be dropped and re-created with correct type (INTEGER)."				
+				${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_LINKS}" --quiet
+				check_error "Failed to remove reserved attribute '${NODES_FLD_LINKS}' from input nodes map '${GIS_OPT_NODES}'."
+				${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LINKS} INTEGER" --quiet
+				check_error "Failed to add attribute field '${NODES_FLD_LINKS}' to nodes input map '${GIS_OPT_NODES}'."
+			fi
+		else
+			# Field exists and -f not given: Abort!
+			if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+				g.message -i "Found attribute with reserved field name '${NODES_FLD_LINKS}' in nodes input map '${GIS_OPT_NODES}'."
+				g.message -i "Set '-f'(orce) flag to overwrite."
+			fi
+			exit_error "Nodes statistics field '${NODES_FLD_LINKS}' present in input map and '-f'(orce) flag not set."
+		fi
+	else
+		# Field does not yet exist: Create it!
+		${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LINKS} INTEGER" --quiet
+		check_error "Failed to add attribute field '${NODES_FLD_LINKS}' to nodes input map '${GIS_OPT_NODES}'."
+	fi
+	# 'len_sum' (DOUBLE PRECISION)
+	fld=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LEN_SUM}"`
+	if [ -n "${fld}" ] ; then
+		if [ ${GIS_FLAG_F} -eq 1 ] ; then
+			# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
+			fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_LEN_SUM}" -w -c`
+			if [ ${fld_test_result} -ne 1 ] ; then
+				# Field is not of correct type: Drop and re-create it!				
+				g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' but wrong type."
+				g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+				${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_LEN_SUM}" --quiet
+				check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_SUM}' from input nodes map '${GIS_OPT_NODES}'."
+				${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LEN_SUM} DOUBLE PRECISION" --quiet
+				check_error "Failed to add attribute field '${NODES_FLD_LEN_SUM}' to nodes input map '${GIS_OPT_NODES}'."
+			fi
+		else
+			# Field exists and -f not given: Abort!
+			if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+				g.message -i "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' in nodes input map '${GIS_OPT_NODES}'."
+				g.message -i "Set '-f'(orce) flag to overwrite."
+			fi
+			exit_error "Nodes statistics field '${NODES_FLD_LEN_SUM}' present in input map and '-f'(orce) flag not set."
+		fi
+	else
+		# Field does not yet exist: Create it!
+		${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LEN_SUM} DOUBLE PRECISION" --quiet
+		check_error "Failed to add attribute field '${NODES_FLD_LEN_SUM}' to nodes input map '${GIS_OPT_NODES}'."
+	fi
+	# 'len_mean' (DOUBLE PRECISION)
+	fld=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LEN_AVG}"`
+	if [ -n "${fld}" ] ; then
+		if [ ${GIS_FLAG_F} -eq 1 ] ; then
+			# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
+			fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_LEN_AVG}" -w -c`
+			if [ ${fld_test_result} -ne 1 ] ; then
+				# Field is not of correct type: Drop and re-create it!				
+				g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_AVG}' but wrong type."
+				g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+				${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_LEN_AVG}" --quiet
+				check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_AVG}' from input nodes map '${GIS_OPT_NODES}'."
+				${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LEN_AVG} DOUBLE PRECISION" --quiet
+				check_error "Failed to add attribute field '${NODES_FLD_LEN_AVG}' to nodes input map '${GIS_OPT_NODES}'."
+			fi
+		else
+			# Field exists and -f not given: Abort!
+			if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+				g.message -i "Found attribute with reserved field name '${NODES_FLD_LEN_AVG}' in nodes input map '${GIS_OPT_NODES}'."
+				g.message -i "Set '-f'(orce) flag to overwrite."
+			fi
+			exit_error "Nodes statistics field '${NODES_FLD_LEN_AVG}' present in input map and '-f'(orce) flag not set."
+		fi
+	else
+		# Field does not yet exist: Create it!
+		${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LEN_AVG} DOUBLE PRECISION" --quiet
+		check_error "Failed to add attribute field '${NODES_FLD_LEN_AVG}' to nodes input map '${GIS_OPT_NODES}'."
+	fi
+	# Further attribute fields for cost-based statistics:
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+		# 'cost_sum' (DOUBLE PRECISION)
+		fld=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COST_SUM}"`
+		if [ -n "${fld}" ] ; then
+			if [ ${GIS_FLAG_F} -eq 1 ] ; then
+				# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
+				fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_COST_SUM}" -w -c`
+				if [ ${fld_test_result} -ne 1 ] ; then
+					# Field is not of correct type: Drop and re-create it!				
+					g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_SUM}' but wrong type."
+					g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+					${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_COST_SUM}" --quiet
+					check_error "Failed to remove reserved attribute '${NODES_FLD_COST_SUM}' from input nodes map '${GIS_OPT_NODES}'."
+					${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_COST_SUM} DOUBLE PRECISION" --quiet
+					check_error "Failed to add attribute field '${NODES_FLD_COST_SUM}' to nodes input map '${GIS_OPT_NODES}'."
+				fi
+			else
+				# Field exists and -f not given: Abort!
+				if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+					g.message -i "Found attribute with reserved field name '${NODES_FLD_COST_SUM}' in nodes input map '${GIS_OPT_NODES}'."
+					g.message -i "Set '-f'(orce) flag to overwrite."
+				fi
+				exit_error "Nodes statistics field '${NODES_FLD_COST_SUM}' present in input map and '-f'(orce) flag not set."
+			fi
+		else
+			# Field does not yet exist: Create it!
+			${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_COST_SUM} DOUBLE PRECISION" --quiet
+			check_error "Failed to add attribute field '${NODES_FLD_COST_SUM}' to nodes input map '${GIS_OPT_NODES}'."
+		fi
+		# 'cost_mean' (DOUBLE PRECISION)
+		fld=`v.info map="${GIS_OPT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COST_AVG}"`
+		if [ -n "${fld}" ] ; then
+			if [ ${GIS_FLAG_F} -eq 1 ] ; then
+				# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
+				fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_COST_AVG}" -w -c`
+				if [ ${fld_test_result} -ne 1 ] ; then
+					# Field is not of correct type: Drop and re-create it!				
+					g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_AVG}' but wrong type."
+					g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+					${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_COST_AVG}" --quiet
+					check_error "Failed to remove reserved attribute '${NODES_FLD_COST_AVG}' from input nodes map '${GIS_OPT_NODES}'."
+					${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_COST_AVG} DOUBLE PRECISION" --quiet
+					check_error "Failed to add attribute field '${NODES_FLD_COST_AVG}' to nodes input map '${GIS_OPT_NODES}'."
+				fi
+			else
+				# Field exists and -f not given: Abort!
+				if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+					g.message -i "Found attribute with reserved field name '${NODES_FLD_COST_AVG}' in nodes input map '${GIS_OPT_NODES}'."
+					g.message -i "Set '-f'(orce) flag to overwrite."
+				fi
+				exit_error "Nodes statistics field '${NODES_FLD_COST_AVG}' present in input map and '-f'(orce) flag not set."
+			fi
+		else
+			# Field does not yet exist: Create it!
+			${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_COST_AVG} DOUBLE PRECISION" --quiet
+			check_error "Failed to add attribute field '${NODES_FLD_COST_AVG}' to nodes input map '${GIS_OPT_NODES}'."
+		fi		
+	fi
+	# From this point forward, we can rely on the presence of all required node statistics fields
+	# and their correct types!
 	
 	if [ ${GIS_FLAG_S} -eq 1 ] ; then
 	    # Skipping consistency checks.
