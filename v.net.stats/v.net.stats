@@ -166,7 +166,7 @@ LINKS_FLD_LEN_KM="length_km" 	# Total length of link in kilometers
 LINKS_FLD_COST="cost"			# Total cost of link in unspecified units (will only exist if 'costmap=" provided)
 
 # Reserved names of attribute table fields in NODES input map
-NODES_FLD_LINKS="links" 		# Number of links connected to node
+NODES_FLD_LINKS="links_num" 	# Number of links connected to node
 NODES_FLD_LEN_SUM="len_sum" 	# Sum of lengths of links connected to node
 NODES_FLD_LEN_AVG="len_mean" 	# Mean length of links connected to node
 NODES_FLD_COST_SUM="cost_sum" 	# Sum of costs of links connected to node
