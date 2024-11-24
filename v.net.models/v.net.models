@@ -468,12 +468,6 @@ LINKS_FLD_STRENGTH="strength"	# Link strength (number of similarities: will only
 # Reserved names of attribute table fields that will be added to NODES output map
 NODES_FLD_COORD_X="coordx" 		# Input node X coordinate
 NODES_FLD_COORD_Y="coordy" 		# Input node Y coordinate
-NODES_FLD_LINKS="links" 		# Number of links connected to node
-NODES_FLD_LEN_SUM="len_sum" 	# Sum of lengths of links connected to node
-NODES_FLD_LEN_AVG="len_mean" 	# Mean length of links connected to node
-NODES_FLD_COST_SUM="cost_sum" 	# Sum of costs of links connected to node
-NODES_FLD_COST_AVG="cost_mean" 	# Mean cost of links connected to node
-NODES_FLD_NSTRENGTH="nstrength"	# Sum of 'strength' of all links connected to node (model 'attsim')
 
 # FUNCTION
 # grass_db_connect_default: Restores current GRASS session's initial database
@@ -1959,26 +1953,6 @@ check_input () {
 		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_COORD_Y}" ] ; then
 			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_COORD_Y}'."
 		fi
-		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_LINKS}" ] ; then
-			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_LINKS}'."
-		fi
-		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_LEN_SUM}" ] ; then
-			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_LEN_SUM}'."
-		fi
-		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_LEN_AVG}" ] ; then
-			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_LEN_AVG}'."
-		fi
-		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_COST_SUM}" ] ; then
-			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_COST_SUM}'."
-		fi
-		if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_COST_AVG}" ] ; then
-			exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_COST_AVG}'."
-		fi
-		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-			if [ "${GIS_OPT_SIZE}" = "${NODES_FLD_NSTRENGTH}" ] ; then
-				exit_error "Attribute for 'size' must not have reserved field name '${NODES_FLD_NSTRENGTH}'."
-			fi
-		fi
 	fi
 		
 	# Warn if reserved field names are present in input map's attribute table
@@ -1989,32 +1963,6 @@ check_input () {
 	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COORD_Y}"`
 	if [ -n "${fld}" ] ; then
 		g.message -w "Found attribute with reserved field name '${NODES_FLD_COORD_Y}' in input points map."
-	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LINKS}"`
-	if [ -n "${fld}" ] ; then
-		g.message -w "Found attribute with reserved field name '${NODES_FLD_LINKS}' in input points map."
-	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LEN_SUM}"`
-	if [ -n "${fld}" ] ; then
-		g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' in input points map."
-	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_LEN_AVG}"`
-	if [ -n "${fld}" ] ; then
-		g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_AVG}' in input points map."
-	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COST_SUM}"`
-	if [ -n "${fld}" ] ; then
-		g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' in input points map."
-	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_COST_AVG}"`
-	if [ -n "${fld}" ] ; then
-		g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_AVG}' in input points map."
-	fi
-	fld=`v.info map="${TMP_VECT_NODES}" layer="1" --quiet -c | "${GREP}" -i -w "${NODES_FLD_NSTRENGTH}"`
-	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-		if [ -n "${fld}" ] ; then
-			g.message -w "Found attribute with reserved field name '${NODES_FLD_NSTRENGTH}' in input points map."
-		fi
 	fi
 
 	# Success? Then the map with extracted nodes is now our main nodes input map!
@@ -2930,45 +2878,10 @@ preprocess () {
 		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COORD_Y}" --quiet
 		check_error "Failed to remove reserved attribute '${NODES_FLD_COORD_Y}' from copy of input points map."
 	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LINKS}"`
-	if [ -n "${fld}" ] ; then
-		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_LINKS}" --quiet
-		check_error "Failed to remove reserved attribute '${NODES_FLD_LINKS}' from copy of input points map."
-	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LEN_SUM}"`
-	if [ -n "${fld}" ] ; then
-		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_LEN_SUM}" --quiet
-		check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_SUM}' from copy of input points map."
-	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_LEN_AVG}"`
-	if [ -n "${fld}" ] ; then
-		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_LEN_AVG}" --quiet
-		check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_AVG}' from copy of input points map."
-	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_COST_SUM}"`
-	if [ -n "${fld}" ] ; then
-		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COST_SUM}" --quiet
-		check_error "Failed to remove reserved attribute '${NODES_FLD_COST_SUM}' from copy of input points map."
-	fi
-	fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_COST_AVG}"`
-	if [ -n "${fld}" ] ; then
-		${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_COST_AVG}" --quiet
-		check_error "Failed to remove reserved attribute '${NODES_FLD_COST_AVG}' from copy of input points map."
-	fi
-	if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
-		fld=`v.info map="${GIS_OPT_INPUT}" layer="1" --quiet -c | "${GREP}" -w "${NODES_FLD_NSTRENGTH}"`
-		if [ -n "${fld}" ] ; then
-			${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_INPUT}" columns="${NODES_FLD_NSTRENGTH}" --quiet
-			check_error "Failed to remove reserved attribute '${NODES_FLD_NSTRENGTH}' from copy of input points map."
-		fi
-	fi
 	
 	# Add coordinate fields to copy of input points map
 	v.to.db map="${GIS_OPT_INPUT}" layer="1" option="coor" columns="${NODES_FLD_COORD_X},${NODES_FLD_COORD_Y}" --o --quiet
 	check_error "Failed to add coordinate attribute fields to copy of input points map."
-	# Add links counter field to copy of input points map
-	${V_DB_ADDCOLUMN} map="${GIS_OPT_INPUT}" layer="1" columns="${NODES_FLD_LINKS} INTEGER"
-	check_error "Failed to add attribute field 'links' (integer) to copy of input points map."
 	
 	# Increase resolution for sampling input cost surface?
 	# NOTE: We already increased the resolution of the current region in "check_input()!"
@@ -3989,11 +3902,11 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# After v.patch, categories are a mess. We rebuild them now, so that every link has its own category ID!
 	# Delete old category IDs:
 	g.message -i "Rebuilding primary key sequence of links output map (1/2):"
-	v.category input="${GIS_OPT_LINKS}" output="${TMP_VECT_LINKS_CAT}" layer="1" option="del" cat="-1" --overwrite
+	v.category input="${GIS_OPT_LINKS}" output="${TMP_VECT_LINKS_CAT}" layer="1" option="del" cat="-1" --overwrite --quiet
 	check_error "Failed to remove defective category IDs from links output vector map."
 	clean_links # Just to suppress useless overwrite warning
 	g.message -i "Rebuilding primary key sequence of links output map (2/2):"
-	v.category output="${GIS_OPT_LINKS}" input="${TMP_VECT_LINKS_CAT}" layer="1" option="add" cat="1" step="1" --overwrite
+	v.category output="${GIS_OPT_LINKS}" input="${TMP_VECT_LINKS_CAT}" layer="1" option="add" cat="1" step="1" --overwrite --quiet
 	check_error "Failed to add proper category IDs to links output vector map."
 	
 	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
