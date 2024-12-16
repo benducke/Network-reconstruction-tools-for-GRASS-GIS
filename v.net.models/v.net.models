@@ -439,6 +439,7 @@ TMP_RAST_COST_DIR="${TMP_PREFIX}_r_cost_dir" # Directional surface output r.cost
 TMP_RAST_COST_ERR="${TMP_PREFIX}_r_cost_err" # Directional surface output r.cost (random error)
 TMP_RAST_COST_NRM="${TMP_PREFIX}_r_cost_nrm" # Directional surface output r.cost (normalized random error)
 TMP_RAST_COST_SYN="${TMP_PREFIX}_r_cost_syn" # Directional surface output r.cost (cost synergy effect)
+TMP_RAST_COST_SYN2="${TMP_PREFIX}_r_cost_syn2" # Directional surface output r.cost (cost synergy effect, backup map)
 TMP_RAST_RSTLNKS1="${TMP_PREFIX}_r_rstlnks1" # Rasterized link from map supplied via "initial="
 TMP_RAST_RSTLNKS2="${TMP_PREFIX}_r_rstlnks2" # Rasterized link from map supplied via "initial=" (version 2)
 TMP_RAST_MAPCALC1="${TMP_PREFIX}_r_mapcalc1" # Temporary output of an r.mapcalc run (1)
@@ -707,6 +708,12 @@ clean_up () {
 	fi
 	# Directional surface output of r.cost (cost synergy effect)
 	elem="${TMP_RAST_COST_SYN}"
+	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
+	if [ $found -gt 0 ] ; then
+		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
+	fi
+	# Directional surface output of r.cost (cost synergy effect, backup map)
+	elem="${TMP_RAST_COST_SYN2}"
 	found=`g.list type="${type}" | "${GREP}" -c "${elem}"`
 	if [ $found -gt 0 ] ; then
 		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
@@ -2639,10 +2646,10 @@ check_params () {
 	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 		RUNMODE_COST="TRUE" # default if cost raster provided
 	fi
-	
+		
 	# Option "costsyn" is only meaningful if "costmap" is also provided.
 	# Option "costsyn" cannot run in multi-threading mode.
-	# Option "costsyn" cannot be combined with option "initial=".
+	# Option "costsyn" cannot be combined with option "initial=".#
 	grep_is_zero "${GIS_OPT_COSTSYN}"
 	if [ -n "${GREP_VALUE}" ] ; then
 		if [ -z "${GIS_OPT_COSTMAP}" ] ; then
@@ -2658,7 +2665,7 @@ check_params () {
 			exit ${EXIT_ERROR}
 		fi
 	fi
-		
+	
 	# Option "costerr" is only meaningful if "costmap" is also provided.
 	grep_is_zero "${GIS_OPT_COSTERR}"
 	if [ -n "${GREP_VALUE}" ] && [ -z "${GIS_OPT_COSTMAP}" ] ; then
@@ -2910,15 +2917,28 @@ preprocess () {
 		 # Assign cost surface with error as new cost surface!
 		 GIS_OPT_COSTMAP="${TMP_RAST_COST_NRM}"
 	fi
-	
-	# Add cost synergy effect? Then we need to make another copy of the cost map!
+
+	# Add cost synergy effect? Then we need two more temporary raster maps:
+	# 1. A copy of the original cost map (we will overwrite this one with a new
+	#    version for each LCP bundle later),
+	# 2  and an initially empty map to iteratively rasterize LCP bundles with their
+	#    cumulative cost effects.
 	grep_is_zero "${GIS_OPT_COSTSYN}"
 	if [ -n "${GREP_VALUE}" ] ; then
+		# Create copy of original cost map and use that for input cost map from now on:
 		g.message -i "Creating initial copy of cost map for cost synergy effect..."
-		g.copy raster="${GIS_OPT_COSTMAP},${TMP_RAST_COST_SYN}" --overwrite --quiet 2>/dev/null
+		g.copy raster="${GIS_OPT_COSTMAP},${TMP_RAST_COST_SYN2}" --overwrite --quiet 2>/dev/null
 		check_error "Failed to create copy of cost map (option 'costsyn=')."
-		# Set initial copy as new cost map!
-		GIS_OPT_COSTMAP="${TMP_RAST_COST_SYN}"
+		GIS_OPT_COSTMAP="${TMP_RAST_COST_SYN2}"
+		# Initial LCP mask:
+		g.message -i "Creating initial LCP mask for cost synergy effect..."
+		r.mapcalc expression="${TMP_RAST_RSTLNKS1}=null()" --quiet --overwrite
+		check_error "Failed to create initial LCP mask (option 'costsyn=')."
+		# 
+		# In addition: Save GRASS DB name of original cost map.
+		# We need this to be able to refer back to the original, unmodified cell values
+		# in r.mapcalc expression later:
+		GIS_OPT_COSTMAP_ORG="${GIS_OPT_COSTMAP}"
 	fi
 	
 	# Create default version of output nodes map by copying (filtered/sorted) input map
@@ -3564,10 +3584,10 @@ ${DBMS_COMMIT}"
 			#fi
 
 			# Check whether we need to apply an iterative cost synergy effect (option 'costsyn='.
-			# THIS WILL ONLY WORK IN SINGLE-THREADED MODE, since the costs computed in the current step inevitable
-			# depends on the cost computations in the previous step.
+			# THIS WILL ONLY WORK IN SINGLE-THREADED MODE, since the costs computed in the current step inevitably
+			# depends on the cost computations in the previous step
 			grep_is_zero "${GIS_OPT_COSTSYN}"
-			if [ -n "${GREP_VALUE}" ] ; then
+			if [ -n "${GREP_VALUE}" ] ; then			
 				# Ok: 'costsyn' has been set > 0.
 				#
 				# General schema:
@@ -3577,17 +3597,19 @@ ${DBMS_COMMIT}"
 				#    - set every other cell to the value of the corresponding cell in A
 				#    - copy B -> A
 				# 3. The next run of this loop must use A as input cost raster for r.path (above)!
-				#
-				# First, we need to rasterize the bundle of LCPs that we just computed using r.path (above).
-				# We set the value of every cell that is exactly on the path to value of option 'costsyn=':
-				v.to.rast input="${tmp_vect_links}" output="${TMP_RAST_RSTLNKS1}" type="line" use="val" value="${GIS_OPT_COSTSYN}" --quiet --overwrite
-				check_error "Failed to rasterize least cost paths."
-				# Now we create a new cost map in which the cost value in every cell on the LCP is reduced by the INVERSE of the given factor:
-				r.mapcalc expression="${TMP_RAST_RSTLNKS2}=(if(!isnull(${TMP_RAST_RSTLNKS1}),${GIS_OPT_COSTMAP}*(1-${TMP_RAST_RSTLNKS1}),${GIS_OPT_COSTMAP}))" --quiet --overwrite
-				check_error "Failed to update cost map with synergy factor."
-				# Finally, we copy the result back to the base cost map:
-				g.copy raster="${TMP_RAST_RSTLNKS2},${GIS_OPT_COSTMAP}" --overwrite --quiet 2>/dev/null
-				check_error "Failed to copy cost map with synergy factor back to original input."		
+				#				
+				# 0. Initialize TMP_RAST_RSTLNKS1 (global LCP mask) to all null cells: Was done previously, as part of function preprocess()
+				# 1. Rasterize path bundle into temporary raster map TMP_RAST_RSTLNKS2, with every cell on a path set to 'costsyn', all other cells 'null':
+				v.to.rast input="${tmp_vect_links}" output="${TMP_RAST_RSTLNKS2}" type="line" use="val" value="${GIS_OPT_COSTSYN}" --quiet --overwrite
+				check_error "Failed to rasterize least cost path(s) during step #${step}."
+				# 2. Add TMP_RAST_RSTLNKS2 to global LCP mask TMP_RAST_RSTLNKS1:
+				r.mapcalc expression="${TMP_RAST_RSTLNKS1}=(if(!isnull(${TMP_RAST_RSTLNKS2}),${TMP_RAST_RSTLNKS2},${TMP_RAST_RSTLNKS1}))" --quiet --overwrite
+				check_error "Failed to add least cost path(s) to global LCP mask during step #${step}."				
+				# 3. Set all non-null cells of TMP_RAST_RSTLNKS1 to cost effect in TMP_RAST_COST_SYN, set to unmodified cost surface value, otherwise:
+				r.mapcalc expression="${TMP_RAST_COST_SYN}=(if(!isnull(${TMP_RAST_RSTLNKS1}),${GIS_OPT_COSTMAP_ORG}*(1-${TMP_RAST_RSTLNKS1}),${GIS_OPT_COSTMAP_ORG}))" --quiet --overwrite
+				check_error "Failed to create modified cost surface (cost synergy factor) during step #${step}."
+				# 4. Set TMP_RAST_COST_SYN to be our new GIS_OPT_COSTMAP:
+				g.copy raster="${TMP_RAST_COST_SYN},${GIS_OPT_COSTMAP}" --overwrite --quiet 2>/dev/null				
 			fi
 
 			# We cannot release the DB mutex sooner, because up to this point, we have been writing
