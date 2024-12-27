@@ -1,16 +1,17 @@
-# v.net.models
-This is a model-based (physical, transport, roads) network generator and research tool for GRASS GIS (can also be used via the QGIS Processing plug-in: see instructions below). It provides functionality for reconstructing (hypothetical) network links from a set of given nodes, using one of several reconstruction models. The output is primarily intended to serve as a baseline for comparison with more advanced reconstructions (computed with other tools). A greater degree of realism can be achieved if the user supplies a sufficiently detailed cost surface.
+# Network reconstruction tools for GRASS GIS (and QGIS)
 
-Summary: This program takes a vector points layer as input and produces a new vector lines layer that represents the links of the reconstructed network.
-Several connectivity models have been implemented.
+This project includes a set of additional commands (modules) for [GRASS GIS] (https://grass.osgeo.org/) that can be used to compute the links of a network, given  the network's nodes and a choice of connectivity criteria. The bulk of the work is done by v.net.models, which is a flexible, model-based network generator. The remaining modules serve mainly to prepare data for ingestion by v.net.models or to explore and compare its output.
 
-# Included files
+The currently included modules are:
 
-This program is distributed as a set of files:
+* v.net.modules (main command)
+* v.sort (enforce storage order of input nodes)
+* v.points.thins (systematically reduce number of input nodes)
+* v.net.stats (provide descriptive statistics for output of v.net.modules)
 
-* v.net.models - This is the actual script for GRASS that does all the work.
-* v.net.models.txt - Parameters description file for the QGIS Processing plug-in.
-* v.net.models.bat - A start-up script that is only required on Windows.
+All modules have been designed to run under versions 7 and 8 of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under QGIS.
+
+For best performance, it is recommended to run this software on a Linux-based operating system. Operation under macOS and Windows is also possible but might be subject to some limitations in performance and/or functionality.
 
 # Installation
 
@@ -20,7 +21,7 @@ This software is a Bourne Shell script that has been tested and verified to run 
 
 Tested with:
 
-GRASS GIS 7.8.3 & QGIS 3.10.12
+GRASS 8.4 & QGIS 3.34 (LTR)
 
 At a minimum, running this script requires a working installation of GRASS 7, the Bourne Shell (alternatively: BASH or another sh-compatible Shell) and a set of support tools (GNU awk, expr and grep are strictly required). Linux and macOS users will already have the latter on their systems. Windows users must install an additional software package (MSYS2). For a more user-friendly interface, install QGIS, as well.
 
