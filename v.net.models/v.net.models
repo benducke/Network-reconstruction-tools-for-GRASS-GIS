@@ -36,6 +36,7 @@
 # - cut
 # - pkill
 # - sleep
+# - wait
 # - wc
 #
 
@@ -306,6 +307,7 @@ GIS_FLAG_S=0
 #% multiple: no
 #% key_desc: value
 #% answer: 20
+#% options: 1-1000
 #% description: Number of SQL statements to buffer (performance)
 #%End
 
@@ -323,7 +325,6 @@ if [ -n "${MSYSPATH}" ] ; then
 	DATE="${MSYSPATH}/date"
 	EXPR="${MSYSPATH}/expr"	
 	GREP="${MSYSPATH}/grep"
-	PKILL="${MSYSPATH}/pkill"
 	SORT="${MSYSPATH}/sort"	
 	WC="${MSYSPATH}/wc"
 	# Scripted GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
@@ -344,6 +345,7 @@ else
 	PKILL="pkill"
 	SLEEP="sleep"
 	SORT="sort"	
+	WAIT="wait"
 	WC="wc"
 	# These are the GRASS commands that are actually Shell/Python scripts.
 	# On Linux/macOS they are executed through the shell, just like binaries.
@@ -1507,48 +1509,94 @@ str_substr () {
 # check_setup: Check system setup (required external programs available?).
 check_setup () {	
 	
-	message="Failed to run required program: "	
+	message="Required program not found or not working as expected: "
 	
 	# Awk
 	prg="${AWK}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	#: $(${prg} --help)
+	#check_error "${message} '${prg}'."
+	result=`echo "1 2 4 3" | ${prg} '{ print $3 }'`
+	if [ $result -ne 4 ] : then
+		exit_error "$message ${prg}"
+	fi
+	
+	# Cut
+	prg="${CUT}"
+	#: $(${prg} --help)
+	#check_error "${message} '${prg}'."
+	result=`echo "1,2,4,3" | ${prg} -f3 -d,`
+	if [ $result -ne 4 ] : then
+		exit_error "$message ${prg}"
+	fi
+	
 	
 	# Date
 	prg="${DATE}"
-	: $(${prg} --help)
+	: $(${prg} -u)
 	check_error "${message} '${prg}'."
 	
 	# Expr
 	prg="${EXPR}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	#: $(${prg} --help)
+	#check_error "${message} '${prg}'."
+	result=`${prg} 1 + 3`
+	if [ $result -ne 4 ] : then
+		exit_error "$message ${prg}"
+	fi
 	
 	# Grep
 	prg="${GREP}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	#: $(${prg} --help)
+	#check_error "${message} '${prg}'."
+	result=`echo "1 2 3 4" | ${prg} "3 4" -c`
+	if [ $result -ne 1 ] : then
+		exit_error "$message ${prg}"
+	fi
 	
-	# Sleep
-	if [ -z "${SLEEP}" ] ; then
+	# Pkill, Sleep, Wait: Multi-threading support
+	if [ -z "${PKILL}" ] || [ -z "${WAIT}" ] || [ -z "${SLEEP}" ] ; then
 		# If sleep command is missing then we are running on a system (likely Windows)
 		# that does not have what it takes for concurrent execution of shell scripts.
 		if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
-			g.message -w "Multithreaded operation not supported on this operating system. Forcing 'threads='."
+			g.message -w "Multithreaded operation not supported on this operating system. Forcing 'threads=1'."
 			GIS_OPT_THREADS=1
 		fi
 	else
+		# We have pkill command: Let's check that it works!
+		# TODO: There seems to be no portable AND safe way of checking
+		#       that pkill works. For now, we just trust that it's there
+		#		if §PKILL is declared.
+		#prg="${PKILL}"
+		#: $(${prg} --help)
+		#check_error "${message} '${prg}'."
 		# We have sleep command: Let's check that it works!
 		prg="${SLEEP}"
-		: $(${prg} --help)
+		: $(${prg} 0.1)
+		check_error "${message} '${prg}'."
+		# We have wait command: Let's check that it works!
+		prg="${WAIT}"
+		: $(${prg})
 		check_error "${message} '${prg}'."
 	fi
 	
-	
 	# Sort
 	prg="${SORT}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	#: $(${prg} --help)
+	#check_error "${message} '${prg}'."
+	result=`echo "Just one line." | ${prg} -w`
+	if [ $result -ne 0 ] : then
+		exit_error "$message ${prg}"
+	fi
+	
+	# Wc
+	prg="${WC}"
+	#: $(${prg} --help)
+	#check_error "${message} '${prg}'."	
+	result=`echo "one two five" | ${prg} -w`
+	if [ $result -ne 3 ] : then
+		exit_error "$message ${prg}"
+	fi
+	
 }
 
 
@@ -3589,15 +3637,6 @@ ${DBMS_COMMIT}"
 			grep_is_zero "${GIS_OPT_COSTSYN}"
 			if [ -n "${GREP_VALUE}" ] ; then			
 				# Ok: 'costsyn' has been set > 0.
-				#
-				# General schema:
-				# 1. Rasterize path bundle into temporary raster map C, with every path cell's value set to 'costsyn'
-				# 2. Use r.mapcalc expression to create a new temp cost map B:
-				#    - set every cell that has a non-NULL value in C to 'C*(1-costsyn)'
-				#    - set every other cell to the value of the corresponding cell in A
-				#    - copy B -> A
-				# 3. The next run of this loop must use A as input cost raster for r.path (above)!
-				#				
 				# 0. Initialize TMP_RAST_RSTLNKS1 (global LCP mask) to all null cells: Was done previously, as part of function preprocess()
 				# 1. Rasterize path bundle into temporary raster map TMP_RAST_RSTLNKS2, with every cell on a path set to 'costsyn', all other cells 'null':
 				v.to.rast input="${tmp_vect_links}" output="${TMP_RAST_RSTLNKS2}" type="line" use="val" value="${GIS_OPT_COSTSYN}" --quiet --overwrite
@@ -3662,9 +3701,11 @@ ${DBMS_COMMIT}"
 		fi
 		# Remove temporary maps:		
 		g.remove type="vector" name="${TMP_VECT_EXTRACT}_${step}" -f --quiet		
-		g.remove type="vector" name="${GIS_OPT_INPUT}_${step}" -f --quiet
-		# Switch back to default (global) DB driver and database:
-		grass_db_connect_default
+		g.remove type="vector" name="${GIS_OPT_INPUT}_${step}" -f --quiet		
+		if [ ${DBMS_LOCKS_REQUIRED} -eq 1 ] ; then
+			# Switch back to default (global) DB driver and database:
+			grass_db_connect_default
+		fi
 		#check_error "Failed to set default DB connection in background job/thread #${step} (at end of processing)."
 		if [ ${DBMS_LOCKS_REQUIRED} -eq 1 ] ; then
 			# Remove thread-local database file:
@@ -3850,7 +3891,7 @@ ${remainder}
 				${SLEEP} "0.02s" # Add a short delay before launching next thread (synchronisation)
 			fi
 		done
-		wait # Wait for all dispatched jobs to complete.		
+		${WAIT} # Wait for all dispatched jobs to complete.		
 		g.message -p "${job} ${num_features} 1"
 	done
 	
