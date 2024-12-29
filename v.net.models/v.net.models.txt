@@ -1,13 +1,13 @@
 v.net.models
 Performs model-based reconstruction of network links from input points.
 Vector (v.*)
-QgsProcessingParameterFeatureSource|input|Input vector map with network nodes (points)|0|None|False
+QgsProcessingParameterFeatureSource|input|Network nodes (points)|0|None|False
 *QgsProcessingParameterString|where|WHERE conditions of SQL statement without 'where' keyword|None|False|True
 QgsProcessingParameterFeatureSource|initial|Initial links produced by previous run (lines)|1|None|True
-QgsProcessingParameterRasterLayer|costmap|Input raster map with (global and isotropic) cost surface|None|True
-QgsProcessingParameterField|key|Name of integer key field in input points' attribute table|None|input|0|False|False
-QgsProcessingParameterField|label|Name of label/name field (default: same as 'key')|None|input|-1|False|True
-QgsProcessingParameterEnum|model|Choice of network connectivity model|attsim;complete;delaunay;nn;xtent|False|1|False
+QgsProcessingParameterRasterLayer|costmap|Cost surface|None|True
+QgsProcessingParameterField|key|integer key field in input nodes' attribute table|None|input|0|False|False
+QgsProcessingParameterField|label|Label/name field (default: same as 'key')|None|input|-1|False|True
+QgsProcessingParameterEnum|model|Network connectivity model|attsim;complete;delaunay;nn;xtent|False|1|False
 QgsProcessingParameterField|attributes|Attribute field(s) for similarity test(s) (model 'attsim')|None|input|-1|True|True
 QgsProcessingParameterNumber|neighbors|Number of nearest neighbors to connect (model 'nn')|QgsProcessingParameterNumber.Integer|None|True|2|None
 QgsProcessingParameterNumber|maxdist|Absolute cost/distance threshold (several models)|QgsProcessingParameterNumber.Double|None|True|0.0|None
@@ -15,11 +15,15 @@ QgsProcessingParameterField|size|Numeric attribute field with node 'size' (model
 QgsProcessingParameterNumber|a|Exponential size weight 'a' (model 'xtent')|QgsProcessingParameterNumber.Double|None|True|0.0|None
 QgsProcessingParameterNumber|k|Linear distance weight 'k' (model 'xtent')|QgsProcessingParameterNumber.Double|None|True|0.0|None
 QgsProcessingParameterEnum|avg|Distance averaging function (model 'xtent')|mean;median|False|0|False
+QgsProcessingParameterNumber|costsyn|Cost synergy effect of re-using network links (requires 'costmap')|QgsProcessingParameterNumber.Double|0.0|True|0.0|1.0
 QgsProcessingParameterNumber|costerr|Costmap error margin (+/-) in percent (requires 'costmap')|QgsProcessingParameterNumber.Double|0.0|True|0.0|100.0
 QgsProcessingParameterNumber|costres|Costmap resampling factor (requires 'costmap' and 'costerr')|QgsProcessingParameterNumber.Integer|1|True|1|10
+*QgsProcessingParameterNumber|costmem|Max. memory for cost raster ops in MB (passed to 'r.cost')|QgsProcessingParameterNumber.Integer|300|True|300|300000
 *QgsProcessingParameterNumber|threshold|Threshold distance for topology tests|QgsProcessingParameterNumber.Double|0.000001|True|0.0|100000000
-QgsProcessingParameterVectorDestination|links|Output vector map for reconstructed network links (lines)
-QgsProcessingParameterVectorDestination|nodes|Output vector map for attributed network nodes (points)
-QgsProcessingParameterBoolean|-d|Drop unconnected nodes from output map|False
+*QgsProcessingParameterNumber|threads|Number of concurrent processing threads (1=no concurrency)|QgsProcessingParameterNumber.Integer|1|True|1|1024
+*QgsProcessingParameterNumber|sqlbuflen|Number of SQL statements to buffer (performance)|QgsProcessingParameterNumber.Integer|20|True|1|1000
+QgsProcessingParameterVectorDestination|links|Reconstructed network links (lines)
+QgsProcessingParameterVectorDestination|nodes|Attributed network nodes (points)
+*QgsProcessingParameterBoolean|-k|'Knight's move' for more accurate (but slower) cost computations|False
 QgsProcessingParameterBoolean|-m|Measure least-cost paths in meters instead of costs|False
-*QgsProcessingParameterBoolean|-r|Reduce input points to those in GRASS region (set below)|False
+*QgsProcessingParameterBoolean|-r|Reduce input nodes to those in GRASS region (set below)|False
