@@ -826,8 +826,9 @@ clean_links () {
 check_error () {
 	if [ ! "$?" -eq "0" ] ; then
 		g.message -e "$1"
-		if [ -n $2 ] && [ "$2" != "" ] ; then
-			# PID passed: kill!
+		if [ -n "${PKILL}" ] && [ -n $2 ] && [ "$2" != "" ] ; then
+			# PID passed and "pkill" command available: kill this and all
+			# subprocesses!
 			clean_up
 			g.message -e "Terminating job with PID $2 and all subprocesses."	
 			"${PKILL}" --signal 9 -P $2 &
@@ -3427,15 +3428,17 @@ mutex_release_seq() {
 # sub networks.
 #
 # Arguments:
-# 	$1 - thread ID (a unique integer 0..n)
+# 	$1 - thread ID (a unique integer 0..n): Only used for debugging purposes
 #   $2 - Goal contribution: pass 0 (int) to prevent this thread from
 #	     updating the global progress counter. Any integer value > 0
 #		 to make the thread update the global progress counter.
 #	$3 - the primary key of the current input feature (network node/point)
-#        to process
-#	$4 - globally unique job ID: an integer value provided by the caller.
-#	$5 - next primary key value (cat), provided by caller
-#   $6 - total number of threads/jobs run by caller (for status update)
+#        to be processed by this thread
+#	$4 - globally unique job ID: an integer value provided by the caller:
+#		 Used to create unique resource handles (mutexes, temporary maps)
+#	$5 - next primary key value (cat) for network links (provided by caller):
+#        Used for upload of cost attribute values to LCP network links.
+#   $6 - total number of threads/jobs run by caller (for accurate progress update)
 #	$7 - PID of caller process (required to kill entire script on fatal error)
 #
 model_complete_thread () {
@@ -3758,16 +3761,6 @@ ${DBMS_COMMIT}"
 	#DEBUG
 	#echo "THREAD $id COMPLETED"
 
-	#if [ "${goal}" -gt 0 ] ; then
-	#	# Update shared (by all threads) progress counter	
-	#	## MUTEX ON		
-	#	mutex_acquire "0.1" "${global_pid}_g_progress"
-	#	progress=`"${EXPR}" ${step} + 1`
-	#	g.message -p "${progress} ${num_jobs} 1"
-	#	mutex_release "${global_pid}_g_progress"
-	#	# MUTEX OFF
-	#fi
-
 	return 0
 }
 
@@ -3825,7 +3818,7 @@ model_complete () {
 	get_tbl_info "${GIS_OPT_INPUT}"	
 
 	# Initialize 'no data' representation for primary keys as empty string.
-	no_data=	
+	no_data=
 	# Make sure that we have a valid 'no data' encoding:
 	for key in $PRIMARY_KEYS ; do
 		if [ -z "${no_data}" ] ; then
@@ -3844,96 +3837,115 @@ model_complete () {
 	# with subnetworks that we patch together in one go, after the main loop has completed:
 	PATCH_LIST=
 	
-	# Calculate feature processing intervals (=dispatchers), based on number of
-	# processing threads (option 'threads='). The list of DISPATCHES will be used
-	# to control the outermost processing loop of this function.
-	num_features=`"${EXPR}" ${NUM_INPUT_NODES} - 1` # Process all features except for the last one!
-	if [ ${GIS_OPT_THREADS} -gt ${num_features} ] ; then
-		# We have more (requested) threads than features: adjust!
-		GIS_OPT_THREADS=${num_features}
-	fi
-	num_dispatches=`"${EXPR}" ${num_features} / ${GIS_OPT_THREADS}`	
-	remainder=`"${EXPR}" ${num_features} % ${GIS_OPT_THREADS}`
-	DISPATCHES=""
-	cur=0
-	while [ ${cur} -lt ${num_dispatches} ] ; do
-		DISPATCHES="${DISPATCHES}
+	# Process all features except for the last one!
+	num_features=`"${EXPR}" ${NUM_INPUT_NODES} - 1`
+	
+	# Main processing loop starts here:
+	# Program execution diverges here, depending on whether we are running in single
+	# or multi thread mode!
+	if [ ${GIS_OPT_THREADS} = 1 ] ; then
+		# SIMPLE CASE: We are running just one (foreground) thread to do the processing!
+		num_jobs=${num_features}
+		tid=0 # thread ID within current dispatch
+		job=0; # global counter for runs through the loop [0..num input points]
+		cat_next=1; # TODO
+		for key in $PRIMARY_KEYS ; do
+			if [ $job -lt $num_features ] ; then				
+				#DEBUG
+				#echo "SIM THREAD ${tid} LAUNCHED (goal=1) (key=$key) (step=$job) (cat_next=$cat_next) (num_jobs=$num_jobs) (global_pid=$$)"
+				# Run processing task in foreground, passing it the primary key:
+				model_complete_thread ${tid} 1 ${key} ${job} ${cat_next} ${num_jobs} $$
+				cat_next=`"${EXPR}" ${cat_next} + \( $num_features - $job \)`
+				# Add output of 'model_complete_thread' to list of link maps for delayed patching:
+				PATCH_LIST="${PATCH_LIST}
+${TMP_VECT_LINKS_PATCH}_${job}
+"
+				# Count up to next job ID:
+				job=`"${EXPR}" ${job} + 1`
+				# Update progress display:
+				g.message -p "${job} ${num_features} 1"
+			fi
+		done
+	else
+		# TRICKY CASE: We are running processing jobs in parallel!	
+		# Calculate feature processing intervals sizes (=dispatchers), based on number of
+		# processing threads (option 'threads='). The list of DISPATCHES will be used
+		# to control the outermost processing loop of this function.	
+		if [ ${GIS_OPT_THREADS} -gt ${num_features} ] ; then
+			# We have more (requested) threads than features: adjust!
+			GIS_OPT_THREADS=${num_features}
+		fi
+		num_dispatches=`"${EXPR}" ${num_features} / ${GIS_OPT_THREADS}`	
+		remainder=`"${EXPR}" ${num_features} % ${GIS_OPT_THREADS}`
+		DISPATCHES=""
+		cur=0
+		while [ ${cur} -lt ${num_dispatches} ] ; do
+			DISPATCHES="${DISPATCHES}
 ${GIS_OPT_THREADS}
 "
-		cur=`"${EXPR}" ${cur} + 1`
-	done
-	if [ ${remainder} -gt 0 ] ; then
-		DISPATCHES="${DISPATCHES}
+			cur=`"${EXPR}" ${cur} + 1`
+		done
+		if [ ${remainder} -gt 0 ] ; then
+			DISPATCHES="${DISPATCHES}
 ${remainder}
 "
-		num_dispatches=`"${EXPR}" ${num_dispatches} + 1`
-	fi
-	
-	# Calculate number of jobs:
-	if [ ${remainder} -gt 0 ] ; then
-		num_jobs=`"${EXPR}" \( ${num_dispatches} - 1 \) \* ${GIS_OPT_THREADS} + ${remainder}`
-	else
-		num_jobs=`"${EXPR}" ${num_dispatches} \* ${GIS_OPT_THREADS}`
-	fi
-	
-	# DEBUG
-	#echo "*** DEBUG ***"
-	#echo "num_jobs=$num_jobs"
-	#echo "global PID=$$"
-	#echo "GIS_OPT_THREADS=$GIS_OPT_THREADS"
-	#echo "num_features=$num_features"
-	#echo "num_dispatches=$num_dispatches"
-	#echo "remainder=$remainder"
-	#for cur in $DISPATCHES ; do
-	#	echo "$cur"
-	#done
-	#echo "*** ***"
-	
-	# Step through all points in input map.
-	# The actual processing work is done in a separate thread by model_complete_thread.
-	# The list $DISPATCHES contains the number of processing jobs to be dispatched
-	# in every run through the loop. For all but the last run, this will be the same
-	# as $GIS_OPT_THREADS. Only the last job might happen to be smaller than $GIS_OPT_THREADS.
-	mutex_release_seq 0 # Open global mutex lock for first thread in sequence.
-	job=0; # global counter for runs through the loop [0..num input points]
-	cat_next=1; # TODO
-	for dispatch in ${DISPATCHES} ; do
-		tid=0 # thread ID within current dispatch
-		# Launch as many jobs as current dispatch says:
-		while [ ${tid} -lt ${dispatch} ] ; do
-			i=0
-			for cur in $PRIMARY_KEYS ; do
-				# Get the primary attribute table key that matches the current feature:
-				if [ ${i} -eq ${job} ] ; then
-					# DEBUG
-					#echo "PK=${cur}"					
-					break;
+			num_dispatches=`"${EXPR}" ${num_dispatches} + 1`
+		fi
+		#
+		# Calculate number of processing jobs to run in total:
+		if [ ${remainder} -gt 0 ] ; then
+			num_jobs=`"${EXPR}" \( ${num_dispatches} - 1 \) \* ${GIS_OPT_THREADS} + ${remainder}`
+		else
+			num_jobs=`"${EXPR}" ${num_dispatches} \* ${GIS_OPT_THREADS}`
+		fi
+		#
+		# Step through all points in input map.
+		# The actual processing work is done in a separate thread by model_complete_thread.
+		# The list $DISPATCHES contains the number of processing jobs to be dispatched
+		# in every run through the loop. For all but the last run, this will be the same
+		# as $GIS_OPT_THREADS. Only the last job might happen to be smaller than $GIS_OPT_THREADS.
+		mutex_release_seq 0 # Open global mutex lock for first thread in sequence.
+		job=0; # global counter for runs through the loop [0..num input points]
+		cat_next=1; # TODO
+		for dispatch in ${DISPATCHES} ; do
+			tid=0 # thread ID within current dispatch
+			# Launch as many jobs as current dispatch says:
+			while [ ${tid} -lt ${dispatch} ] ; do
+				i=0
+				for cur in $PRIMARY_KEYS ; do
+					# Get the primary attribute table key that matches the current feature:
+					if [ ${i} -eq ${job} ] ; then
+						# DEBUG
+						#echo "PK=${cur}"					
+						break;
+					fi
+					if [ -n $BASH_VERSION ] ; then
+						let i=${i}+1
+					else					
+						i=`"${EXPR}" ${i} + 1`
+					fi
+				done
+				if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
+					# Launch a new processing thread in the background, passing it the primary key:
+					model_complete_thread ${tid} 1 ${cur} ${job} ${cat_next} ${num_jobs} $$ &
+				else
+					# Run processing task in foreground, passing it the primary key:
+					model_complete_thread ${tid} 1 ${cur} ${job} ${cat_next} ${num_jobs} $$
 				fi
-				if [ -n $BASH_VERSION ] ; then
-					let i=${i}+1
-				else					
-					i=`"${EXPR}" ${i} + 1`
+				cat_next=`"${EXPR}" ${cat_next} + \( $num_features - $job \)`
+				tid=`"${EXPR}" ${tid} + 1`
+				job=`"${EXPR}" ${job} + 1`
+				if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
+					${SLEEP} "0.02s" # Add a short delay before launching next thread (synchronisation)
 				fi
 			done
 			if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
-				# Launch a new processing thread in the background, passing it the primary key:
-				model_complete_thread ${tid} 1 ${cur} ${job} ${cat_next} ${num_jobs} $$ &
-			else
-				# Run processing task in foreground, passing it the primary key:
-				model_complete_thread ${tid} 1 ${cur} ${job} ${cat_next} ${num_jobs} $$
+				${WAIT} # Wait for all dispatched jobs to complete.
 			fi
-			cat_next=`"${EXPR}" ${cat_next} + \( $num_features - $job \)`
-			tid=`"${EXPR}" ${tid} + 1`
-			job=`"${EXPR}" ${job} + 1`			
-			if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
-				${SLEEP} "0.02s" # Add a short delay before launching next thread (synchronisation)
-			fi
-		done
-		if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
-			${WAIT} # Wait for all dispatched jobs to complete.
-		fi
-		g.message -p "${job} ${num_features} 1"
-	done
+			g.message -p "${job} ${num_features} 1"
+		done # Done running all dispatches for concurrent processing.
+		#
+	fi # Main loop ends here (both single and multi threaded operation).
 	
 	# DEBUG
 	#MARK=`date`
