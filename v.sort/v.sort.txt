@@ -1,11 +1,11 @@
 v.sort
-Sorts features of a vector map on values of a chosen field.
+Sorts storage order of features by values of chosen attribute.
 Vector (v.*)
-QgsProcessingParameterFeatureSource|input|Input vector map|0|None|False
-QgsProcessingParameterVectorDestination|output|Sorted output vector map
-QgsProcessingParameterField|by|Input map's attribute table column by which to sort (default: primary key)|None|input|0|False|False
+QgsProcessingParameterFeatureSource|input|Vector layer to sort|0|None|False
+QgsProcessingParameterVectorDestination|output|Sorted output vector layer
+QgsProcessingParameterField|by|Attribute field by which to sort|None|input|0|False|False
 QgsProcessingParameterEnum|order|Sort order|asc;desc|False|0|False
-QgsProcessingParameterString|delimiter|Delimiter for text field parsing (set only in case of errors)|None|False|True
+QgsProcessingParameterString|delimiter|Delimiter for text field parsing (use only in case of errors)|None|False|True
 QgsProcessingParameterBoolean|-e|Empty field values allowed|False
 QgsProcessingParameterBoolean|-i|Ignore leading blanks in field values|False
 QgsProcessingParameterBoolean|-n|Numeric sorting (forced)|False
