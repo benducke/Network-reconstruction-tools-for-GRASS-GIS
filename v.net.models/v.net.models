@@ -370,7 +370,7 @@ fi
 # Basic module setup.
 MODULE_NAME="v_net_models" # for prefixing temporary object names
 MODULE_NAME_EXEC="v.net.models" # name as run on the command line
-MODULE_VERSION="1.1.0"
+MODULE_VERSION="1.1.0b1"
 
 # Exit status variables.
 EXIT_OK=0
@@ -1524,7 +1524,7 @@ check_setup () {
 	
 	# Echo (test first, since the following require a working echo command!)
 	prg="${ECHO}"
-	result=`"${ECHO}" -n "1 2 4 3"`
+	result=`"${ECHO}" "1 2 4 3"`
 	if [ "$result" != "1 2 4 3" ] ; then
 		exit_error "$message ${prg}"
 	fi
