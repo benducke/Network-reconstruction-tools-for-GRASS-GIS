@@ -26,6 +26,12 @@
 #
 #############################################################################
 
+#UNIFY BINARY tests: if [ -n "${XYZ}" ] ; then ...
+#ADD ".exe" to Windows binaries
+#WRAP echo(.exe) !!!
+
+#-> Apply to ALL SCRIPTS!
+
 #
 # REQUIRED EXTERNAL PROGRAMS:
 # - grep
@@ -320,13 +326,14 @@ if [ -n "${MSYSPATH}" ] ; then
 	# "/c/msys64/usr/bin"
 	# That means we are running under MS Windows,
 	# and we must make some adjustments to external program calls!
-	AWK="${MSYSPATH}/awk"
-	CUT="${MSYSPATH}/cut"
-	DATE="${MSYSPATH}/date"
-	EXPR="${MSYSPATH}/expr"	
-	GREP="${MSYSPATH}/grep"
-	SORT="${MSYSPATH}/sort"	
-	WC="${MSYSPATH}/wc"
+	AWK="${MSYSPATH}/awk.exe"
+	CUT="${MSYSPATH}/cut.exe"
+	DATE="${MSYSPATH}/date.exe"
+	ECHO="${MSYSPATH}/echo.exe"
+	EXPR="${MSYSPATH}/expr.exe"	
+	GREP="${MSYSPATH}/grep.exe"
+	SORT="${MSYSPATH}/sort.exe"	
+	WC="${MSYSPATH}/wc.exe"
 	# Scripted GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
 	R_GROW="r.grow.bat"
 	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
@@ -336,10 +343,14 @@ if [ -n "${MSYSPATH}" ] ; then
 	V_DB_DROPTABLE="v.db.droptable.bat"
 	V_DB_UPDATE="v.db.update.bat"
 	V_TO_LINES="v.to.lines.bat"
+	# Set filter for line endings for this system:
+	IFS_NEWLINE=$'\r\n\b'
 else
+	# Linux and macOS: Use default built-in commands
 	AWK="awk"
 	CUT="cut"
 	DATE="date"
+	ECHO="echo"
 	EXPR="expr"
 	GREP="grep"
 	PKILL="pkill"
@@ -357,6 +368,8 @@ else
 	V_DB_DROPTABLE="v.db.droptable"
 	V_DB_UPDATE="v.db.update"
 	V_TO_LINES="v.to.lines"
+	# Set filter for line endings for this system:
+	IFS_NEWLINE=$'\n\b'
 fi
 
 # Basic module setup.
@@ -905,11 +918,7 @@ exit_error () {
 #                The contents for setting the variable are returend in "EVAL_RESULT".
 eval_ws_safe () {
 	OLD_IFS_EVAL_WS_SAFE="$IFS"
-	# Set list separator to newline and line break characters.
-	# This used to be: 
-	# IFS=$(echo -en "\n\b")
-	# However, macOS' shell does not interpret that form correctly.
-	IFS=$'\n\b'
+	IFS="${IFS_NEWLINE}"
 	# Process (list of) input line(s):
 	str=`echo "$1" | "${GREP}" "$2="`
 	for i in $str
@@ -1186,7 +1195,7 @@ list_len () {
 	# variable, so that this will work without clashes from within a caller
 	# caller loop that also fiddles around with IFS (not uncommon)!
 	OLD_IFS_LIST_LEN="$IFS"
-	IFS=$'\n\b'
+	IFS="${IFS_NEWLINE}"
 	
 	LIST_LEN=0
 	for item in $1 ; do
@@ -1222,7 +1231,7 @@ list_get () {
 	# variable, so that this will work without clashes from within a caller
 	# caller loop that also fiddles around with IFS (not uncommon)!
 	OLD_IFS_LIST_GET="$IFS"
-	IFS=$'\n\b'
+	IFS="${IFS_NEWLINE}"
 	
 	LIST_ITEM=
 	if [ $2 -lt 0 ] ; then
@@ -2248,7 +2257,7 @@ check_input () {
 	fi
 	# - must contain data for each feature (=${points})
 	num_keys=`v.db.select -c --quiet columns="${GIS_OPT_KEY}" map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" -v -e '^$' -c`
-	check_error "Key field (option 'key=') is not valid."
+	check_error "Key field (option 'key=') does not contain a key value for every feature."
 	if [ ${points} -ne ${num_keys} ] ; then
 		exit_error "Number of primary key records (option 'key=') does not match number of input points (${num_keys} keys vs ${points} points)."
 	fi
@@ -3144,8 +3153,8 @@ model_attsim () {
 			# Get info for connected database and table:
 			get_tbl_info "${GIS_OPT_LINKS}"
 			if [ -n "${LIST}" ] ; then
-				list=""	
-				IFS=$'\n\b'
+				list=""
+				IFS="${IFS_NEWLINE}"
 				for item in ${LIST} ; do
 					list="$list $item"
 					# Get the one link with $item in field 'from_id' and our current primary key in 'to_id',
@@ -4994,6 +5003,10 @@ MAIN () {
 # Keep track of starting time.
 START=`"${DATE}"`
 
+# Set default newline filter:
+IFS_BACKUP="$IFS"
+IFS="${IFS_NEWLINE}"
+
 # Check GRASS environment:
 check_environment
 
@@ -5253,6 +5266,9 @@ fi
 
 
 # DONE!
+
+# Restore default new line filter:
+IFS="$IFS_BACKUP"
 
 # Remove temp. maps, restore region, etc.
 clean_up
