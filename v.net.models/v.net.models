@@ -18,7 +18,7 @@
 #				commands called by this script). Care has been taken to allow
 #               v.net.models to also run under earlier versions of GRASS.
 #
-# COPYRIGHT:    (C) 2020-2024 by Benjamin Ducke
+# COPYRIGHT:    (C) 2020-2025 by Benjamin Ducke
 #
 #               This program is free software under the GNU General Public
 #               License (>=v2). Read the file COPYING that comes with GRASS
@@ -325,7 +325,7 @@ if [ -n "${MSYSPATH}" ] ; then
 	CUT="${MSYSPATH}/cut.exe"
 	DATE="${MSYSPATH}/date.exe"
 	ECHO="${MSYSPATH}/echo.exe"
-	EXPR="${MSYSPATH}/expr.exe"	
+	EXPR="${MSYSPATH}/expr.exe"
 	GREP="${MSYSPATH}/grep.exe"
 	SORT="${MSYSPATH}/sort.exe"	
 	WC="${MSYSPATH}/wc.exe"
@@ -366,6 +366,9 @@ else
 	# Set filter for line endings for this system:
 	IFS_NEWLINE=$'\n\b'
 fi
+
+# Keep a copy of IFS, as it was set before running this script!
+IFS_ORIGINAL="$IFS"
 
 # Basic module setup.
 MODULE_NAME="v_net_models" # for prefixing temporary object names
@@ -932,11 +935,15 @@ eval_ws_safe () {
 # FUNCTION
 # get_primary_keys: Build array of primary key values (from field chosen via 'key=' option).
 #                   FUNCTION check_input MUST RUN FIRST to validate GIS_OPT_KEY!!!
-#					 The only argument for this function ($1) is the name of the GRASS vector
+#				 	The only argument for this function ($1) is the name of the GRASS vector
 #                   map from which to gather the keys.
-#					 The name of the primary key field is read from $GIS_OPT_KEY.
+#					The name of the primary key field is read from $GIS_OPT_KEY.
 #                   Primary keys are returned in array PRIMARY_KEYS.
 #                   This function will abort the program if it encounters any errors!
+#
+#					WARNING: Make sure to set IFS correctly when parsing PRIMARY_KEYS as
+#					returned by this function!
+#
 get_primary_keys () {
 	PRIMARY_KEYS=`v.db.select map="$1" columns="${GIS_OPT_KEY}" -c --quiet`
 	check_error "Failed to retrieve primary keys (map='$1')."
@@ -953,6 +960,10 @@ get_primary_keys () {
 #                 	Primary keys are returned in array GRASS_CATS.
 #					Name of GRASS primary key column for map '$1' is returned in variable GRASS_PKEY. 
 #                 	This function will abort the program if it encounters any errors!
+#
+#					WARNING: Make sure to set IFS correctly when parsing GRASS_CATS as
+#					returned by this function!
+#
 get_grass_cats () {
 	cmd=`v.info -e map="$1"`
 	check_error "Failed to query vector map '$1' for extended metadata."
@@ -1533,7 +1544,7 @@ check_setup () {
 	
 	# Awk	
 	prg="${AWK}"
-	if [ -n ${prg} ] ; then
+	if [ -n "${prg}" ] ; then
 		result=`"${ECHO}" "1 2 4 3" | ${prg} '{ print $3 }'`
 		if [ $result -ne 4 ] ; then
 			exit_error "$message ${prg}"
@@ -1542,7 +1553,7 @@ check_setup () {
 	
 	# Cut
 	prg="${CUT}"
-	if [ -n ${prg} ] ; then
+	if [ -n "${prg}" ] ; then
 		result=`"${ECHO}" "1,2,4,3" | ${prg} -f3 -d,`
 		if [ $result -ne 4 ] ; then
 			exit_error "$message ${prg}"
@@ -1551,14 +1562,14 @@ check_setup () {
 	
 	# Date
 	prg="${DATE}"
-	if [ -n ${prg} ] ; then
+	if [ -n "${prg}" ] ; then
 		: $(${prg} -u)
 		check_error "${message} '${prg}'."
 	fi
 	
 	# Expr
 	prg="${EXPR}"
-	if [ -n ${prg} ] ; then
+	if [ -n "${prg}" ] ; then
 		result=`${prg} 1 + 3`
 		if [ $result -ne 4 ] ; then
 			exit_error "$message ${prg}"
@@ -1567,7 +1578,7 @@ check_setup () {
 	
 	# Grep
 	prg="${GREP}"
-	if [ -n ${prg} ] ; then
+	if [ -n "${prg}" ] ; then
 		result=`"${ECHO}" "1 2 3 4" | ${prg} "3 4" -c`
 		if [ $result -ne 1 ] ; then
 			exit_error "$message ${prg}"
@@ -1586,7 +1597,7 @@ check_setup () {
 		# We have pkill command: Let's check that it works!
 		# TODO: There seems to be no portable AND safe way of checking
 		#       that pkill works. For now, we just trust that it's there
-		#		if §PKILL is declared.
+		#		if $PKILL is declared!
 		#prg="${PKILL}"
 		#: $(${prg} --help)
 		#check_error "${message} '${prg}'."
@@ -1604,14 +1615,14 @@ check_setup () {
 	
 	# Sort
 	prg="${SORT}"
-	if [ -n ${prg} ] ; then
+	if [ -n "${prg}" ] ; then
 		result=`"${ECHO}" "Just one line." | ${prg}`
 		check_error "${message} '${prg}'."
 	fi
 	
 	# Wc
 	prg="${WC}"
-	if [ -n ${prg} ] ; then	
+	if [ -n "${prg}" ] ; then	
 		result=`"${ECHO}" "one two five" | ${prg} -w`
 		if [ $result -ne 3 ] ; then
 			exit_error "$message ${prg}"
@@ -1941,6 +1952,8 @@ check_input () {
 	# Validate that geometries (FID) and attribute links (CAT) start at '1',
 	# and are in strictly ascending, unbroken order!
 	g.message -i "Validating sequence of primary keys in input map..."
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	get_grass_cats "${GIS_OPT_INPUT}"
 	i=1
 	for cur_key in $GRASS_CATS ; do
@@ -1952,7 +1965,8 @@ check_input () {
 		else		
 			i=`${EXPR} $i + 1`
 		fi
-	done	
+	done
+	IFS="${IFS_BACKUP}"
 	#
 	# From this point onward, we can assume that the GRASS primary keys ('cat') of the input map
 	# are in a strict, unbroken sequence "1,2,..n"!
@@ -2359,6 +2373,8 @@ check_input () {
 		g.message -i "Checking input points (${NUM_INPUT_NODES}) for duplicates:"		
 		get_primary_keys "${GIS_OPT_INPUT}"
 		step=1
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
 		for key in $PRIMARY_KEYS ; do
 			# TODO: One of the modules in this loop pollutes the console with
 			#       'WARNING: Values in column <cat> will be overwritten' messages.
@@ -2394,6 +2410,7 @@ check_input () {
 				step=`"${EXPR}" ${step} + 1`
 			fi
 		done
+		IFS="${IFS_BACKUP}"
 	fi
 
 	# CHECK 'INITIAL' LINKS MAP AFTER OTHER INPUT MAP TESTS HAVE BEEN COMPLETED
@@ -2614,6 +2631,8 @@ check_input () {
 		# If not, then we issue a warning, since the presence of unconnected nodes
 		# is not harmful.
 		get_primary_keys "${GIS_OPT_INPUT}"
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
 		for key in ${PRIMARY_KEYS} ; do
 			# Step through all input nodes and count number of connections:
 			num_connections_from=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${LINKS_FLD_FROM_ID}=${key}" column="${LINKS_FLD_FROM_ID}" -c | "${GREP}" "${key}" -c`
@@ -2636,10 +2655,13 @@ check_input () {
 				g.message -w "Node with primary key '${GIS_OPT_KEY}=${key}' is unconnected in 'initial' links map."
 			fi
 		done
+		IFS="${IFS_BACKUP}"
 		# Now the other way around: we traverse all from/to ID fields in initial links map
 		# and check if there are two corresponding nodes in GIS_OPT_INPUT.
 		# If NOT, then we have a FATAL ERROR.
 		get_grass_cats "${GIS_OPT_INITIAL}"
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
 		# Check all from_id fields:
 		for cat in ${GRASS_CATS} ; do
 			# Get value of 'from_id' for this link:
@@ -2669,11 +2691,14 @@ check_input () {
 			if [ ${num_connections_total} -lt 2 ] ; then				
 				exit_error "Initial link with primary key '${GRASS_PKEY}=${cat}' is not connected to two nodes in input map. Hint: Check extents of GRASS region (must completely contain initial links)."				
 			fi
-		done		
+		done
+		IFS="${IFS_BACKUP}"
 		#
 		# 4. Check that the same two nodes are not linked more than once in INITIAL:
 		#
 		get_grass_cats "${GIS_OPT_INITIAL}"
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
 		for cat in ${GRASS_CATS} ; do
 			init_from_id=`v.db.select map="${GIS_OPT_INITIAL}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_FROM_ID}" -c`
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_FROM_ID}') from 'initial' links input map."
@@ -2692,6 +2717,7 @@ check_input () {
 				exit_error "At least one pair of nodes connected by more than one link in initial links map."
 			fi
 		done # Checking map passed as "initial="
+		IFS="${IFS_BACKUP}"
 		
 	fi # Finished all input data checks
 	
@@ -3113,6 +3139,8 @@ model_attsim () {
 	check_error "Failed to initalize attribute field '${LINKS_FLD_STRENGTH}' to '0' for all links in output vector map."
 	# Step through all (filtered) input nodes:
 	get_primary_keys "${GIS_OPT_INPUT}"
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
 	for key in $PRIMARY_KEYS ; do
 		# Step through attribute all fields:
@@ -3201,12 +3229,15 @@ model_attsim () {
 			step=`"${EXPR}" ${step} + 1`
 		fi
 	done
+	IFS="${IFS_BACKUP}"
 	
 	# PASS 2: Step through all links again and delete those that have strength '0'
 	# Store name of original links output map (we might modify it).
 	links_org="${GIS_OPT_LINKS}"
 	# Get GRASS primary keys for links map and step through them:
 	get_grass_cats "${GIS_OPT_LINKS}"
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	for cat in ${GRASS_CATS} ; do
 		# Get strength of link:
 		strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_STRENGTH}" where="${GRASS_PKEY}=${cat}" -c --quiet`
@@ -3222,6 +3253,7 @@ model_attsim () {
 			links_droprow "${cat}"
 		fi
 	done
+	IFS="${IFS_BACKUP}"
 	
 	# In case that any rows were dropped, we need to copy the temporary
 	# map with reduced attribute table back to the original output map!
@@ -3608,6 +3640,8 @@ model_complete_thread () {
 			# First cat in attribute table is provided by calling function!
 			cat_cost=$cat_next
 			# Index of first cost value starts at '1' for each thread!
+			IFS_BACKUP="$IFS"
+			IFS="${IFS_NEWLINE}"
 			next_cost=1	
 			for to_id in $TO_IDS ; do
 				# Initialize contents of first SQL_CHUNK to 'empty':
@@ -3662,6 +3696,7 @@ ${DBMS_COMMIT}"
 					fi
 				fi
 			done			
+			IFS="${IFS_BACKUP}"
 						
 			# Compute least cost vector paths based on directional surface computed above
 			# (end points now become start points, as r.cost has produced back-links!):
@@ -3834,6 +3869,8 @@ model_complete () {
 	# Initialize 'no data' representation for primary keys as empty string.
 	no_data=
 	# Make sure that we have a valid 'no data' encoding:
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	for key in $PRIMARY_KEYS ; do
 		if [ -z "${no_data}" ] ; then
 			# 'no data' has not yet been set: We do so now.
@@ -3846,6 +3883,7 @@ model_complete () {
 			break
 		fi
 	done
+	IFS="${IFS_BACKUP}"
 	
 	# PATCH_LIST: This list is where we keep the names of the temporary vector maps
 	# with subnetworks that we patch together in one go, after the main loop has completed:
@@ -4081,7 +4119,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# Initialize contents of first SQL_CHUNK to 'empty':
 	SQL_CHUNK="${DBMS_BEGIN}"
 	#
-	g.message -i "Transferring input point attributes to output lines (links):"
+	g.message -i "Transferring input point attributes to output lines (links):"	
 	# Step through all points of input map and connect them with each other.
 	previous="" # List of previous primary keys that have already been connected as "TO" nodes.
 	step=1 # This one is just for progress reporting.
@@ -4126,12 +4164,13 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	get_tbl_info "${GIS_OPT_LINKS}"
 	# Now transfer attibutes from original input map to links output map!
 	get_primary_keys "${GIS_OPT_INPUT}"
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	for key in $PRIMARY_KEYS ; do
 		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
 			previous="${previous} $key " # Add current key to list of previous keys.
  			# Compose SQL WHERE statement for retreiving  next primary key value.
 			get_where_clause "${key}"
-			#val=`v.db.select map="${GIS_OPT_KEY}" column="${GIS_OPT_KEY}" where="${WHERE}" -c`
 			val=`db.select database="${in_attr_db}" driver="${in_attr_drv}" sql="SELECT ${GIS_OPT_KEY} FROM ${in_attr_tbl} WHERE ${WHERE};" -c --quiet`
 			check_error "Failed to query attribute table of copy of input points map."
 			if [ -n "${val}" ] ; then # Feature exists! Process it:
@@ -4231,6 +4270,7 @@ ${DBMS_COMMIT}"
 			step=`"${EXPR}" ${step} + 1`
 		fi
 	done
+	IFS="${IFS_BACKUP}"
 	
 	# DEBUG
 	#MARK=`date`
@@ -4266,6 +4306,8 @@ ${DBMS_COMMIT}"
 		SQL_CHUNK="${DBMS_BEGIN}"
 		g.message -i "Updating link costs and uploading to links output attribute table:"		
 		step=1 # This one is just for progress reporting.
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
 		for cat in ${GRASS_CATS} ; do
 			# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
 			if [ -n $BASH_VERSION ] ; then
@@ -4344,6 +4386,7 @@ ${DBMS_COMMIT}"
 				step=`"${EXPR}" ${step} + 1`
 			fi			
 		done
+		IFS="${IFS_BACKUP}"
 	fi
 	
 	# DEBUG
@@ -4373,6 +4416,8 @@ ${DBMS_COMMIT}"
 		line_old=-1
 		new_cat_old=-1
 		step=1 # This one is just for progress reporting.
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
 		for key in $PRIMARY_KEYS ; do
 			WHERE="${LINKS_FLD_FROM_ID}=$key"
 			#RECS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" column="cat" where="${WHERE}" -c`
@@ -4464,6 +4509,7 @@ ${DBMS_COMMIT}"
 				step=`"${EXPR}" ${step} + 1`
 			fi
 		done
+		IFS="${IFS_BACKUP}"
 		
 		# DEBUG
 		#MARK=`date`
@@ -4524,6 +4570,8 @@ model_delaunay () {
 	links_org="${GIS_OPT_LINKS}"
 	# Step through all links and use v.edit to delete every link that is not also a Delaunay link	
 	get_grass_cats "${GIS_OPT_LINKS}"
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
 	for cat in ${GRASS_CATS} ; do		
 		preserve="false"
@@ -4572,6 +4620,7 @@ model_delaunay () {
 			step=`"${EXPR}" ${step} + 1`
 		fi
 	done
+	IFS="${IFS_BACKUP}"
 
 	# In case that any rows were dropped, we need to copy the temporary
 	# map with reduced attribute table back to the original output map!
@@ -4601,6 +4650,8 @@ model_linkdist () {
 	links_org="${GIS_OPT_LINKS}"
 	# Step through all links and use v.edit to delete every link that is longer than 'maxdist'	
 	get_grass_cats "${GIS_OPT_LINKS}"
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
 	for cat in ${GRASS_CATS} ; do				
 		# This will produce a non-empty result only if the current link's length exceeds the threshold:
@@ -4622,6 +4673,7 @@ model_linkdist () {
 			step=`"${EXPR}" ${step} + 1`
 		fi
 	done
+	IFS="${IFS_BACKUP}"
 	
 	# In case that any rows were dropped, we need to copy the temporary
 	# map with reduced attribute table back to the original output map!
@@ -4662,6 +4714,8 @@ model_nn () {
 	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."	
 	# Step through all input nodes:
 	get_primary_keys "${GIS_OPT_INPUT}"
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
 	for key in $PRIMARY_KEYS ; do
 		if [ -n "${GIS_OPT_SIZE}" ] ; then
@@ -4750,7 +4804,8 @@ ${CATS_TO}"
 				step=`"${EXPR}" ${step} + 1`
 			fi
 		fi
-	done	
+	done
+	IFS="${IFS_BACKUP}"
 	
 	# Now we delete all the links that are not marked "keep=1"
 	CATS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_keep}=0" -c`
@@ -4818,6 +4873,8 @@ model_xtent () {
 	# Step through all links and use v.edit to delete every link which scores I <= 0 for XTENT
 	# or is longer than 'maxdist' (if applicable)
 	get_grass_cats "${GIS_OPT_LINKS}"
+	IFS_BACKUP="$IFS"
+	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
 	for cat in ${GRASS_CATS} ; do
 		# Get size of "from node"
@@ -4900,6 +4957,7 @@ model_xtent () {
 			step=`"${EXPR}" ${step} + 1`
 		fi
 	done
+	IFS="${IFS_BACKUP}"
 	
 	# In case that any rows were dropped, we need to copy the temporary
 	# map with reduced attribute table back to the original output map!
@@ -5008,10 +5066,6 @@ MAIN () {
 # Keep track of starting time.
 START=`"${DATE}"`
 
-# Set default newline filter:
-IFS_BACKUP="$IFS"
-IFS="${IFS_NEWLINE}"
-
 # Check GRASS environment:
 check_environment
 
@@ -5105,6 +5159,8 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			# Get all primary keys (GIS_OPT_KEY) for nodes input map:						
 			get_primary_keys "${GIS_OPT_INPUT}"
 			# Primary loop steps through all nodes in GIS_OPT_INPUT via 'key':
+			IFS_BACKUP="$IFS"
+			IFS="${IFS_NEWLINE}"
 			step=1 # For progress reporting
 			for key in ${PRIMARY_KEYS} ; do
 				# Secondary loop steps through all nodes in GIS_OPT_LINKS via 'cat':
@@ -5148,6 +5204,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 					step=`"${EXPR}" ${step} + 1`
 				fi
 			done
+			IFS="${IFS_BACKUP}"
 		fi
 		if [ ${TRIGGER_ATTR_COST} == "TRUE" ] ; then
 			g.message -i "Computing costs of links in 'initial' links map..."
@@ -5167,6 +5224,8 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			get_tbl_info "${GIS_OPT_LINKS}"
 			# Process all links.
 			get_grass_cats "${GIS_OPT_LINKS}"
+			IFS_BACKUP="$IFS"
+			IFS="${IFS_NEWLINE}"
 			# Primary loop steps through all nodes in GIS_OPT_LINKS:
 			step=1 # For progress reporting
 			for cat in ${GRASS_CATS} ; do
@@ -5224,6 +5283,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 					step=`"${EXPR}" ${step} + 1`
 				fi
 			done
+			IFS="${IFS_BACKUP}"
 			RUNMODE_COST="TRUE" # cost attribute exists now
 		fi
 	fi
@@ -5275,9 +5335,6 @@ fi
 
 
 # DONE!
-
-# Restore default new line filter:
-IFS="$IFS_BACKUP"
 
 # Remove temp. maps, restore region, etc.
 clean_up
