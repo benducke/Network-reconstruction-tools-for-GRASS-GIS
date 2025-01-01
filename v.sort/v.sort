@@ -17,7 +17,7 @@
 #				any later version that retains the GRASS 8 syntax for the GRASS
 #				commands called by this script).
 #
-# COPYRIGHT:    (C) 2024 by Benjamin Ducke
+# COPYRIGHT:    (C) 2024-2025 by Benjamin Ducke
 #
 #               This program is free software under the GNU General Public
 #               License (>=v2). Read the file COPYING that comes with GRASS
@@ -32,10 +32,10 @@
 #
 # REQUIRED EXTERNAL PROGRAMS:
 # - grep
+# - echo (on Windows)
 # - expr
 # - date
 # - cut
-# - pkill
 # - sort
 # - wc
 #
@@ -143,34 +143,38 @@ if [ -n "${MSYSPATH}" ] ; then
 	# "/c/msys64/usr/bin"
 	# That means we are running under MS Windows,
 	# and we must make some adjustments to external program calls!
-	CUT="${MSYSPATH}/cut"
-	DATE="${MSYSPATH}/date"
-	EXPR="${MSYSPATH}/expr"	
-	GREP="${MSYSPATH}/grep"
-	SORT="${MSYSPATH}/sort"
-	PKILL="${MSYSPATH}/pkill"
-	WC="${MSYSPATH}/wc"
+	CUT="${MSYSPATH}/cut.exe"
+	DATE="${MSYSPATH}/date.exe"
+	ECHO="${MSYSPATH}/echo.exe"	
+	EXPR="${MSYSPATH}/expr.exe"	
+	GREP="${MSYSPATH}/grep.exe"
+	SORT="${MSYSPATH}/sort.exe"
+	WC="${MSYSPATH}/wc.exe"
 	# Scripted GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
 	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
 	V_DB_ADDTABLE="v.db.addtable.bat"
+	# Set filter for line endings for this system:
+	IFS_NEWLINE=$'\r\n\b'
 else
 	CUT="cut"
 	DATE="date"
+	ECHO="echo"
 	EXPR="expr"
 	GREP="grep"	
 	SORT="sort"
-	PKILL="pkill"
 	WC="wc"
 	# These are the GRASS commands that are actually Shell/Python scripts.
 	# On Linux/macOS they are executed through the shell, just like binaries.
 	V_DB_ADDCOLUMN="v.db.addcolumn"
 	V_DB_ADDTABLE="v.db.addtable"
+	# Set filter for line endings for this system:
+	IFS_NEWLINE=$'\n\b'
 fi
 
 # Basic module setup.
 MODULE_NAME="v_sort" # for prefixing temporary object names
 MODULE_NAME_EXEC="v.sort" # name as run on the command line
-MODULE_VERSION="1.1.0"
+MODULE_VERSION="1.1.0b1"
 
 # Exit status variables.
 EXIT_OK=0
@@ -186,14 +190,14 @@ DBMS_PRESERVES_ORDER=0  # Indicates whether the DBMS preserves order of record i
 DBMS_FILE_PATH=0		# Indicates whether the DBMS driver uses a file path to specify the location of a database.
 DBMS_IDENT_QUOTE='"'	# Quoting character for field/table names that (might) contain spaces
 DBMS_BEGIN="BEGIN;"		# Opening statement for an SQL transction; most DBMS should understand "BEGIN;"
-DBMS_COMMIT="COMMIT;"	# Closing statement for an SQL transction; most DBMS should understand "COMMIT;"
+DBMS_COMMIT="COMMIT;";	# Closing statement for an SQL transction; most DBMS should understand "COMMIT;"
 
 # List of fully supported DBMS (GRASS driver names):
 DBMS_SUPPORT_LIST="mesql,mysql,sqlite"
 
 # Basic sanity checks.
 if [ -z "$GISBASE" ] ; then
-    echo "ERROR: You must be in GRASS GIS to run this program." 1>&2
+    "${ECHO}" "ERROR: You must be in GRASS GIS to run this program." 1>&2
     exit ${EXIT_ERROR}
 fi
 
@@ -216,7 +220,7 @@ if [ -n "$GRASS_V6" ] ; then
 fi
 
 # Create prefix for all temporary maps
-TMP_PREFIX="tmp_${MODULE_NAME}_`echo $$`_d"
+TMP_PREFIX="tmp_${MODULE_NAME}_`"${ECHO}" $$`_d"
 
 # Names of temporary maps (VECTOR)
 TMP_VECT_EXTRACT="${TMP_PREFIX}_v_extract" 				# Feature(s) extracted from input vector map
@@ -237,7 +241,6 @@ clean_up () {
 
 # Make sure we get to clean up!
 trap "g.message -i 'Terminated by user (CTRL+C).' ; clean_up ; exit ${EXIT_CTRL_C}" 2 # user interrupt (CTRL+C)
-#trap "'Unexpected termination.' ; clean_up ; exit ${EXIT_TERMINATED}" 1 # external interrupt
 
 
 # FUNCTION
@@ -258,8 +261,9 @@ trap "g.message -i 'Terminated by user (CTRL+C).' ; clean_up ; exit ${EXIT_CTRL_
 check_error () {
 	if [ ! "$?" -eq "0" ] ; then
 		g.message -e "$1"
-		if [ -n $2 ] && [ "$2" != "" ] ; then
-			# PID passed: kill!
+		if [ -n "${PKILL}" ] && [ -n $2 ] && [ "$2" != "" ] ; then
+			# PID passed and "pkill" command available: kill this and all
+			# subprocesses!
 			clean_up
 			g.message -e "Terminating job with PID $2 and all subprocesses."	
 			"${PKILL}" --signal 9 -P $2 &
@@ -330,25 +334,22 @@ exit_error () {
 #				  This is also the safer option to use if an 'eval' statement would
 #                potentially encounter values with white space for variables other
 #			 	  than the target variable.
-#                The contents for setting the variable are returend in "EVAL_RESULT".
+#                The contents for setting the variable are returned in "EVAL_RESULT".
 eval_ws_safe () {
 	OLD_IFS_EVAL_WS_SAFE="$IFS"
-	# Set list separator to newline and line break characters.
-	# This used to be: 
-	# IFS=$(echo -en "\n\b")
-	# However, macOS' shell does not interpret that form correctly.
-	IFS=$'\n\b'
+	# Set list separator to newline and line break characters:
+	IFS="${IFS_NEWLINE}"
 	# Process (list of) input line(s):
-	str=`echo "$1" | "${GREP}" "$2="`
+	str=`${ECHO} "$1" | "${GREP}" "$2="`
 	for i in $str
 	do
 		IFS="="
 		CUR=$i
-		for j in $CUR
+		for j in $CUR				
 		do			
-			EVAL_RESULT="$j"
+			EVAL_RESULT="$j"			
 		done
-	done	
+	done
 	IFS="$OLD_IFS_EVAL_WS_SAFE"
 }
 
@@ -357,32 +358,104 @@ eval_ws_safe () {
 # check_setup: Check system setup (required external programs available?).
 check_setup () {	
 	
-	message="Failed to run required program: "
+	message="Required program not found or not working as expected: "
+	
+	# Echo (test first, since the following require a working echo command!)
+	prg="${ECHO}"
+	result=`"${ECHO}" "1 2 4 3"`
+	if [ "$result" != "1 2 4 3" ] ; then
+		exit_error "$message ${prg}"
+	fi
+	
+	# The following commands are only tested if they have been defined!
+	
+	# Awk	
+	prg="${AWK}"
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "1 2 4 3" | ${prg} '{ print $3 }'`
+		if [ $result -ne 4 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+	
+	# Cut
+	prg="${CUT}"
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "1,2,4,3" | ${prg} -f3 -d,`
+		if [ $result -ne 4 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
 	
 	# Date
 	prg="${DATE}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		: $(${prg} -u)
+		check_error "${message} '${prg}'."
+	fi
 	
 	# Expr
 	prg="${EXPR}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		result=`${prg} 1 + 3`
+		if [ $result -ne 4 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
 	
 	# Grep
 	prg="${GREP}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "1 2 3 4" | ${prg} "3 4" -c`
+		if [ $result -ne 1 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+	
+	# Check for multi-threading support.
+	# Pkill, Sleep, Wait: Multi-threading support
+	if [ -z "${PKILL}" ] || [ -z "${WAIT}" ] || [ -z "${SLEEP}" ] ; then
+		# If any of these commands ire missing then we are running on a system (likely Windows)
+		# that does not have what it takes for concurrent execution of shell scripts.
+		MULTI_THREADING_SUPPORT=
+	else
+		# In the other case, all three of pkill, wait and sleep must be present!
+		#
+		# We have pkill command: Let's check that it works!
+		# TODO: There seems to be no portable AND safe way of checking
+		#       that pkill works. For now, we just trust that it's there
+		#		if $PKILL is declared!
+		#prg="${PKILL}"
+		#: $(${prg} --help)
+		#check_error "${message} '${prg}'."
+		# We have sleep command: Let's check that it works!
+		prg="${SLEEP}"
+		: $(${prg} 0.1)
+		check_error "${message} '${prg}'."
+		# We have wait command: Let's check that it works!
+		prg="${WAIT}"
+		: $(${prg})
+		check_error "${message} '${prg}'."
+		# Support for multi-threading exists!
+		MULTI_THREADING_SUPPORT="y"
+	fi
 	
 	# Sort
 	prg="${SORT}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "Just one line." | ${prg}`
+		check_error "${message} '${prg}'."
+	fi
 	
 	# Wc
 	prg="${WC}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then	
+		result=`"${ECHO}" "one two five" | ${prg} -w`
+		if [ $result -ne 3 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+	
 }
 
 
@@ -451,7 +524,7 @@ check_environment () {
 		DBMS_IDENT_QUOTE="'"
 		# It is possible to force the SQLite backend driver to use one
 		# DB per vector map instead of one DB per mapset.
-		result=`echo "$GRASS_DB_database" | "${GREP}" '/vector/$MAP/' -c`
+		result=`"${ECHO}" "$GRASS_DB_database" | "${GREP}" '/vector/$MAP/' -c`
 		if [ ${result} -gt 0 ] ; then
 			DBMS_THREAD_SAFE=1
 			g.message -w "SQLite backend appears to be in per-map mode. Expect errors."
@@ -509,12 +582,16 @@ check_environment () {
 #			editors will find this as a mark when parsing the source
 #		   	code in SH mode, and it will be added to the document outline. 
 MAIN () {
-	echo ""
+	"${ECHO}" ""
 }
+
 
 ########
 # MAIN #
 ########
+
+# Keep track of starting time.
+START=`"${DATE}"`
 
 # Only print supported DBMS?
 if [ ${GIS_FLAG_P} -eq 1 ] ; then
@@ -534,9 +611,6 @@ fi
 # Run all pre-flight checks:
 check_setup
 check_params
-
-# Keep track of starting time.
-START=`"${DATE}"`
 
 # GO! GO!
 
@@ -607,31 +681,32 @@ fi
 # Get the sorted list of "value|primary key" pairs first:
 vals=`v.db.select map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" col="${GIS_OPT_BY},${EVAL_RESULT}" -c separator="${GIS_OPT_DELIMITER}"`
 check_error "Failed to retrieve list of sorted key-value pairs for input vector map '${GIS_OPT_INPUT}'."
-sorted_pairs=`echo "${vals}" | "${SORT}" ${sort_opts} 2>/dev/null`
-check_error "Failed to retrieve list of sorted field values for input vector map '${GIS_OPT_INPUT}'."
+sorted_pairs=`"${ECHO}" "${vals}" | "${SORT}" ${sort_opts} 2>/dev/null`
+check_error "Failed to retrieve list of value|primary keys for input vector map '${GIS_OPT_INPUT}'."
 # Now get only the list of sort field values:
-sorted_vals=`echo "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 1`
+sorted_vals=`"${ECHO}" "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 1`
 check_error "Failed to retrieve list of sorted field values for input vector map '${GIS_OPT_INPUT}'."
 # Now get only the list of associated primary keys in the same order.
-sorted_keys=`echo "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 2`
+sorted_keys=`"${ECHO}" "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 2`
 check_error "Failed to retrieve list of sorted primary key values for input vector map '${GIS_OPT_INPUT}'."
 # Now check if there is a field #3 when using the current separator character. If so, then
 # we have a problem!
-check_sep=`echo "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 3`
-num_words_check=`echo "${check_sep}" | "${WC}" -w`
+check_sep=`"${ECHO}" "${sorted_pairs}" | "${CUT}" -d "${GIS_OPT_DELIMITER}" -f 3`
+num_words_check=`"${ECHO}" "${check_sep}" | "${WC}" -w`
 if [ ${num_words_check} -gt 0 ] ; then
 	exit_error "Use option 'delimiter=' to set a field separator that does not occur as part of the data in column '${GIS_OPT_BY}'!"
 fi
+
 
 # Check for empty field values, unless "-e" given!
 # At least one empty field value is assumed to exist, if the
 # list of values returned by "sort" is longer than the number
 # of variables in ${sorted_vals} which the DO loop iterates over.
 if [ ${GIS_FLAG_E} -eq 0 ] ; then	
-	num_lines_sort=`echo "${sorted_vals}" | "${WC}" -l`
+	num_lines_sort=`"${ECHO}" "${sorted_vals}" | "${WC}" -l`
 	check_error "Failed to determine number of lines in output of 'sort' command."
 	OLD_IFS="$IFS"
-	IFS=$'\n\b'
+	IFS="${IFS_NEWLINE}"
 	num_vals=0
 	for val in ${sorted_vals} ; do
 		if [ -n $BASH_VERSION ] ; then
@@ -657,7 +732,7 @@ fi
 if [ ${GIS_FLAG_U} -eq 1 ] ; then
 	i=1
 	OLD_IFS="$IFS"
-	IFS=$'\n\b'
+	IFS="${IFS_NEWLINE}"
 	for val in ${sorted_vals} ; do
 		if [ $i -gt 1 ] ; then
 			if [ "${val}" = "${previous}" ] ; then
@@ -687,7 +762,7 @@ fi
 eval `v.info -t map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
 check_error "Failed to get topology info for input vector map."
 i=1
-num_features=`echo "${sorted_keys}" | "${WC}" -l`
+num_features=`"${ECHO}" "${sorted_keys}" | "${WC}" -l`
 if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 	g.message -i "Extracting ordered features to new output map:"
 fi
@@ -742,9 +817,6 @@ if [ ${DBMS_FILE_PATH} -gt 0 ] ; then
 	fi	
 fi
 
-#DEBUG
-#echo "${from_db_path} -> ${to_db_path}"
-
 # Check whether both tables are in the same attribute database!
 if [ "${from_db_path}" != "${to_db_path}" ] ; then
 	exit_error "Input and output maps must have their attribute tables in the same database."
@@ -754,23 +826,20 @@ fi
 FIELDS=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet`
 num_fields=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet | "${WC}" -l`
 OLD_IFS="$IFS"
-IFS=$'\n\b'
+IFS="${IFS_NEWLINE}"
 if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 	g.message -i "Adding ${num_fields} fields to output map's attribute table:"
 fi
-if [ ${num_fields} -gt 0 ] ; then
-	g.message -w "The input map's attribute layer has a lot of columns (fields). Consider dropping some for better performance."
-fi
 i=1
 for field in ${FIELDS} ; do
-	type=`echo "${field}" | "${CUT}" -d "|" -f 1`	
-	name=`echo "${field}" | "${CUT}" -d "|" -f 2`
+	type=`"${ECHO}" "${field}" | "${CUT}" -d "|" -f 1`	
+	name=`"${ECHO}" "${field}" | "${CUT}" -d "|" -f 2`
 	# DEBUG
 	#echo "$type|$name"
 	# If there is a third field, then the field name contains "|" in which case we can
 	# only bail out!
-	check=`echo "${field}" | "${CUT}" -d "|" -f 3`
-	num_words_check=`echo "${check}" | "${WC}" -w`
+	check=`"${ECHO}" "${field}" | "${CUT}" -d "|" -f 3`
+	num_words_check=`"${ECHO}" "${check}" | "${WC}" -w`
 	if [ ${num_words_check} -gt 0 ] ; then
 	exit_error "Field '${name}|${check}' contains '|' as part of its name. Please rename field."
 fi
@@ -789,8 +858,6 @@ fi
 	fi
 done
 IFS="$OLD_IFS"
-# DEBUG
-#v.info -c $GIS_OPT_OUTPUT
 
 # Get name of attribute table attached to the chosen layer of input map:
 cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
@@ -810,11 +877,9 @@ if [ -z "${EVAL_RESULT}" ] ; then
 fi
 out_table="${EVAL_RESULT}"
 
-#DEBUG
-#echo "in_table=$in_table; out_table=$out_table"
-
 # Copy all field values from the input to the output attribute table, and sort them at the same time:
 num_records=`v.db.select -c map="${GIS_OPT_OUTPUT}" layer="1" | "${WC}" -l`
+
 check_error "Failed to determine number of records in output map."
 
 # Initialize chunk-based SQL statement collation
@@ -829,11 +894,15 @@ chunk_left=${chunk_size} # Number SQL statements left to collate in current chun
 chunk_remainder=`"${EXPR}" ${num_records} % ${chunk_size}`
 # Initialize contents of first SQL_CHUNK to 'empty':
 SQL_CHUNK="${DBMS_BEGIN}"
-#DEBUG
-#echo "RECORDS: $num_records"
 if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 	g.message -i "Sorting and updating ${num_records} records:"
 fi
+
+# Set newline separator for the main processing loop:
+OLD_IFS="$IFS"
+IFS="${IFS_NEWLINE}"
+
+# Main processing loop starts here:
 i=1
 while [ ${i} -le ${num_records} ] ; do
 	# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
@@ -845,9 +914,7 @@ while [ ${i} -le ${num_records} ] ; do
 	if [ ${records_left} -lt ${chunk_remainder} ] ; then
 		chunk_size=1
 	fi
-	# DEBUG
-	#echo "i=$i chunk_size=$chunk_size"
-	# Get current primary key of input map
+	#
 	j=1
 	for cur_key in $sorted_keys ; do
 		if [ $j -eq $i ] ; then
@@ -861,13 +928,11 @@ while [ ${i} -le ${num_records} ] ; do
 		fi
 	done;
 	# Step through all fields of input map, copy all values to corresponding fields of output map:
-	OLD_IFS="$IFS"
-	IFS=$'\n\b'
 	# Create SQL statement for attribute record update
 	SQL=""
 	for field in ${FIELDS} ; do
 		# Get value from field in input map
-		name=`echo "${field}" | "${CUT}" -d "|" -f 2`
+		name=`"${ECHO}" "${field}" | "${CUT}" -d "|" -f 2`
 		if [ "${name}" != "${input_map_pkey}" ] ; then # We copy anything, except the GRASS primary key!				
 			SQL="${SQL}
 UPDATE ${out_table} SET ${name} = (SELECT ${name} FROM ${in_table} where ${input_map_pkey}=${pkey}) WHERE ${input_map_pkey}=${i};"
@@ -892,18 +957,15 @@ ${SQL}"
 ${SQL}
 ${DBMS_COMMIT}"
 		fi
-		#DEBUG
-		#echo "SQL_CHUNK="
-		#echo "$SQL_CHUNK"
+		#
 		# Update all attribute fields of all records in current chunk at once:
-		echo "${SQL_CHUNK}" | db.execute input="-"
+		"${ECHO}" "${SQL_CHUNK}" | db.execute input="-"
 		check_error "Failed to update SQL chunk of size ${chunk_size}."
 		# Empty chunk contents:
 		SQL_CHUNK="${DBMS_BEGIN}"
 		chunk_left=${chunk_size}
 	fi
-	#
-	IFS="$OLD_IFS"
+	#	
 	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 		g.message -p "${i} ${num_records} 1"
 	fi
@@ -913,6 +975,9 @@ ${DBMS_COMMIT}"
 		i=`${EXPR} $i + 1`
 	fi
 done
+
+# Reset newline separator to default:
+IFS="$OLD_IFS"
 
 # DONE!
 
