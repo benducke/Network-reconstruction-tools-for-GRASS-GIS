@@ -16,7 +16,7 @@
 #				any later version that retains the GRASS 8 syntax for the GRASS
 #				commands called by this script).
 #
-# COPYRIGHT:    (C) 2024 by Benjamin Ducke
+# COPYRIGHT:    (C) 2024-2025 by Benjamin Ducke
 #
 #               This program is free software under the GNU General Public
 #               License (>=v2). Read the file COPYING that comes with GRASS
@@ -34,9 +34,9 @@
 # - awk
 # - cut
 # - date
+# - echo (on Windows)
 # - expr
 # - grep
-# - pkill
 # - sort
 # - wc
 #
@@ -102,21 +102,24 @@ if [ -n "${MSYSPATH}" ] ; then
 	# "/c/msys64/usr/bin"
 	# That means we are running under MS Windows,
 	# and we must make some adjustments to external program calls!
-	AWK="${MSYSPATH}/awk"
-	CUT="${MSYSPATH}/cut"
-	DATE="${MSYSPATH}/date"
-	EXPR="${MSYSPATH}/expr"	
-	GREP="${MSYSPATH}/grep"
-	SORT="${MSYSPATH}/sort"
-	PKILL="${MSYSPATH}/pkill"
-	WC="${MSYSPATH}/wc"
+	AWK="${MSYSPATH}/awk.exe"
+	CUT="${MSYSPATH}/cut.exe"
+	DATE="${MSYSPATH}/date.exe"
+	ECHO="${MSYSPATH}/echo.exe"	
+	EXPR="${MSYSPATH}/expr.exe"	
+	GREP="${MSYSPATH}/grep.exe"
+	SORT="${MSYSPATH}/sort.exe"
+	WC="${MSYSPATH}/wc.exe"
 	# Scripted GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
 	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
 	V_DB_ADDTABLE="v.db.addtable.bat"
+	# Set filter for line endings for this system:
+	IFS_NEWLINE=$'\r\n\b'
 else
 	AWK="awk"
 	CUT="cut"
 	DATE="date"
+	ECHO="echo"
 	EXPR="expr"
 	GREP="grep"	
 	SORT="sort"
@@ -126,12 +129,17 @@ else
 	# On Linux/macOS they are executed through the shell, just like binaries.
 	V_DB_ADDCOLUMN="v.db.addcolumn"
 	V_DB_ADDTABLE="v.db.addtable"
+	# Set filter for line endings for this system:
+	IFS_NEWLINE=$'\n\b'
 fi
+
+# Keep a copy of IFS, as it was set before running this script!
+IFS_ORIGINAL="$IFS"
 
 # Basic module setup.
 MODULE_NAME="v_net_stats" # for prefixing temporary object names
 MODULE_NAME_EXEC="v.net.stats" # name as run on the command line
-MODULE_VERSION="1.0.0"
+MODULE_VERSION="1.1.0b1"
 
 # Exit status variables.
 EXIT_OK=0
@@ -174,7 +182,7 @@ NODES_FLD_COST_AVG="cost_mean" 	# Mean cost of links connected to node
 
 # Basic sanity checks.
 if [ -z "$GISBASE" ] ; then
-    echo "ERROR: You must be in GRASS GIS to run this program." 1>&2
+    "${ECHO}" "ERROR: You must be in GRASS GIS to run this program." 1>&2
     exit ${EXIT_ERROR}
 fi
 
@@ -197,7 +205,7 @@ if [ -n "$GRASS_V6" ] ; then
 fi
 
 # Create prefix for all temporary maps
-TMP_PREFIX="tmp_${MODULE_NAME}_`echo $$`_d"
+TMP_PREFIX="tmp_${MODULE_NAME}_`"${ECHO}" $$`_d"
 
 # Names of temporary maps (VECTOR)
 TMP_VECT_EXTRACT="${TMP_PREFIX}_v_extract" 				# Feature(s) extracted from input vector map
@@ -219,7 +227,7 @@ list_len () {
 	# variable, so that this will work without clashes from within a caller
 	# caller loop that also fiddles around with IFS (not uncommon)!
 	OLD_IFS_LIST_LEN="$IFS"
-	IFS=$'\n\b'
+	IFS="$IFS_NEWLINE"
 	
 	LIST_LEN=0
 	for item in $1 ; do
@@ -255,7 +263,7 @@ list_get () {
 	# variable, so that this will work without clashes from within a caller
 	# caller loop that also fiddles around with IFS (not uncommon)!
 	OLD_IFS_LIST_GET="$IFS"
-	IFS=$'\n\b'
+	IFS="$IFS_NEWLINE"
 	
 	LIST_ITEM=
 	if [ $2 -lt 0 ] ; then
@@ -394,7 +402,7 @@ awk_min () {
 		AWK_VALUE="$2"
 	else
 		AWK_VALUE="$1"
-		min=`echo "$1 $2" | "${AWK}" "BEGIN{}{if (0+$2<0+$1) min=$2} END{print min}"`
+		min=`"${ECHO}" "$1 $2" | "${AWK}" "BEGIN{}{if (0+$2<0+$1) min=$2} END{print min}"`
 		if [ -n "${min}" ] ; then
 			AWK_VALUE="$min"
 		fi
@@ -415,7 +423,7 @@ awk_max () {
 		AWK_VALUE="$2"
 	else
 		AWK_VALUE="$1"
-		max=`echo "$1 $2" | "${AWK}" "BEGIN{}{if (0+$2>0+$1) max=$2} END{print max}"`
+		max=`"${ECHO}" "$1 $2" | "${AWK}" "BEGIN{}{if (0+$2>0+$1) max=$2} END{print max}"`
 		if [ -n "${max}" ] ; then
 			AWK_VALUE="$max"
 		fi
@@ -433,11 +441,12 @@ awk_max () {
 #						found in $1.
 awk_median () {
 	
-	# Below is the command for sorting with AWK. However, only GNU AWK provides 'asorti(a,b)', 
-	# so this would now work on macOS (would need to install 'gawk' through e.b. MacPorts).
-	# med_list=`echo "$1" | "${AWK}" '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
+	# NOTE Below (commented out) is the command for sorting with AWK. However, only GNU AWK provides 'asorti(a,b)', 
+	# so this would not work on macOS (would need to install 'gawk' through e.b. MacPorts).
+	# med_list=`"${ECHO}" "$1" | "${AWK}" '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
+	#
 	# Sort list of input values in $1, numerically, ascending:
-	med_list=`echo "$1" | "${SORT}" -n`
+	med_list=`"${ECHO}" "$1" | "${SORT}" -n`
 	# Get number of items on list:
 	list_len "${med_list}"
 	if [ -z "${med_list}" ] || [ ${LIST_LEN} -eq 0 ] ; then
@@ -1093,6 +1102,8 @@ check_input () {
 			g.message -i "Checking connections of input nodes with input links (1/3):"
 		fi
 		get_primary_keys "${GIS_OPT_NODES}"
+		OLD_IFS="$IFS"
+		IFS="${IFS_NEWLINE}"
 		i=0
 		for key in ${PRIMARY_KEYS} ; do
 			if [ -n $BASH_VERSION ] ; then
@@ -1134,6 +1145,8 @@ check_input () {
 				g.message -p "${i} ${max} 1"
 			fi
 		done
+		IFS="${OLD_IFS}"
+		
 		# Now the other way around: we traverse all from/to ID fields in links map
 		# and check if there are two corresponding nodes in GIS_OPT_NODES.
 		# If NOT, then we have a FATAL ERROR.
@@ -1141,6 +1154,8 @@ check_input () {
 			g.message -i "Checking connections of input nodes with input links (2/3):"
 		fi
 		get_grass_cats "${GIS_OPT_LINKS}"
+		OLD_IFS="$IFS"
+		IFS="${IFS_NEWLINE}"
 		i=0
 		for cat in ${GRASS_CATS} ; do
 			if [ -n $BASH_VERSION ] ; then
@@ -1148,27 +1163,23 @@ check_input () {
 			else
 				i=`"${EXPR}" ${i} + 1`
 			fi
-		done
+		done		
 		max=${i}		
 		# Check all from_id fields:
 		i=0
 		for cat in ${GRASS_CATS} ; do
 			# Get value of 'from_id' for this link:
-			#init_from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_FROM_ID}" -c`
 			init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
 			check_error "Failed to retrieve value of field ('${LINKS_FLD_FROM_ID}') from links input map ('${GRASS_PKEY}=${cat}')."
 			# Check if 'from_id' occurs as primary key of any input node:
-			#num_connections_from=`v.db.select map="${GIS_OPT_NODES}" layer="1" where="${GIS_OPT_KEY}=${init_from_id}" column="${GIS_OPT_KEY}" -c | "${GREP}" "${init_from_id}" -c`
 			num_connections_from=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${GIS_OPT_NODES} WHERE ${GIS_OPT_KEY}=${init_from_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
 			if [ -z "${num_connections_from}" ] ; then
 				num_connections_from=0
 			fi
 			# Get value of 'to_id' for this link:		
-			#init_to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_TO_ID}" -c`
 			init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
 			check_error "Failed to retrieve value of field ('${LINKS_FLD_TO_ID}') from links input map ('${GRASS_PKEY}=${cat}')."
 			# Check if 'to_id' occurs as primary key of any input node:
-			#num_connections_to=`v.db.select map="${GIS_OPT_NODES}" layer="1" where="${GIS_OPT_KEY}=${init_to_id}" column="${GIS_OPT_KEY}" -c | "${GREP}" "${init_to_id}" -c`
 			num_connections_to=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${GIS_OPT_NODES} WHERE ${GIS_OPT_KEY}=${init_to_id};" -c --quiet | "${GREP}" "${init_to_id}" -c`
 			if [ -z "${num_connections_to}" ] ; then
 				num_connections_to=0
@@ -1189,7 +1200,8 @@ check_input () {
 			if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 				g.message -p "${i} ${max} 1"
 			fi
-		done		
+		done
+		IFS="${OLD_IFS}"	
 		#
 		# 2. Check that the same two nodes are not linked more than once in links map:
 		#
@@ -1198,6 +1210,8 @@ check_input () {
 		fi
 		get_grass_cats "${GIS_OPT_LINKS}"
 		i=0
+		OLD_IFS="$IFS"
+		IFS="${IFS_NEWLINE}"
 		for cat in ${GRASS_CATS} ; do
 			if [ -n $BASH_VERSION ] ; then
 				let i=${i}+1
@@ -1208,17 +1222,13 @@ check_input () {
 		max=${i}
 		i=0
 		for cat in ${GRASS_CATS} ; do
-			#init_from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_FROM_ID}" -c`
 			init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_FROM_ID}') from links input map."
-			#init_to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${GRASS_PKEY}=${cat}" column="${LINKS_FLD_TO_ID}" -c`
 			init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`		
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_TO_ID}') from links input map."
 			# Check for occurrences of this from/to pair:
-			#num_init_pairs_ft=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id}" column="${LINKS_FLD_FROM_ID}" -c | "${GREP}" "${init_from_id}" -c`
 			num_init_pairs_ft=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
 			# Check for occurrences of this to/from pair:
-			#num_init_pairs_tf=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id}" column="${LINKS_FLD_FROM_ID}" -c | "${GREP}" "${init_from_id}" -c`
 			num_init_pairs_tf=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
 			if [ -n $BASH_VERSION ] ; then
 				let num_init_pairs=${num_init_pairs_ft}+${num_init_pairs_tf}
@@ -1237,6 +1247,7 @@ check_input () {
 				i=`"${EXPR}" ${i} + 1`
 			fi
 		done # Checking map passed as "links="
+		IFS="${OLD_IFS}"
 	fi
 	
 	if [ ${GRASS_VERBOSE} -gt 2 ] ; then
@@ -1308,13 +1319,9 @@ exit_error () {
 #                The contents for setting the variable are returend in "EVAL_RESULT".
 eval_ws_safe () {
 	OLD_IFS_EVAL_WS_SAFE="$IFS"
-	# Set list separator to newline and line break characters.
-	# This used to be: 
-	# IFS=$(echo -en "\n\b")
-	# However, macOS' shell does not interpret that form correctly.
-	IFS=$'\n\b'
+	IFS="${IFS_NEWLINE}"
 	# Process (list of) input line(s):
-	str=`echo "$1" | "${GREP}" "$2="`
+	str=`"${ECHO}" "$1" | "${GREP}" "$2="`
 	for i in $str
 	do
 		IFS="="
@@ -1332,32 +1339,104 @@ eval_ws_safe () {
 # check_setup: Check system setup (required external programs available?).
 check_setup () {	
 	
-	message="Failed to run required program: "
+	message="Required program not found or not working as expected: "
+	
+	# Echo (test first, since the following require a working echo command!)
+	prg="${ECHO}"
+	result=`"${ECHO}" "1 2 4 3"`
+	if [ "$result" != "1 2 4 3" ] ; then
+		exit_error "$message ${prg}"
+	fi
+	
+	# The following commands are only tested if they have been defined!
+	
+	# Awk	
+	prg="${AWK}"
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "1 2 4 3" | ${prg} '{ print $3 }'`
+		if [ $result -ne 4 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+	
+	# Cut
+	prg="${CUT}"
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "1,2,4,3" | ${prg} -f3 -d,`
+		if [ $result -ne 4 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
 	
 	# Date
 	prg="${DATE}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		: $(${prg} -u)
+		check_error "${message} '${prg}'."
+	fi
 	
 	# Expr
 	prg="${EXPR}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		result=`${prg} 1 + 3`
+		if [ $result -ne 4 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
 	
 	# Grep
 	prg="${GREP}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "1 2 3 4" | ${prg} "3 4" -c`
+		if [ $result -ne 1 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+	
+	# Check for multi-threading support.
+	# Pkill, Sleep, Wait: Multi-threading support
+	if [ -z "${PKILL}" ] || [ -z "${WAIT}" ] || [ -z "${SLEEP}" ] ; then
+		# If any of these commands ire missing then we are running on a system (likely Windows)
+		# that does not have what it takes for concurrent execution of shell scripts.
+		MULTI_THREADING_SUPPORT=
+	else
+		# In the other case, all three of pkill, wait and sleep must be present!
+		#
+		# We have pkill command: Let's check that it works!
+		# TODO: There seems to be no portable AND safe way of checking
+		#       that pkill works. For now, we just trust that it's there
+		#		if $PKILL is declared!
+		#prg="${PKILL}"
+		#: $(${prg} --help)
+		#check_error "${message} '${prg}'."
+		# We have sleep command: Let's check that it works!
+		prg="${SLEEP}"
+		: $(${prg} 0.1)
+		check_error "${message} '${prg}'."
+		# We have wait command: Let's check that it works!
+		prg="${WAIT}"
+		: $(${prg})
+		check_error "${message} '${prg}'."
+		# Support for multi-threading exists!
+		MULTI_THREADING_SUPPORT="y"
+	fi
 	
 	# Sort
 	prg="${SORT}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then
+		result=`"${ECHO}" "Just one line." | ${prg}`
+		check_error "${message} '${prg}'."
+	fi
 	
 	# Wc
 	prg="${WC}"
-	: $(${prg} --help)
-	check_error "${message} '${prg}'."
+	if [ -n "${prg}" ] ; then	
+		result=`"${ECHO}" "one two five" | ${prg} -w`
+		if [ $result -ne 3 ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+	
 }
 
 
@@ -1428,7 +1507,7 @@ check_environment () {
 		DBMS_IDENT_QUOTE="'"
 		# It is possible to force the SQLite backend driver to use one
 		# DB per vector map instead of one DB per mapset.
-		result=`echo "$GRASS_DB_database" | "${GREP}" '/vector/$MAP/' -c`
+		result=`"${ECHO}" "$GRASS_DB_database" | "${GREP}" '/vector/$MAP/' -c`
 		if [ ${result} -gt 0 ] ; then
 			DBMS_THREAD_SAFE=1
 			if [ ${GRASS_VERBOSE} -gt 0 ] ; then
@@ -1580,10 +1659,7 @@ get_where_clause () {
 # stats_compute_links: 	Computes statistics for network links (to be printed later).
 #
 stats_compute_links () {
-	# Get attribute table info for output links map:	
-	# attribute_table
-	# attribute_database_driver
-	# attribute_database
+	# Get attribute table info for output links map:
 	get_tbl_info "${GIS_OPT_LINKS}"
 	# Get global statistics for unreduced network.
 	# We will output these at the end of the program run!
@@ -1591,7 +1667,7 @@ stats_compute_links () {
 		g.message -i "Computing statistics for network links:"
 	fi
 	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
-	get_grass_cats "${GIS_OPT_LINKS}"
+	get_grass_cats "${GIS_OPT_LINKS}"	
 	total_cost=0
 	total_len=0
 	# min/max initially empty strings
@@ -1601,6 +1677,8 @@ stats_compute_links () {
 	max_cost=""
 	step=1 # This one is just for progress reporting.
 	# Compute simple metrics
+	OLD_IFS="$IFS"
+	IFS="${IFS_NEWLINE}"
 	for cat in ${GRASS_CATS} ; do
 		len=`db.select sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
 		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GRASS_PKEY}='${cat}')"
@@ -1629,6 +1707,7 @@ stats_compute_links () {
 			step=`"${EXPR}" ${step} + 1`
 		fi		
 	done
+	IFS="${OLD_IFS}"
 	net_nodes_undreduced="${NUM_INPUT_NODES}"
 	net_links_unreduced="${lines}"
 	net_len_unreduced="${total_len}"
@@ -1688,6 +1767,8 @@ stats_compute_nodes () {
 	# Start looping through nodes by user-defined key
 	get_primary_keys "${GIS_OPT_NODES}"
 	step=1 # For progress reporting
+	OLD_IFS="$IFS"
+	IFS="${IFS_NEWLINE}"
 	for key in ${PRIMARY_KEYS} ; do	
 		# Number of other nodes wo which the current node is connected:
 		num_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key;" -c --quiet | "${GREP}" "${key}" -c`
@@ -1730,8 +1811,6 @@ stats_compute_nodes () {
 		SQL="${SQL} WHERE ${WHERE}; "
 		SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-		#echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-		#check_error "Failed to write links count into attribute field '${NODES_FLD_LINKS}' of output nodes maps ('${GIS_OPT_NODES}')."
 		if [ "${GIS_OPT_MODEL}" = "attsim" ] ; then
 			SQL=""
 			SQL="${SQL}UPDATE ${attribute_table_nodes} SET"
@@ -1739,8 +1818,6 @@ ${SQL}"
 			SQL="${SQL} WHERE ${WHERE}; "
 			SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-			#echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-			#check_error "Failed to write 'node strength' into attribute field '${NODES_FLD_NSTRENGTH}' of output nodes maps ('${GIS_OPT_NODES}')."
 		fi
 		SQL=""
 		SQL="${SQL}UPDATE ${attribute_table_nodes} SET"
@@ -1748,16 +1825,12 @@ ${SQL}"
 		SQL="${SQL} WHERE ${WHERE}; "
 		SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-		#echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-		#check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
 		SQL=""
 		SQL="${SQL}UPDATE ${attribute_table_nodes} SET"
 		SQL="${SQL} ${NODES_FLD_LEN_AVG} = ${avg_len}"
 		SQL="${SQL} WHERE ${WHERE}; "
 		SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-		#echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-		#check_error "Failed to write links count into attribute field '${NODES_FLD_LEN_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
 			SQL=""
 			SQL="${SQL}UPDATE ${attribute_table_nodes} SET"
@@ -1765,9 +1838,6 @@ ${SQL}"
 			SQL="${SQL} WHERE ${WHERE}; "
 			SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-			#echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-			#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
-			#${V_DB_UPDATE} map="${GIS_OPT_NODES}" layer="1" column="${NODES_FLD_COST_SUM}" value="${total_cost}" where="${WHERE}" --quiet
 			check_error "Failed to write links count into attribute field '${NODES_FLD_COST_SUM}' of output nodes maps ('${GIS_OPT_NODES}')."
 			SQL=""
 			SQL="${SQL}UPDATE ${attribute_table_nodes} SET"
@@ -1775,13 +1845,11 @@ ${SQL}"
 			SQL="${SQL} WHERE ${WHERE}; "
 			SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-			#echo "${SQL}" | db.execute database="${attribute_database}" input="-"
-			#check_error "Failed to write links count into attribute field '${NODES_FLD_COST_AVG}' of output nodes maps ('${GIS_OPT_NODES}')."
 		fi
 		# Commit transaction of SQL chunk:
 		SQL_CHUNK="${SQL_CHUNK}
 ${DBMS_COMMIT}"
-		echo "${SQL_CHUNK}" | db.execute database="${attribute_database}" input="-"
+		"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database}" input="-"
 		check_error "Failed to write all attribute fields of record #${key} into output nodes maps ('${GIS_OPT_NODES}')."
 
 		g.message -p "${step} ${points} 1"
@@ -1791,6 +1859,7 @@ ${DBMS_COMMIT}"
 			step=`"${EXPR}" ${step} + 1`
 		fi
 	done
+	IFS="${OLD_IFS}"
 }
 
 
@@ -1799,7 +1868,7 @@ ${DBMS_COMMIT}"
 #			editors will find this as a mark when parsing the source
 #		   	code in SH mode, and it will be added to the document outline. 
 MAIN () {
-	echo ""
+	"${ECHO}" ""
 }
 
 
@@ -1831,22 +1900,22 @@ stats_compute_nodes
 
 # Output basic network statistics
 if [ ${GIS_FLAG_G} -eq 1 ] ; then
-	echo "net_nodes_unreduced=${net_nodes_undreduced}"
-	echo "net_links_unreduced=${net_links_unreduced}"	
-	echo "net_len_unreduced=${net_len_unreduced}"
+	"${ECHO}" "net_nodes_unreduced=${net_nodes_undreduced}"
+	"${ECHO}" "net_links_unreduced=${net_links_unreduced}"	
+	"${ECHO}" "net_len_unreduced=${net_len_unreduced}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		echo "net_cost_unreduced=${net_cost_unreduced}"
+		"${ECHO}" "net_cost_unreduced=${net_cost_unreduced}"
 	fi
-	echo "net_cons_mean_unreduced=${net_cons_mean_unreduced}"
-	echo "net_len_min_unreduced=${net_len_min_unreduced}"
-	echo "net_len_max_unreduced=${net_len_max_unreduced}"	
-	echo "net_len_mean_unreduced=${net_len_mean_unreduced}"
-	echo "net_len_median_unreduced=${net_len_median_unreduced}"
+	"${ECHO}" "net_cons_mean_unreduced=${net_cons_mean_unreduced}"
+	"${ECHO}" "net_len_min_unreduced=${net_len_min_unreduced}"
+	"${ECHO}" "net_len_max_unreduced=${net_len_max_unreduced}"	
+	"${ECHO}" "net_len_mean_unreduced=${net_len_mean_unreduced}"
+	"${ECHO}" "net_len_median_unreduced=${net_len_median_unreduced}"
 	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		echo "net_cost_min_unreduced=${net_cost_min_unreduced}"
-		echo "net_cost_max_unreduced=${net_cost_max_unreduced}"
-		echo "net_cost_mean_unreduced=${net_cost_mean_unreduced}"
-		echo "net_cost_median_unreduced=${net_cost_median_unreduced}"
+		"${ECHO}" "net_cost_min_unreduced=${net_cost_min_unreduced}"
+		"${ECHO}" "net_cost_max_unreduced=${net_cost_max_unreduced}"
+		"${ECHO}" "net_cost_mean_unreduced=${net_cost_mean_unreduced}"
+		"${ECHO}" "net_cost_median_unreduced=${net_cost_median_unreduced}"
 	fi
 else
 	g.message -i "Network properties:"
