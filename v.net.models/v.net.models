@@ -1529,6 +1529,11 @@ str_substr () {
 
 # FUNCTION
 # check_setup: Check system setup (required external programs available?).
+#
+# This function runs a basic test for a number of known CLI tools.
+# Each test will only be run if the corresponding variable has been set
+# to a non-null string.
+#
 check_setup () {	
 	
 	message="Required program not found or not working as expected: "
@@ -1585,6 +1590,15 @@ check_setup () {
 		fi
 	fi
 	
+	# Head
+	prg="${HEAD}"
+	if [ -n "${prg}" ] ; then	
+		result=`"${ECHO}" -e "one\ntwo\nfive" | ${prg} -n 1`
+		if [ "$result" != "one" ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+	
 	# Check for multi-threading support.
 	# Pkill, Sleep, Wait: Multi-threading support
 	if [ -z "${PKILL}" ] || [ -z "${WAIT}" ] || [ -z "${SLEEP}" ] ; then
@@ -1620,6 +1634,15 @@ check_setup () {
 		check_error "${message} '${prg}'."
 	fi
 	
+	# Tail
+	prg="${TAIL}"
+	if [ -n "${prg}" ] ; then	
+		result=`"${ECHO}" -e "one\ntwo\nfive" | ${prg} -n 1`
+		if [ "$result" != "five" ] ; then
+			exit_error "$message ${prg}"
+		fi
+	fi
+
 	# Wc
 	prg="${WC}"
 	if [ -n "${prg}" ] ; then	
