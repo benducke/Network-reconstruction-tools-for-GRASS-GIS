@@ -655,8 +655,9 @@ check_field () {
 check_error () {
 	if [ ! "$?" -eq "0" ] ; then
 		g.message -e "$1"
-		if [ -n $2 ] && [ "$2" != "" ] ; then
-			# PID passed: kill!
+		if [ -n "${PKILL}" ] && [ -n $2 ] && [ "$2" != "" ] ; then
+			# PID passed and "pkill" command available: kill this and all
+			# subprocesses!
 			clean_up
 			g.message -e "Terminating job with PID $2 and all subprocesses."	
 			"${PKILL}" --signal 9 -P $2 &
