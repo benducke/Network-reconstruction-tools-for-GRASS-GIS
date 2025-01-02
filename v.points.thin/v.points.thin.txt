@@ -1,0 +1,9 @@
+v.points.thin
+Systematically thins points in a vector layer.
+Vector (v.*)
+QgsProcessingParameterFeatureSource|input|Input points|0|None|False
+*QgsProcessingParameterString|where|WHERE conditions of SQL statement without 'where' keyword|None|False|True
+QgsProcessingParameterNumber|dist|Absolute thinning distance threshold (must be >= 0.0)|QgsProcessingParameterNumber.Double|None|False|1.0|None
+QgsProcessingParameterEnum|order|Order of thinning|pkeyasc;pkeydesc;random|False|0|False
+QgsProcessingParameterVectorDestination|output|Thinned points
+QgsProcessingParameterBoolean|-i|Invert effect of 'where=' option (if given)|False
