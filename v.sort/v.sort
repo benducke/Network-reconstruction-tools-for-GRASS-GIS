@@ -171,6 +171,9 @@ else
 	IFS_NEWLINE=$'\n\b'
 fi
 
+# Keep a copy of IFS, as it was set before running this script!
+IFS_ORIGINAL="$IFS"
+
 # Basic module setup.
 MODULE_NAME="v_sort" # for prefixing temporary object names
 MODULE_NAME_EXEC="v.sort" # name as run on the command line
