@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE qgisgrassmodule SYSTEM "http://mrcc.com/qgisgrassmodule.dtd">
+
+<qgisgrassmodule label="Model-based reconstruction of network links (simplified)" module="v.net.models">
+	<option key="input"/>
+	<field key="key" layer="input" type="integer" label="Integer key field in input nodes' attribute table" />
+	<field key="label" layer="input" type="integer,double,string" label="Label/name field (default: same as 'key')" />
+	<option key="model"/>
+	<option key="costmap"/>
+	<option key="links"/>
+	<option key="nodes"/>
+</qgisgrassmodule>
