@@ -5,7 +5,7 @@ QgsProcessingParameterFeatureSource|input|Network nodes (points)|0|None|False
 *QgsProcessingParameterString|where|WHERE conditions of SQL statement without 'where' keyword|None|False|True
 QgsProcessingParameterFeatureSource|initial|Initial links produced by previous run (lines)|1|None|True
 QgsProcessingParameterRasterLayer|costmap|Cost surface|None|True
-QgsProcessingParameterField|key|integer key field in input nodes' attribute table|None|input|0|False|False
+QgsProcessingParameterField|key|Integer key field in input nodes' attribute table|None|input|0|False|False
 QgsProcessingParameterField|label|Label/name field (default: same as 'key')|None|input|-1|False|True
 QgsProcessingParameterEnum|model|Network connectivity model|attsim;complete;delaunay;nn;xtent|False|1|False
 QgsProcessingParameterField|attributes|Attribute field(s) for similarity test(s) (model 'attsim')|None|input|-1|True|True
