@@ -4222,7 +4222,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 							if [ -n $BASH_VERSION ] ; then
 								let records_left=${lines}-${cat}
 							else
-								records_left=`${EXPR} ${lines} - ${step}`
+								records_left=`${EXPR} ${lines} - ${cat}`
 							fi
 							if [ ${records_left} -lt ${chunk_remainder} ] ; then
 								chunk_size=1
@@ -4267,7 +4267,7 @@ ${DBMS_COMMIT}"
 								# Empty chunk contents:
 								SQL_CHUNK="${DBMS_BEGIN}"
 								chunk_left=${chunk_size}
-							fi								
+							fi							
 							g.message -p "${cat} ${lines} 1"
 							if [ -n $BASH_VERSION ] ; then
 								let cat=${cat}+1
@@ -4714,7 +4714,12 @@ model_linkdist () {
 # FUNCTION
 # model_nn: Create a network where nodes are connected to their n nearest neighbors.
 model_nn () {
-	#  At this point, it is assured that 'neighbors=' has been provided and is > 0 OR 'size=' has been provided.	
+	
+	#DEBUG
+	mark=`${DATE}`
+	echo "*** START NN: ${mark}"
+	
+	#  At this point, it is assured that EITHER 'neighbors=' has been provided and is > 0 OR 'size=' has been provided.
 	if [ -z "${GIS_OPT_SIZE}" ] ; then
 		#  Check that neighbors < num (filtered) input points:
 		if [ ${NUM_INPUT_NODES} -le ${GIS_OPT_NEIGHBORS} ] ; then
@@ -4740,7 +4745,9 @@ model_nn () {
 	IFS_BACKUP="$IFS"
 	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
+	
 	for key in $PRIMARY_KEYS ; do
+		#
 		if [ -n "${GIS_OPT_SIZE}" ] ; then
 			# Read number of nearest neighbors from 'size' field of current node			
 			GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${key}" -c --quiet`
@@ -4831,23 +4838,27 @@ ${CATS_TO}"
 	IFS="${IFS_BACKUP}"
 	
 	# Now we delete all the links that are not marked "keep=1"
-	CATS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${fld_keep}=0" -c`
-	check_error "Failed to query field '${fld_keep}' of links output map ('${GIS_OPT_LINKS}')."
-	for cat in ${CATS} ; do
-		# DELETE!
-		# NOTE:	This will delete the geometry, but leave the attribute table row intact!
-		#		There is no way to make v.edit delete an attribute table row itself. 
-		#       'v.db.select -f' can be used to select only rows that are still linked to features...
-		v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-		check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
-		# Drop associated row of attribute table from links map:
-		links_droprow "${cat}"
-	done
+	g.message -i "Removing disconnected links..."
+	# DELETE!
+	# NOTE:	This will delete the geometry, but leave the attribute table row intact!
+	#		There is no way to make v.edit delete an attribute table row itself. 
+	#       'v.db.select -f' can be used to select only rows that are still linked to features...
+	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${fld_keep}=0" --quiet
+	check_error "Failed to delete link geometries during NN reduction."
+	# Drop associated row of attribute table from links map:
+	SQL="${DBMS_BEGIN}"
+	SQL="$SQL
+DELETE FROM $attribute_table WHERE ${fld_keep} = 0;"
+	SQL="$SQL
+${DBMS_COMMIT}"
+	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	check_error "Failed to delete link attribute rows during NN reduction."
 
 	# Drop column "keep", we don't need it any longer.
 	${V_DB_DROPCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep}" --quiet
 	check_error "Failed to drop field '${fld_keep}' from links output map ('${GIS_OPT_LINKS}')."
 	
+	# DELETEME
 	# In case that any rows were dropped, we need to copy the temporary
 	# map with reduced attribute table back to the original output map!
 	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
@@ -4858,6 +4869,11 @@ ${CATS_TO}"
 		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
 		check_error "Failed to copy new links map with reduced attributes to output map."
 	fi
+	
+	#DEBUG
+	mark=`${DATE}`
+	echo "*** END NN: ${mark}"
+	
 }
 
 
