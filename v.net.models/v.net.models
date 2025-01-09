@@ -4714,11 +4714,7 @@ model_linkdist () {
 # FUNCTION
 # model_nn: Create a network where nodes are connected to their n nearest neighbors.
 model_nn () {
-	
-	#DEBUG
-	mark=`${DATE}`
-	echo "*** START NN: ${mark}"
-	
+
 	#  At this point, it is assured that EITHER 'neighbors=' has been provided and is > 0 OR 'size=' has been provided.
 	if [ -z "${GIS_OPT_SIZE}" ] ; then
 		#  Check that neighbors < num (filtered) input points:
@@ -4729,6 +4725,15 @@ model_nn () {
 	else
 		g.message -i "Number of nearest neighbors will be read from '${GIS_OPT_SIZE}'."
 	fi
+	# Get and store attribute storage info for input and links maps:
+	get_tbl_info "${GIS_OPT_INPUT}"
+	attribute_database_driver_input="${attribute_database_driver}"
+	attribute_database_input="${attribute_database}"
+	attribute_table_input="${attribute_table}"
+	get_tbl_info "${GIS_OPT_LINKS}"
+	attribute_database_driver_links="${attribute_database_driver}"
+	attribute_database_links="${attribute_database}"
+	attribute_table_links="${attribute_table}"
 	# Go!
 	g.message -i "Reducing network by connectivity model 'NN':"
 	# Store name of original links output map (we might modify it).
@@ -4744,13 +4749,13 @@ model_nn () {
 	get_primary_keys "${GIS_OPT_INPUT}"
 	IFS_BACKUP="$IFS"
 	IFS="${IFS_NEWLINE}"
-	step=1 # This one is just for progress reporting.
-	
+	#
+	step=1 # This one is just for progress reporting.	
 	for key in $PRIMARY_KEYS ; do
 		#
 		if [ -n "${GIS_OPT_SIZE}" ] ; then
-			# Read number of nearest neighbors from 'size' field of current node			
-			GIS_OPT_NEIGHBORS=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${key}" -c --quiet`
+			# Read number of nearest neighbors from 'size' field of current node
+			GIS_OPT_NEIGHBORS=`db.select sql="SELECT ${GIS_OPT_SIZE} FROM ${attribute_table_input} WHERE ${GIS_OPT_KEY}=${key};" driver="${attribute_database_driver_input}" database="${attribute_database_input}" -c --quiet`
 			check_error "Failed to query field '${GIS_OPT_SIZE}' of input nodes map (key='$key')."
 			grep_is_positive "${GIS_OPT_NEIGHBORS}"
 			if [ -z ${GREP_VALUE} ] ; then
@@ -4762,35 +4767,34 @@ model_nn () {
 		fi
 		# Get sorted list of lengths for all links connected to current node via 'from_id' or 'to_id'.
 		# We look at 'from_id' first:
-		lengths_from=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_FROM_ID=$key" -c`
+		lengths_from=`db.select sql="SELECT ${FLD_DIST} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${key};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 		check_error "Failed to query fields '${FLD_DIST}' and '${LINKS_FLD_FROM_ID}' of links output map (key='${key}')."
 		# Now 'to_id':
-		lengths_to=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="$LINKS_FLD_TO_ID=$key" -c`
+		lengths_to=`db.select sql="SELECT ${FLD_DIST} FROM ${attribute_table_links} WHERE ${LINKS_FLD_TO_ID}=${key};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 		check_error "Failed to query fields '${FLD_DIST}' and '${LINKS_FLD_TO_ID}' of links output map (key='${key}')."
 lengths="${lengths_from}
 ${lengths_to}"
 		if [ -n "${lengths}" ] ; then
-			# Sorting with 'asorti(a,b)' not support on macOS' AWK, so we use 'sort' here.
+			# Sorting with 'asorti(a,b)' is not support on macOS' AWK, so we use 'sort' here.
 			# LIST=`"${ECHO}" "$lengths" | "${AWK}" '{a[$0]}END{asorti(a,b,"@ind_num_asc");for(i=1;i<=NR;i++)print b[i]}'`
 			LIST=`"${ECHO}" "$lengths" | "${SORT}" -n`
 			if [ -n "${LIST}" ] ; then
 				#echo "$LIST"
 				# Now get GRASS primary keys (cat) for all links connected FROM this node via 'from_id':
-				CATS_FROM=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_FROM_ID}=$key" -c`
+				CATS_FROM=`db.select sql="SELECT cat FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${key};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 				check_error "Failed to query field '${LINKS_FLD_FROM_ID}' of links output map (key='${key}')."
-				# Now get GRASS primary keys (cat) for all links connected TO this node via 'to_id':				
-				CATS_TO=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="cat" where="${LINKS_FLD_TO_ID}=$key" -c`
+				# Now get GRASS primary keys (cat) for all links connected TO this node via 'to_id':
+				CATS_TO=`db.select sql="SELECT cat FROM ${attribute_table_links} WHERE ${LINKS_FLD_TO_ID}=${key};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 				check_error "Failed to query field '${LINKS_FLD_TO_ID}' of links output map (key='${key}')."
 CATS="${CATS_FROM}
 ${CATS_TO}"
 				if [ -n "${CATS}" ] ; then
-					#echo "$CATS"
 					connected=0 # Count of neighbors connected to this node
 					for cat in ${CATS} ; do
 						preserve="false" # If not 'true' by the end of this loop, link will be deleted!
 						if [ $connected -lt ${GIS_OPT_NEIGHBORS} ] ; then
 							# We are still looking to connect at least one more!
-							len=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="cat=${cat}" -c`
+							len=`db.select sql="SELECT ${FLD_DIST} FROM ${attribute_table_links} WHERE cat=${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 							check_error "Failed to query links output map for field '${FLD_DIST}' ('cat=${cat}')."
 							# Get info for connected database and table:
 							get_tbl_info "${GIS_OPT_LINKS}"
@@ -4805,15 +4809,12 @@ ${CATS_TO}"
 										else
 											connected=`"${EXPR}" ${connected} + 1`
 										fi
-										#echo "connected: $cat ($neighbor) = $len"
 										# Mark this link as "keep":
 										SQL=""
 										SQL="${SQL}UPDATE ${attribute_table} SET"
 										SQL="${SQL} ${fld_keep} = 1"
 										SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
 										"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-										#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
-										#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="1" where="cat=${cat}" --quiet										
 										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."										
 									fi
 								fi
@@ -4839,10 +4840,7 @@ ${CATS_TO}"
 	
 	# Now we delete all the links that are not marked "keep=1"
 	g.message -i "Removing disconnected links..."
-	# DELETE!
-	# NOTE:	This will delete the geometry, but leave the attribute table row intact!
-	#		There is no way to make v.edit delete an attribute table row itself. 
-	#       'v.db.select -f' can be used to select only rows that are still linked to features...
+	# Delete now!
 	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${fld_keep}=0" --quiet
 	check_error "Failed to delete link geometries during NN reduction."
 	# Drop associated row of attribute table from links map:
@@ -4854,26 +4852,9 @@ ${DBMS_COMMIT}"
 	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
 	check_error "Failed to delete link attribute rows during NN reduction."
 
-	# Drop column "keep", we don't need it any longer.
+	# Drop column "keep" from links output map: we don't need it any longer.
 	${V_DB_DROPCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep}" --quiet
 	check_error "Failed to drop field '${fld_keep}' from links output map ('${GIS_OPT_LINKS}')."
-	
-	# DELETEME
-	# In case that any rows were dropped, we need to copy the temporary
-	# map with reduced attribute table back to the original output map!
-	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
-		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
-		g.remove type="vector" name="${links_org}" -f --quiet
-		check_error "Failed to delete links vector map for replacement with reduced attributes map."
-		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
-		check_error "Failed to copy new links map with reduced attributes to output map."
-	fi
-	
-	#DEBUG
-	mark=`${DATE}`
-	echo "*** END NN: ${mark}"
-	
 }
 
 
