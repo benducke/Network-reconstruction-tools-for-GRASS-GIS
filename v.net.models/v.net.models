@@ -3150,14 +3150,27 @@ nodes_droprow () {
 
 # FUNCTION
 # model_attsim: Create a network where nodes are connected if they have common
-#				   attribute values.
+#				attribute values.
+#               In addition: Store an attribute "strength" in each similar link
+#				that holds the number of similarities represented by the link.
 model_attsim () {
+	
+	# Get and store attribute storage info for input and links maps:
+	get_tbl_info "${GIS_OPT_INPUT}"
+	attribute_database_driver_input="${attribute_database_driver}"
+	attribute_database_input="${attribute_database}"
+	attribute_table_input="${attribute_table}"
+	get_tbl_info "${GIS_OPT_LINKS}"
+	attribute_database_driver_links="${attribute_database_driver}"
+	attribute_database_links="${attribute_database}"
+	attribute_table_links="${attribute_table}"
+	
 	# Check_input() has already made sure that the fields listed in 'attributes=' all exist!
 	g.message -i "Reducing network by connectivity model 'ATTSIM':"	
 	# Add additional field 'strength' to output links map.
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_STRENGTH} INTEGER" --quiet
 	check_error "Failed to add attribute field '${LINKS_FLD_STRENGTH}' (type 'INTEGER') to links output vector map."
-	# Set strength to '0' for all links by default:
+	# Set strength to '0' for all links initially:
 	${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_STRENGTH}" value="0" --quiet
 	check_error "Failed to initalize attribute field '${LINKS_FLD_STRENGTH}' to '0' for all links in output vector map."
 	# Step through all (filtered) input nodes:
@@ -3166,64 +3179,62 @@ model_attsim () {
 	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
 	for key in $PRIMARY_KEYS ; do
-		# Step through attribute all fields:
-		#echo "[$key] FIELDS:"
+		# Step through all attribute fields:
 		OLD_IFS="$IFS"
 		IFS=","
 		for fld in ${GIS_OPT_ATTRIBUTES} ; do
 			# Get field type
 			fld_type="UNKNOWN"
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "INTEGER|${fld}" -w -c`
-			if [ ${result} -eq 1 ] ; then
-				fld_type="INTEGER"
-			fi
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "DOUBLE PRECISION|${fld}" -w -c`
-			if [ ${result} -eq 1 ] ; then
-				fld_type="DOUBLE PRECISION"
-			fi
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "CHARACTER|${fld}" -w -c`
-			if [ ${result} -eq 1 ] ; then
-				fld_type="CHARACTER"
-			fi
-			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "TEXT|${fld}" -w -c`
+			result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "TEXT|${fld}" -w -c`			
 			if [ ${result} -eq 1 ] ; then
 				fld_type="TEXT"
+			else
+				result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "CHARACTER|${fld}" -w -c`				
+				if [ ${result} -eq 1 ] ; then
+					fld_type="CHARACTER"
+				else
+					result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "INTEGER|${fld}" -w -c`					
+					if [ ${result} -eq 1 ] ; then
+						fld_type="INTEGER"
+					else						
+						result=`v.info -c --quiet map="${GIS_OPT_INPUT}" layer="1" | "${GREP}" "DOUBLE PRECISION|${fld}" -w -c`
+						if [ ${result} -eq 1 ] ; then							
+							fld_type="DOUBLE PRECISION"
+						fi
+					fi
+				fi
 			fi
 			if [ "${fld_type}" = "UNKNOWN" ] ; then
 				exit_error "Unable to determine type of field '${fld}' in input points layer (option 'attributes=')."
 			fi
-			#echo "  $fld ($fld_type)"			
 			# Build database query statement: Retrieve primary keys of all other nodes
 			# that have the same value for the current field:
 			get_where_clause "${key}"
-			val=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${WHERE}" columns="${fld}" -c --quiet`
+			val=`db.select sql="SELECT ${fld} FROM ${attribute_table_input} WHERE ${WHERE};" driver="${attribute_database_driver_input}" database="${attribute_database_input}" -c --quiet`
 			check_error "Failed to query attribute field '${fld}' for key='$key' in nodes input map."
-			#echo "  val='$val'"
 			if [ "${fld_type}" = "CHARACTER" ] || [ "${fld_type}" = "TEXT" ] ; then
 				where="${GIS_OPT_KEY}<>$key AND ${fld}='$val'"
 			else
 				where="${GIS_OPT_KEY}<>$key AND ${fld}=$val"
 			fi
-			# Get list of keys of nodes with identical attributes 
-			LIST=`v.db.select map="${GIS_OPT_INPUT}" layer="1" where="${where}" columns="${GIS_OPT_KEY}" -c --quiet`
+			# Get list of keys of nodes with identical attributes
+			LIST=`db.select sql="SELECT ${GIS_OPT_KEY} FROM ${attribute_table_input} WHERE ${where};" driver="${attribute_database_driver_input}" database="${attribute_database_input}" -c --quiet`
 			# Get info for connected database and table:
-			get_tbl_info "${GIS_OPT_LINKS}"
 			if [ -n "${LIST}" ] ; then
 				list=""
 				IFS="${IFS_NEWLINE}"
 				for item in ${LIST} ; do
 					list="$list $item"
 					# Get the one link with $item in field 'from_id' and our current primary key in 'to_id',
-					# NOT the other way around (or links don't have directionality!). That way, we make sure
+					# NOT the other way around (our links don't have directionality!). That way, we make sure
 					# to only count every similarity once (from one end of the link).
 					# Then update that link with the current link strength!
 					where="${LINKS_FLD_FROM_ID}=$item AND ${LINKS_FLD_TO_ID}=$key"
-					cat=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="${where}" columns="cat" -c --quiet`
+					cat=`db.select sql="SELECT cat FROM ${attribute_table_links} WHERE ${where};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 					check_error "Failed to query attribute field '${LINKS_FLD_FROM_ID}' for link with cat='$cat' in links output vector map."					
 					if [ -n "${cat}" ] ; then
 						# Read strength of current link, increase by '1', update field:
-						#echo "CAT=$cat"
-						strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" where="cat=${cat}" columns="${LINKS_FLD_STRENGTH}" -c --quiet`
+						strength=`db.select sql="SELECT ${LINKS_FLD_STRENGTH} FROM ${attribute_table_links} WHERE cat = ${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 						check_error "Failed to read from attribute field '${LINKS_FLD_STRENGTH}' of link with cat='$cat' in output vector map."
 						if [ -n $BASH_VERSION ] ; then
 							let strength=${strength}+1
@@ -3231,17 +3242,14 @@ model_attsim () {
 							strength=`"${EXPR}" ${strength} + 1`
 						fi						
 						SQL=""
-						SQL="${SQL}UPDATE ${attribute_table} SET"
+						SQL="${SQL}UPDATE ${attribute_table_links} SET"
 						SQL="${SQL} ${LINKS_FLD_STRENGTH} = ${strength}"
 						SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-						#DELETEME: Replaced v.db.update with direct DBMS access
-						#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_STRENGTH}" value="${strength}" where="cat=${cat}" --quiet
-						"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
+						"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
 						check_error "Failed to update attribute field '${LINKS_FLD_STRENGTH}' to '${strength}' for link with cat='$cat' in output vector map."
 					fi
 				done
 				IFS=","
-				#echo "$list"
 			fi			
 		done
 		IFS="$OLD_IFS"
@@ -3254,40 +3262,21 @@ model_attsim () {
 	done
 	IFS="${IFS_BACKUP}"
 	
-	# PASS 2: Step through all links again and delete those that have strength '0'
-	# Store name of original links output map (we might modify it).
-	links_org="${GIS_OPT_LINKS}"
-	# Get GRASS primary keys for links map and step through them:
-	get_grass_cats "${GIS_OPT_LINKS}"
-	IFS_BACKUP="$IFS"
-	IFS="${IFS_NEWLINE}"
-	for cat in ${GRASS_CATS} ; do
-		# Get strength of link:
-		strength=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_STRENGTH}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-		check_error "Failed to read from attribute field '${LINKS_FLD_STRENGTH}' of link with ${GRASS_PKEY}='${cat}' in output vector map."
-		if [ ${strength} -lt 1 ] ; then
-			# Strength is '0': DELETE
-			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
-			#		There is no way to make v.edit delete an attribute table row itself. 
-			#       'v.db.select -f' can be used to select only rows that are still linked to features...
-			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with ${GRASS_PKEY}='${cat}' from links output vector map ."
-			# Drop associated row of attribute table from links map:
-			links_droprow "${cat}"
-		fi
-	done
-	IFS="${IFS_BACKUP}"
-	
-	# In case that any rows were dropped, we need to copy the temporary
-	# map with reduced attribute table back to the original output map!
-	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
-		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
-		g.remove type="vector" name="${links_org}" -f --quiet
-		check_error "Failed to delete links vector map for replacement with reduced attributes map."
-		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
-		check_error "Failed to copy new links map with reduced attributes to output map."
-	fi
+	# PASS 2: Delete all links that have strength '0'!
+	g.message -i "Removing disconnected links..."
+
+	# Delete now!
+	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${LINKS_FLD_STRENGTH}<1" --quiet
+	check_error "Failed to delete link geometries during NN reduction."
+	# Drop associated row of attribute table from links map:
+	SQL="${DBMS_BEGIN}"
+	SQL="$SQL
+DELETE FROM $attribute_table WHERE ${LINKS_FLD_STRENGTH} < 1;"
+	SQL="$SQL
+${DBMS_COMMIT}"
+	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	check_error "Failed to delete link attribute rows during NN reduction."
+
 }
 
 
