@@ -4560,7 +4560,7 @@ model_delaunay () {
 	check_error "Failed to add field '${fld_keep}' to links output map ('${GIS_OPT_LINKS}')."
 	# Initialize all links to "keep=0"
 	${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="0" --quiet 2>/dev/null
-	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."	
+	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."
 	#
 	g.message -i "Triangulating:"
 	# NOTE: Current version of v.delaunay (GRASS 7.8.4) is botched: When using its '-l'
@@ -4617,10 +4617,10 @@ model_delaunay () {
 		if [ "${preserve}" = "true" ] ; then
 			# Mark this link as "keep":
 			SQL=""
-			SQL="${SQL}UPDATE ${attribute_table} SET"
+			SQL="${SQL}UPDATE ${attribute_table_links} SET"
 			SQL="${SQL} ${fld_keep} = 1"
 			SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-			"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
+			"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
 			check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 		fi
 		g.message -p "${step} ${lines} 1"
@@ -4662,47 +4662,46 @@ ${DBMS_COMMIT}"
 #					Instead, it is run as an additional model, every time the option
 #					'maxdist=' is given.
 model_linkdist () {	
-	g.message -i "Maximum linking distance set to '${GIS_OPT_MAXDIST}' (${UNITS_DIST})."	
-	g.message -i "Reducing network:"
-	# Store name of original links output map (we might modify it).
-	links_org="${GIS_OPT_LINKS}"
-	# Step through all links and use v.edit to delete every link that is longer than 'maxdist'	
-	get_grass_cats "${GIS_OPT_LINKS}"
-	IFS_BACKUP="$IFS"
-	IFS="${IFS_NEWLINE}"
-	step=1 # This one is just for progress reporting.
-	for cat in ${GRASS_CATS} ; do				
-		# This will produce a non-empty result only if the current link's length exceeds the threshold:
-		length=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="${GRASS_PKEY}=${cat} AND ${FLD_DIST}>${GIS_OPT_MAXDIST}" -c --quiet`
-		check_error "Failed to retrieve attribute '${FLD_DIST}' from links output vector map ('${GRASS_PKEY}=$cat')."
-		if [ -n "${length}" ] ; then
-			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
-			#		There is no way to make v.edit delete an attribute table row itself. 
-			#       'v.db.select -f' can be used to select only rows that are still linked to features...
-			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with '${GRASS_PKEY}=${cat}' from links output vector map ."
-			# Drop associated row of attribute table from links map:
-			links_droprow "${cat}"
-		fi
-		g.message -p "${step} ${lines} 1"
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
-		fi
-	done
-	IFS="${IFS_BACKUP}"
 	
-	# In case that any rows were dropped, we need to copy the temporary
-	# map with reduced attribute table back to the original output map!
-	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
-		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
-		g.remove type="vector" name="${links_org}" -f --quiet
-		check_error "Failed to delete links vector map for replacement with reduced attributes map."
-		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
-		check_error "Failed to copy new links map with reduced attributes to output map."
-	fi
+	g.message -i "Maximum linking distance set to '${GIS_OPT_MAXDIST}' (${UNITS_DIST})."
+		
+	g.message -i "Reducing network by distance threshold..."
+	
+	# Get and store attribute storage info for input and links maps:
+	get_tbl_info "${GIS_OPT_LINKS}"
+	attribute_database_driver_links="${attribute_database_driver}"
+	attribute_database_links="${attribute_database}"
+	attribute_table_links="${attribute_table}"
+	
+	# Add an attribute field to indicate whether a link must be preserved:
+	fld_keep="keep" # Name of field to indicate "keep this link".
+	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep} INTEGER" --quiet 2>/dev/null
+	check_error "Failed to add field '${fld_keep}' to links output map ('${GIS_OPT_LINKS}')."
+	# Initialize all links to "keep=0"
+	${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="0" --quiet 2>/dev/null
+	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."
+
+	# Mark all links for preservation that DO NOT exceed the maximum length:
+	${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="1" where="${FLD_DIST}<=${GIS_OPT_MAXDIST}" --quiet 2>/dev/null
+	
+	# Now we delete all the links that are not marked "keep=1"
+	g.message -i "Removing disconnected links..."
+	# Delete now!
+	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${fld_keep}=0" --quiet
+	check_error "Failed to delete link geometries during maxdist reduction."
+	# Drop associated rows of attribute table from links map:
+	SQL="${DBMS_BEGIN}"
+	SQL="$SQL
+DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
+	SQL="$SQL
+${DBMS_COMMIT}"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+	check_error "Failed to delete link attribute rows during maxdist reduction."
+
+	# Drop column "keep" from links output map: we don't need it any longer.
+	${V_DB_DROPCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep}" --quiet
+	check_error "Failed to drop field '${fld_keep}' from links output map ('${GIS_OPT_LINKS}')."
+
 }
 
 
@@ -4841,10 +4840,10 @@ ${CATS_TO}"
 	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
-DELETE FROM $attribute_table WHERE ${fld_keep} = 0;"
+DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
 	SQL="$SQL
 ${DBMS_COMMIT}"
-	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
 	check_error "Failed to delete link attribute rows during NN reduction."
 
 	# Drop column "keep" from links output map: we don't need it any longer.
