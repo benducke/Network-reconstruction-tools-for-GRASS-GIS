@@ -3268,7 +3268,7 @@ model_attsim () {
 	# Delete now!
 	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${LINKS_FLD_STRENGTH}<1" --quiet
 	check_error "Failed to delete link geometries during NN reduction."
-	# Drop associated row of attribute table from links map:
+	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
 DELETE FROM $attribute_table WHERE ${LINKS_FLD_STRENGTH} < 1;"
@@ -4544,11 +4544,25 @@ ${DBMS_COMMIT}"
 # FUNCTION
 # model_delaunay: Create a network where nodes are connected using delaunay minimal triangulation.
 model_delaunay () {
-	# - first create a complete model, then reduce the links to those that have
-	#   identical copies in the set of lines produced by v.delaunay
-	#   (upload start and end coordinates to delaunay lines, then compare with
-	#    those uploaded to set of complete links)
-	g.message -i "Reducing network using connectivity model 'DELAUNAY':"
+	#   Reduce the links to those that have identical copies in the set of lines
+	#   produced by v.delaunay (upload start and end coordinates to delaunay lines,
+	#	then compare with links of complete network).
+	#
+	# Get and store attribute storage info for input and links maps:
+	get_tbl_info "${GIS_OPT_LINKS}"
+	attribute_database_driver_links="${attribute_database_driver}"
+	attribute_database_links="${attribute_database}"
+	attribute_table_links="${attribute_table}"
+	#
+	# Add an attribute field to indicate whether a link must be preserved:
+	fld_keep="keep" # Name of field to indicate "keep this link".
+	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep} INTEGER" --quiet 2>/dev/null
+	check_error "Failed to add field '${fld_keep}' to links output map ('${GIS_OPT_LINKS}')."
+	# Initialize all links to "keep=0"
+	${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="0" --quiet 2>/dev/null
+	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."	
+	#
+	g.message -i "Triangulating:"
 	# NOTE: Current version of v.delaunay (GRASS 7.8.4) is botched: When using its '-l'
 	# flag to produce lines, it produces a faulty geometry structure that prevents adding
 	# valid categories (cats), using v.db.addtable or v.category, to the features.
@@ -4558,72 +4572,56 @@ model_delaunay () {
 	# to layer 2, while expecting an attribute table to be present in layer 1.
 	# We'll need to clean up all that mess to get something useful, then use v.to.db
 	# to upload delaunay line start/end node coords to the attribute table in layer 1...
-	v.delaunay input="${GIS_OPT_INPUT}" output="${TMP_VECT_LINKS_DELAUNAY_P}" --o --quiet
+	v.delaunay input="${GIS_OPT_INPUT}" output="${TMP_VECT_LINKS_DELAUNAY_P}" --o --quiet 2>/dev/null
 	check_error "Failed to compute Delaunay triangulation for input points/nodes."
 	${V_DB_ADDTABLE} map="${TMP_VECT_LINKS_DELAUNAY_P}" layer="1" --quiet 2>/dev/null
 	check_error "Failed to add attribute table (layer 1) to temporary map with Delaunay triangulation."
-	${V_TO_LINES} input="${TMP_VECT_LINKS_DELAUNAY_P}" output="${TMP_VECT_LINKS_DELAUNAY_L}" --o --quiet
+	${V_TO_LINES} input="${TMP_VECT_LINKS_DELAUNAY_P}" output="${TMP_VECT_LINKS_DELAUNAY_L}" --o --quiet 2>/dev/null
 	check_error "Failed to convert Delaunay triangulation of input points/nodes to lines."
-	${V_DB_DROPTABLE} map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="2" -f --quiet
+	${V_DB_DROPTABLE} map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="2" -f --quiet 2>/dev/null
 	check_error "Failed to delete attribute table (layer 2) from temporary map with Delaunay triangulation."
 	${V_DB_ADDTABLE} map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" --quiet 2>/dev/null
 	check_error "Failed to add attribute table (layer 1) to temporary map with Delaunay triangulation."
-	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="start" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y}" units="meters" --o --quiet
+	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="start" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y}" units="meters" --o --quiet 2>/dev/null
 	check_error "Failed to upload line start coordinates to temporary map with Delaunay triangulation."
-	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="end" columns="${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y}" units="meters" --o --quiet
+	v.to.db map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" type="line" option="end" columns="${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y}" units="meters" --o --quiet 2>/dev/null
 	check_error "Failed to upload line end coordinates to temporary map with Delaunay triangulation."
-	
-	# DEBUG
-	#v.info ${TMP_VECT_LINKS_DELAUNAY_L}
-	#v.db.select ${TMP_VECT_LINKS_DELAUNAY_L}
-	#v.db.select ${GIS_OPT_LINKS}
-	
-	# Store name of original links output map (we might modify it).
-	links_org="${GIS_OPT_LINKS}"
-	# Step through all links and use v.edit to delete every link that is not also a Delaunay link	
-	get_grass_cats "${GIS_OPT_LINKS}"
+
+	# Make sure to set correct IFS for coordinate list processing.
 	IFS_BACKUP="$IFS"
 	IFS="${IFS_NEWLINE}"
+
+	# Get node coordinates of all Delaunay links and store them in two lists (X and Y):
+	g.message -i "Building list of mesh node coordinates..."	
+	tri_coords=`v.db.select separator="pipe" map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y},${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y}" -c --quiet`
+	check_error "Failed to retrieve vertex coordinates from Delaunay triangulation map."
+
+	# Step through all links and mark them for deletion or preservation.
+	g.message -i "Reducing network using connectivity model 'DELAUNAY':"
+	get_grass_cats "${GIS_OPT_LINKS}"	
 	step=1 # This one is just for progress reporting.
-	for cat in ${GRASS_CATS} ; do		
+	for cat in ${GRASS_CATS} ; do				
+		# Get node coordinates of current link in completely connected network (both directions):
+		lnk_coords_1=`db.select separator="pipe" sql="SELECT ${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y},${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
+		check_error "Failed to retrieve link node coordinates from links map (item: ${GRASS_PKEY}=${cat})."
+		lnk_coords_2=`db.select separator="pipe" sql="SELECT ${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y},${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
+		check_error "Failed to retrieve link node coordinates from links map (item: ${GRASS_PKEY}=${cat})."
+		# Scan list of Delaunay coordinates and see if we have a match:
 		preserve="false"
-		# Get node coordinates of current link in completely connected network:
-		from_x_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_X}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-		check_error "Failed to read field '${LINKS_FLD_FROM_X}' from output links map ('${GIS_OPT_LINKS}')."
-		from_y_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_Y}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-		check_error "Failed to read field '${LINKS_FLD_FROM_Y}' from output links map ('${GIS_OPT_LINKS}')."
-		to_x_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_X}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-		check_error "Failed to read field '${LINKS_FLD_TO_X}' from output links map ('${GIS_OPT_LINKS}')."
-		to_y_A=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_Y}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-		check_error "Failed to read field '${LINKS_FLD_TO_Y}' from output links map ('${GIS_OPT_LINKS}')."
-		# Now get node coordinates of all Delaunay links and see if we have a match:
-		DELAUNAY_CATS=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" columns="cat" -c --quiet`
-		check_error "Failed to retrieve list of GRASS primary keys (map='TMP_VECT_LINKS_DELAUNAY_L')."
-		for dcat in $DELAUNAY_CATS ; do
-			from_x_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${LINKS_FLD_FROM_X}" where="cat=${dcat}" -c --quiet`
-			check_error "Failed to read field '${LINKS_FLD_FROM_X}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
-			from_y_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${LINKS_FLD_FROM_Y}" where="cat=${dcat}" -c --quiet`
-			check_error "Failed to read field '${LINKS_FLD_FROM_Y}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
-			to_x_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${LINKS_FLD_TO_X}" where="cat=${dcat}" -c --quiet`
-			check_error "Failed to read field '${LINKS_FLD_TO_X}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
-			to_y_B=`v.db.select map="${TMP_VECT_LINKS_DELAUNAY_L}" layer="1" columns="${LINKS_FLD_TO_Y}" where="cat=${dcat}" -c --quiet`
-			check_error "Failed to read field '${LINKS_FLD_TO_Y}' from output links map ('${TMP_VECT_LINKS_DELAUNAY_L}')."
-			# We check both line directions for complete overlap:
-			if [ "${from_x_A}" = "${from_x_B}" ] && [ "${from_y_A}" = "${from_y_B}" ] && [ "${to_x_A}" = "${to_x_B}" ] && [ "${to_y_A}" = "${to_y_B}" ] ; then
+		for cur in $tri_coords ; do
+			if [ "${lnk_coords_1}" = "${cur}" ] || [ "${lnk_coords_2}" = "${cur}" ] ; then
 				preserve="true"
-			fi
-			if [ "${from_x_A}" = "${to_x_B}" ] && [ "${from_y_A}" = "${to_y_B}" ] && [ "${to_x_A}" = "${from_x_B}" ] && [ "${to_y_A}" = "${from_y_B}" ] ; then
-				preserve="true"
+				break
 			fi
 		done
-		if [ ${preserve} = "false" ] ; then
-			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
-			#		There is no way to make v.edit delete an attribute table row itself. 
-			#       'v.db.select -f' can be used to select only rows that are still linked to features...
-			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
-			# Drop associated row of attribute table from links map:
-			links_droprow "${cat}"
+		if [ "${preserve}" = "true" ] ; then
+			# Mark this link as "keep":
+			SQL=""
+			SQL="${SQL}UPDATE ${attribute_table} SET"
+			SQL="${SQL} ${fld_keep} = 1"
+			SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
+			"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
+			check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 		fi
 		g.message -p "${step} ${lines} 1"
 		if [ -n $BASH_VERSION ] ; then
@@ -4633,17 +4631,25 @@ model_delaunay () {
 		fi
 	done
 	IFS="${IFS_BACKUP}"
+	
+	# Now we delete all the links that are not marked "keep=1"
+	g.message -i "Removing disconnected links..."
+	# Delete now!
+	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${fld_keep}=0" --quiet
+	check_error "Failed to delete link geometries during Delaunay reduction."
+	# Drop associated rows of attribute table from links map:
+	SQL="${DBMS_BEGIN}"
+	SQL="$SQL
+DELETE FROM $attribute_table WHERE ${fld_keep} = 0;"
+	SQL="$SQL
+${DBMS_COMMIT}"
+	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	check_error "Failed to delete link attribute rows during Delaunay reduction."
 
-	# In case that any rows were dropped, we need to copy the temporary
-	# map with reduced attribute table back to the original output map!
-	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
-		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
-		g.remove type="vector" name="${links_org}" -f --quiet
-		check_error "Failed to delete links vector map for replacement with reduced attributes map."
-		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
-		check_error "Failed to copy new links map with reduced attributes to output map."
-	fi
+	# Drop column "keep" from links output map: we don't need it any longer.
+	${V_DB_DROPCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep}" --quiet
+	check_error "Failed to drop field '${fld_keep}' from links output map ('${GIS_OPT_LINKS}')."
+
 }
 
 
@@ -4804,7 +4810,7 @@ ${CATS_TO}"
 										SQL="${SQL} ${fld_keep} = 1"
 										SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
 										"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."										
+										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 									fi
 								fi
 								if [ -n $BASH_VERSION ] ; then
@@ -4832,7 +4838,7 @@ ${CATS_TO}"
 	# Delete now!
 	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${fld_keep}=0" --quiet
 	check_error "Failed to delete link geometries during NN reduction."
-	# Drop associated row of attribute table from links map:
+	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
 DELETE FROM $attribute_table WHERE ${fld_keep} = 0;"
