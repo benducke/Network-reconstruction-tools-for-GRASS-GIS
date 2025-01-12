@@ -1528,6 +1528,100 @@ str_substr () {
 
 
 # FUNCTION
+# stats_compute_links: 	Computes statistics for network links (to be printed later).
+#
+stats_compute_links () {
+	# Get attribute table info for output links map:
+	get_tbl_info "${GIS_OPT_LINKS}"
+	# Get global statistics for unreduced network and store them in some variables
+	# that will be used later by the "xtent" model or any other model that requires
+	# them.
+	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+		g.message -i "Computing statistics for network links:"
+	fi
+	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
+	get_grass_cats "${GIS_OPT_LINKS}"	
+	total_cost=0
+	total_len=0
+	# min/max initially empty strings
+	min_len=""
+	max_len=""
+	min_cost=""
+	max_cost=""
+	step=1 # This one is just for progress reporting.
+	# Compute simple metrics
+	OLD_IFS="$IFS"
+	IFS="${IFS_NEWLINE}"
+	for cat in ${GRASS_CATS} ; do
+		len=`db.select sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
+		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GRASS_PKEY}='${cat}')"
+		awk_min "${min_len}" "${len}"
+		min_len="${AWK_VALUE}"
+		awk_max "${max_len}" "${len}"
+		max_len="${AWK_VALUE}"
+		awk_calc "$total_len+$len"
+		total_len="${AWK_VALUE}"
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+			cost=`db.select sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
+			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GRASS_PKEY}='${cat}')"
+			awk_min "${min_cost}" "${cost}"
+			min_cost="${AWK_VALUE}"
+			awk_max "${max_cost}" "${cost}"
+			max_cost="${AWK_VALUE}"			
+			awk_calc "$total_cost+$cost"
+			total_cost="${AWK_VALUE}"
+		fi
+		if [ ${GRASS_VERBOSE} -gt 0 ] ; then
+			g.message -p "${step} ${lines} 1"
+		fi
+		if [ -n $BASH_VERSION ] ; then
+			let step=${step}+1
+		else
+			step=`"${EXPR}" ${step} + 1`
+		fi		
+	done
+	IFS="${OLD_IFS}"
+	net_nodes_undreduced="${NUM_INPUT_NODES}"
+	net_links_unreduced="${lines}"
+	net_len_unreduced="${total_len}"
+	net_len_min_unreduced="${min_len}"
+	net_len_max_unreduced="${max_len}"
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+		net_cost_unreduced="${total_cost}"
+		net_cost_min_unreduced="${min_cost}"
+		net_cost_max_unreduced="${max_cost}"
+		net_cost_max_unreduced="${max_cost}"
+	fi
+	# Compute means
+	awk_calc "(($lines*2)/$NUM_INPUT_NODES)" # 1 link = 2 connections (one at each end!)
+	net_cons_mean_unreduced="${AWK_VALUE}"
+	awk_calc "$total_len/$lines"
+	net_len_mean_unreduced="${AWK_VALUE}"
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+		awk_calc "$total_cost/$lines"
+		net_cost_mean_unreduced="${AWK_VALUE}"
+	fi
+	# Compute median(s)
+	lengths=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_LEN_M}" -c`
+	check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GIS_OPT_LINKS})."
+	awk_median "$lengths"	
+	if [ -z "${AWK_VALUE}" ] ; then
+		exit_error "No length data found in attribute table of links output layer (${GIS_OPT_LINKS})."
+	fi
+	net_len_median_unreduced="${AWK_VALUE}"
+	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+		costs=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_COST}" -c`
+		check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GIS_OPT_LINKS})."
+		awk_median "$costs"	
+		if [ -z "${AWK_VALUE}" ] ; then
+			exit_error "No cost data found in attribute table of links output layer (${GIS_OPT_LINKS})."
+		fi
+		net_cost_median_unreduced="${AWK_VALUE}"
+	fi
+}
+
+
+# FUNCTION
 # check_setup: Check system setup (required external programs available?).
 #
 # This function runs a basic test for a number of known CLI tools.
@@ -3066,89 +3160,6 @@ preprocess () {
 
 
 # FUNCTION
-# links_droprow:	DELETES one row from the LINKS output vector map in 'GIS_OPT_LINKS'.
-#
-#					This function MUST BE CALLED after running any model that reduces
-#					the number of network links in the output map! 
-#		
-#					Reason: GRASS GIS treats attribute tables as data structures that are
-#					completely separate from the vector geometries. Geometries are linked
-#					to attribute tables only by a primary key column (normally: 'cat').
-#					However, removing the primary key from a geometry will leave the
-#					original table row untouched!
-#
-#					So in order to reduce the attribute table to only those rows that
-#					are (still; after links reduction) attached to geometries, we
-#					explicitely call v.db.droprow on the affected primary keys.
-#					This function works on only one primary key at a time and will each
-#					time generate a new temporary vector map. The caller must take care
-#					to copy this temporary map back to the original output map!
-#
-#					This function reads only one argument:
-#
-#					$1: GRASS cat value of table row to delete
-#  					
-#					This function will modify ${GIS_OPT_LINKS}!!!
-#					After it has run, GIS_OPT_LINKS will contain the name of a new vector map,
-#					with one row dropped from the attribute table.
-links_droprow () {
-	# Choose new (temp) name for links output map
-	droprow_in="${GIS_OPT_LINKS}"
-	if [ "${droprow_in}" = "${TMP_VECT_LINKS_DROPROW_1}" ] ; then
-		droprow_out="${TMP_VECT_LINKS_DROPROW_2}"
-	else
-		droprow_out="${TMP_VECT_LINKS_DROPROW_1}"
-	fi
-	# Remove existing vector map to keep v.db.droprow quiet:
-	found=`g.list type="vector" | "${GREP}" -c "${droprow_out}"`
-	if [ $found -gt 0 ] ; then
-		g.remove type="vector" name="${droprow_out}" -f --q
-	fi
-	# Call droprow on ${droprow_in}:
-	${V_DB_DROPROW} input="${droprow_in}" output="${droprow_out}" where="cat=$1" --overwrite --quiet
-	check_error "Failed to drop attribute table row with cat='$1' from links output map."	
-	# Now set GIS_OPT_LINKS to new map with one dropped attribute!
-	GIS_OPT_LINKS="${droprow_out}"
-}
-
-
-# FUNCTION
-# nodes_droprow:	DELETES one row from the NODES output vector map in 'GIS_OPT_NODES'.
-#
-#					See links_droprow() for details!
-#
-#					This function MUST BE CALLED after running any model that reduces
-#					the number of network nodes in the output map! 	
-#
-#					This function reads only one argument:
-#
-#					$1: GRASS cat value of table row to delete
-#  					
-#					This function will modify ${GIS_OPT_NODES}!!!
-#					After it has run, GIS_OPT_NODES will contain the name of a new vector map,
-#					with one row dropped from the attribute table.
-nodes_droprow () {
-	# Choose new (temp) name for links output map
-	droprow_in="${GIS_OPT_NODES}"
-	if [ "${droprow_in}" = "${TMP_VECT_NODES_DROPROW_1}" ] ; then
-		droprow_out="${TMP_VECT_NODES_DROPROW_2}"
-	else
-		droprow_out="${TMP_VECT_NODES_DROPROW_1}"
-	fi
-	# Remove existing vector map to keep v.db.droprow quiet:
-	found=`g.list type="vector" | "${GREP}" -c "${droprow_out}"`
-	if [ $found -gt 0 ] ; then
-		g.remove type="vector" name="${droprow_out}" -f --q
-	fi
-	# Call droprow on ${droprow_in}:
-	${V_DB_DROPROW} input="${droprow_in}" output="${droprow_out}" where="cat=$1" --overwrite --quiet
-	check_error "Failed to drop attribute table row with cat='$1' from nodes output map."	
-	# Now set GIS_OPT_NODES to new map with one dropped attribute!
-	GIS_OPT_NODES="${droprow_out}"
-}
-
-
-# FUNCTION
 # model_attsim: Create a network where nodes are connected if they have common
 #				attribute values.
 #               In addition: Store an attribute "strength" in each similar link
@@ -4640,10 +4651,10 @@ model_delaunay () {
 	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
-DELETE FROM $attribute_table WHERE ${fld_keep} = 0;"
+DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
 	SQL="$SQL
 ${DBMS_COMMIT}"
-	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
 	check_error "Failed to delete link attribute rows during Delaunay reduction."
 
 	# Drop column "keep" from links output map: we don't need it any longer.
@@ -4728,10 +4739,7 @@ model_nn () {
 	attribute_database_driver_links="${attribute_database_driver}"
 	attribute_database_links="${attribute_database}"
 	attribute_table_links="${attribute_table}"
-	# Go!
-	g.message -i "Reducing network by connectivity model 'NN':"
-	# Store name of original links output map (we might modify it).
-	links_org="${GIS_OPT_LINKS}"
+	
 	# Add an attribute field to indicate whether a link must be preserved:
 	fld_keep="keep" # Name of field to indicate "keep this link".
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep} INTEGER" --quiet
@@ -4739,6 +4747,10 @@ model_nn () {
 	# Initialize all links to "keep=0"
 	${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="0" --quiet
 	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."	
+	
+	# Go!
+	g.message -i "Reducing network by connectivity model 'NN':"
+	
 	# Step through all input nodes:
 	get_primary_keys "${GIS_OPT_INPUT}"
 	IFS_BACKUP="$IFS"
@@ -4805,10 +4817,10 @@ ${CATS_TO}"
 										fi
 										# Mark this link as "keep":
 										SQL=""
-										SQL="${SQL}UPDATE ${attribute_table} SET"
+										SQL="${SQL}UPDATE ${attribute_table_links} SET"
 										SQL="${SQL} ${fld_keep} = 1"
 										SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-										"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
+										"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
 										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 									fi
 								fi
@@ -4854,7 +4866,7 @@ ${DBMS_COMMIT}"
 
 # FUNCTION
 # model_xtent: Create a network where nodes are connected according to XTENT formula.
-model_xtent () {		
+model_xtent () {
 	g.message -i "Node size will be read from field '${GIS_OPT_SIZE}'."
 	g.message -i "Exponential node weight 'a' set to '${GIS_OPT_A}'."
 	g.message -i "Linear distance weight 'k' set to '${GIS_OPT_K}'."
@@ -4880,39 +4892,56 @@ model_xtent () {
 	fi
 	g.message -i "Minimum 'C' value in data is '${Cmin}'."
 	g.message -i "Maximum 'C' value in data is '${Cmax}'."
+	
+	# Compute link statistics:
+	stats_compute_links
+
+	# Get current attribute table info for (input) nodes and links maps:
+	get_tbl_info "${GIS_OPT_INPUT}"
+	attribute_database_driver_input="${attribute_database_driver}"
+	attribute_database_input="${attribute_database}"
+	attribute_table_input="${attribute_table}"
+	get_tbl_info "${GIS_OPT_LINKS}"
+	attribute_database_driver_links="${attribute_database_driver}"
+	attribute_database_links="${attribute_database}"
+	attribute_table_links="${attribute_table}"
+
+	# Add an attribute field to indicate whether a link must be preserved:
+	fld_keep="keep" # Name of field to indicate "keep this link".
+	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep} INTEGER" --quiet
+	check_error "Failed to add field '${fld_keep}' to links output map ('${GIS_OPT_LINKS}')."
+	# Initialize all links to "keep=0"
+	${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${fld_keep}" value="0" --quiet
+	check_error "Failed to update field '${fld_keep}' in links output map ('${GIS_OPT_LINKS}') with initial '0'."
+
 	# Reduce!
 	g.message -i "Reducing network by connectivity model 'XTENT':"
-	# Store name of original links output map (we might modify it).
-	links_org="${GIS_OPT_LINKS}"
-	# Step through all links and use v.edit to delete every link which scores I <= 0 for XTENT
-	# or is longer than 'maxdist' (if applicable)
+	# Step through all links and use v.edit to delete every link which scores I <= 0 for XTENT!
 	get_grass_cats "${GIS_OPT_LINKS}"
 	IFS_BACKUP="$IFS"
 	IFS="${IFS_NEWLINE}"
 	step=1 # This one is just for progress reporting.
 	for cat in ${GRASS_CATS} ; do
-		# Get size of "from node"
-		from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
+		# Get size of "from node":
+		from_id=`db.select sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 		check_error "Failed to query field '${LINKS_FLD_FROM_ID}' of output nodes map (cat='${cat}')."
-		from_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${from_id}" -c --quiet`
+		from_size=`db.select sql="SELECT ${GIS_OPT_SIZE} FROM ${attribute_table_input} WHERE ${GIS_OPT_KEY}=${from_id};" driver="${attribute_database_driver_input}" database="${attribute_database_input}" -c --quiet`
 		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		grep_is_positive "${from_size}"
 		if [ -z ${GREP_VALUE} ] ; then
 			exit_error "Invalid 'size' for input point with 'key'='${from_id}': Must be larger than '0'."
 		fi
-		# Get size of "to node"
-		to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
+		# Get size of "to node":
+		to_id=`db.select sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 		check_error "Failed to query field '${LINKS_FLD_TO_ID}' of output nodes map ('${GRASS_PKEY}=${cat}')."
-		to_size=`v.db.select map="${GIS_OPT_INPUT}" layer="1" columns="${GIS_OPT_SIZE}" where="${GIS_OPT_KEY}=${to_id}" -c --quiet`
+		to_size=`db.select sql="SELECT ${GIS_OPT_SIZE} FROM ${attribute_table_input} WHERE ${GIS_OPT_KEY}=${to_id};" driver="${attribute_database_driver_input}" database="${attribute_database_input}" -c --quiet`
 		check_error "Failed to query field '${GIS_OPT_SIZE}' of output nodes map ('${GRASS_PKEY}=${cat}')."
 		grep_is_positive "${to_size}"
 		if [ -z ${GREP_VALUE} ] ; then
 			exit_error "Invalid 'size' for input point with 'key'='${to_id}': Must be larger than '0'."
-		fi		
-		distance=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${FLD_DIST}" where="${GRASS_PKEY}=${cat}" -c --quiet`
+		fi
+		distance=`db.select sql="SELECT ${FLD_DIST} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 		check_error "Failed to query field '${FLD_DIST}' of output nodes map ('${GRASS_PKEY}=${cat}')."
-		#awk_calc "((${from_size}^${GIS_OPT_A})+(${to_size}^${GIS_OPT_A}))-(${GIS_OPT_K}*${distance})"
-		#awk_calc "(((${from_size}^${GIS_OPT_A})+(${to_size}^${GIS_OPT_A}))*${distance})-(${GIS_OPT_K}*${distance})"
 		awk_calc "${from_size}^${GIS_OPT_A}"
 		C_a="${AWK_VALUE}" # weighted 'from' size
 		awk_calc "${to_size}^${GIS_OPT_A}"
@@ -4936,33 +4965,16 @@ model_xtent () {
 			fi
 		fi
 		awk_calc "($C*($davg/$Cmax))-($dist)"
-		I="${AWK_VALUE}" # must be > 0 to connect		
-		# DEBUG
-		#echo "LINK cat: $cat"		
-		#echo "  from_id=$from_id"
-		#echo "  to_id=$to_id"
-		#echo "  from_size=$from_size"
-		#echo "  to_size=$to_size"
-		#echo "  a=${GIS_OPT_A}"
-		#echo "  k=${GIS_OPT_K}"
-		#echo "  C_a=$C_a"
-		#echo "  C_b=$C_b"
-		#echo "  C=$C"
-		#echo "  Cmax=$Cmax"
-		#echo "  d=$distance"
-		#echo "  dist=$dist"		
-		#echo "  davg=${davg}"
-		#echo "  i=$I"
-		grep_is_positive "$I"
-		if [ -z ${GREP_VALUE} ] ; then
-			# I <= 0: DELETE
-			# NOTE:	This will delete the geometry, but leave the attribute table row intact!
-			#		There is no way to make v.edit delete an attribute table row itself. 
-			#       'v.db.select -f' can be used to select only rows that are still linked to features...
-			v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" cats="${cat}" --quiet
-			check_error "Failed to delete link with 'cat=${cat}' from links output vector map ."
-			# Drop associated row of attribute table from links map:
-			links_droprow "${cat}"
+		I="${AWK_VALUE}" # must be > 0 to connect
+		grep_is_positive "$I" # Will set GREP_VALUE if $I is positive
+		if [ -n "${GREP_VALUE}" ] ; then
+			# I > 0: Mark this link as KEEP
+			SQL=""
+			SQL="${SQL}UPDATE ${attribute_table_links} SET"
+			SQL="${SQL} ${fld_keep} = 1"
+			SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
+			"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+			check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 		fi
 		g.message -p "${step} ${lines} 1"
 		if [ -n $BASH_VERSION ] ; then
@@ -4973,16 +4985,24 @@ model_xtent () {
 	done
 	IFS="${IFS_BACKUP}"
 	
-	# In case that any rows were dropped, we need to copy the temporary
-	# map with reduced attribute table back to the original output map!
-	if [ "${links_org}" != "${GIS_OPT_LINKS}" ] ; then
-		# Remove old version of links output map, so that g.copy won't chatter about overwriting it.
-		g.remove type="vector" name="${links_org}" -f --quiet
-		check_error "Failed to delete links vector map for replacement with reduced attributes map."
-		# Copy new version with reduced attribute rows as original output map name:
-		g.copy vector="${GIS_OPT_LINKS},${links_org}" --overwrite --quiet 2>/dev/null
-		check_error "Failed to copy new links map with reduced attributes to output map."
-	fi
+	# Now we delete all the links that are not marked "keep=1"
+	g.message -i "Removing disconnected links..."
+	# Delete now!
+	v.edit map="${GIS_OPT_LINKS}" layer="1" type="line" tool="delete" where="${fld_keep}=0" --quiet
+	check_error "Failed to delete link geometries during xtent reduction."
+	# Drop associated rows of attribute table from links map:
+	SQL="${DBMS_BEGIN}"
+	SQL="$SQL
+DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
+	SQL="$SQL
+${DBMS_COMMIT}"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+	check_error "Failed to delete link attribute rows during xtent reduction."
+
+	# Drop column "keep" from links output map: we don't need it any longer.
+	${V_DB_DROPCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${fld_keep}" --quiet
+	check_error "Failed to drop field '${fld_keep}' from links output map ('${GIS_OPT_LINKS}')."
+
 }
 
 
