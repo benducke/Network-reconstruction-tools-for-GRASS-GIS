@@ -106,13 +106,20 @@ For use via the QGIS Processing plug-in:
 
 # Notes and caveats
 
+## Changing the shell interpreter
+This software has been developed for Bash. If you want to run it in a different shell (for whatever reason), then you need to change "bash" in the very first line to the name of your preferred shell. A warning will be issued and a slower compatibility mode used for shells other than Bash.
+
 ## Running v.net.models via QGIS Processing
 This works well in general, with a few quirks:
+* Progress display (this affects all GRASS modules) does not work properly: The status will remain at "0" while a task is processing and instantly jump to "100" percent when it completes -- not very useful, unfortunately.
 * Some options (such as "cats=" and "layer=") do not apply to the QGIS Processing environment and will not be available there.
 * It is not possible (tested with QGIS 3.10.x) to restrict attribute field choices to only fields of type integer. This means that it will be possible to select a double type (aka floating point) field for the "key=" option, which will lead to an error message ("key=" must be set to a field of type integer).
 * The included HTML manual page applies to use from within GRASS GIS (but most of the information also applies to running v.net.models from within QGIS).
 
-## Use on Windows OS
+## macOS Notes
+The latest version of Bash (the default shell used by these scripts) shipped with macOS is version 3. This should still work fine. If you want a newer version of Bash, install one via [the homebrew project](https://brew.sh).
+
+## Windows OS Notes
 * GRASS modules might only be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher (This seems to be a problem specific to QGIS 3.10.x).
 * The current GRASS plug-in for QGIS is not very good at monitoring continuous status messages that come from GRASS modules. There is too much buffering going on (this is a general problem with text output on Windows consoles), which means that status output by CPU and/or I/O expensive operations will be delayed until it is basically useless. Be patient: Even if no progress is visible in the QGIS status monitor, v.net.models will eventually complete.
 
