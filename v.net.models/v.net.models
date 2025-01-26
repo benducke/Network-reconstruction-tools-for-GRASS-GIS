@@ -538,6 +538,8 @@ grass_db_connect_local () {
 # clean_up: Remove temporary maps, reset region to what it was, etc.
 clean_up () {	
 	
+	g.message -i "Cleaning up..."
+	
 	# Temporary VECTOR maps
 	type="vector"
 	# Extracted nodes from input vector map.
@@ -766,8 +768,15 @@ clean_up () {
 		g.remove type="${type}" name="${elem}" -f --q 2>/dev/null
 	fi
 	
-	# Switch back to default DB driver and database (if required):
-	grass_db_connect_default
+	# Switch back to default DB driver and database:
+	if [ -n "${GRASS_DB_driver}" ] ; then
+		db.connect driver="${GRASS_DB_driver}"
+		check_error "Failed to restore GRASS session's default database connection ('db.connect driver=${GRASS_DB_driver}')."
+	fi
+	if [ -n "${GRASS_DB_database}" ] ; then
+		db.connect database="${GRASS_DB_database}"	
+		check_error "Failed to restore GRASS session's default database connection ('db.connect database=${GRASS_DB_database}')."
+	fi
 }
 
 
@@ -2020,7 +2029,7 @@ check_environment () {
 	# (=one SQLite database per mapset).
 	if [ "${GRASS_DB_driver}" = "sqlite" ] ; then
 		DBMS_SUPPORTED=1
-		DBMS_NAME="SQLite"		
+		DBMS_NAME="SQLite"
 		DBMS_INDEX_SUPPORTED=1
 		DBMS_PRESERVES_ORDER=1
 		DBMS_IDENT_QUOTE="'"
@@ -3386,12 +3395,12 @@ preprocess () {
 	
 	# Increase resolution for sampling input cost surface?
 	# NOTE: We already increased the resolution of the current region in "check_input()!"
-	if [ ${GIS_OPT_COSTRES} -gt 1 ] ; then
-		#g.message -i "Resampling cost raster to $GIS_OPT_COSTRES times original resolution..."
-		# Create a new version of the original cost input raster, in wich every
+	if [ ${GIS_OPT_COSTRES} -gt 1 ] ; then		
+		# Create a new version of the original cost input raster, in which every
 		# cell value is the original value divided by the resampling factor.
 		# This is to ensure that the maximum costs of links do not grow when
 		# using resampled cost rasters, which would be counter-intuitive!
+		g.message -i "Resampling cost raster to $GIS_OPT_COSTRES times original resolution:"
 		r.mapcalc expression="${TMP_RAST_COST_RSP}=( ${GIS_OPT_COSTMAP} / ${GIS_OPT_COSTRES} )" --overwrite
 		# Swap original cost raster for resampled one:  
 		GIS_OPT_COSTMAP="${TMP_RAST_COST_RSP}"
@@ -3405,7 +3414,7 @@ preprocess () {
 		 r.random.surface output="${TMP_RAST_COST_ERR}" distance="0" high="200" --overwrite
 		 check_error "Failed to create random error/noise raster (option 'costerr=')."
 		 # Add error and compress to normalized range +/-100% with e.g. PERC=0.2 for a +/-20% error margin:
-		 g.message -i "Normalizing random error/noise raster..."
+		 g.message -i "Normalizing random error/noise raster:"
 		 r.mapcalc expression="${TMP_RAST_COST_NRM}=( ${GIS_OPT_COSTMAP} * (1.0 + (100.0-${TMP_RAST_COST_ERR}) / (10000.0/${GIS_OPT_COSTERR})) )" --overwrite
 		 check_error "Failed to create normalized random error/noise raster (option 'costerr=')."
 		 # Assign cost surface with error as new cost surface!
@@ -4117,14 +4126,13 @@ model_complete () {
 	#MARK=`date`
 	#echo "0 MODEL COMPLETE START: '$MARK'"
 	
-	g.message -i "Creating network using connectivity model 'COMPLETE':"	
 	# CACHING:
 	# If we are running in cost-based mode, then we need a temporary storage
 	# to store the link costs after each run of r.cost. Since GRASS has insufficient
 	# support for creating tables without attached features, we just (mis)use v.random
 	# to create a new points vector map, and we use its attribute table to store the
 	# cost data.
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then	
 		# We use v.random to create as many features with attached attributes as
 		# we need (=number of links in complete network). We use the "column=" option to attach
 		# an attribute table at the same time. Normally, this is used for random
@@ -4184,7 +4192,17 @@ model_complete () {
 	# Process all features except for the last one!
 	num_features=`"${EXPR}" ${NUM_INPUT_NODES} - 1`
 	
+	# SQLite backend only: Force into per-map table storage mode now!
+	if [ "${DBMS_NAME}" = "SQLite" ] && [ ${GIS_OPT_THREADS} -gt 1 ] && [ ${DBMS_LOCKS_REQUIRED} -eq 1 ] ; then		
+		g.message -i "Switching to per-map table storage for backend '${DBMS_NAME}'."
+		db.connect driver=sqlite database='$GISDBASE/$LOCATION_NAME/$MAPSET/vector/$MAP/sqlite.db'
+		DBMS_LOCKS_REQUIRED_OLD=${DBMS_LOCKS_REQUIRED}
+		DBMS_LOCKS_REQUIRED=0
+	fi		
+	
 	# Main processing loop starts here:
+	g.message -i "Creating network using connectivity model 'COMPLETE':"
+	
 	# Program execution diverges here, depending on whether we are running in single
 	# or multi thread mode!
 	if [ ${GIS_OPT_THREADS} = 1 ] ; then
@@ -4294,6 +4312,13 @@ ${remainder}
 	# DEBUG
 	#MARK=`date`
 	#echo "0 MODEL COMPLETE DONE: '$MARK'"
+	
+	# SQLite backend only: Switch back into mapset's default table storage mode (if required)!
+	if [ "${DBMS_NAME}" = "SQLite" ] && [ ${GIS_OPT_THREADS} -gt 1 ] && [ ${DBMS_LOCKS_REQUIRED} -ne ${DBMS_LOCKS_REQUIRED_OLD} ] ; then		
+		g.message -i "Switching back to per-mapset table storage for backend '${DBMS_NAME}'."
+		grass_db_connect_default
+		DBMS_LOCKS_REQUIRED=${DBMS_LOCKS_REQUIRED_OLD}
+	fi
 	
 	# All background threads done: CONTINUE single-threaded work!
 	
@@ -4577,8 +4602,18 @@ ${DBMS_COMMIT}"
 
 	# Upload link costs (if cost raster given).
 	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
-		# Get info for connected database and table:
+		#
+		# Get info for connected database and table (output links map):
 		get_tbl_info "${GIS_OPT_LINKS}"
+		attribute_database_driver_links="${attribute_database_driver}"
+		attribute_database_links="${attribute_database}"
+		attribute_table_links="${attribute_table}"
+		# Get info for connected database and table (temporary link costs map):
+		get_tbl_info "${TMP_VECT_LINKS_COSTS}"
+		attribute_database_driver_cost="${attribute_database_driver}"
+		attribute_database_cost="${attribute_database}"
+		attribute_table_cost="${attribute_table}"		
+		#
 		# Upload link costs. 
 		# Step through all nodes in the same order once more; on this pass, we only transfer
 		# some important attributes.
@@ -4619,14 +4654,14 @@ ${DBMS_COMMIT}"
 			# We need to transfer the cost attribute from that map to the links output map.
 			#v.db.select $TMP_VECT_LINKS_COSTS			
 			#from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-			from_id=`db.select database="${attribute_database}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+			from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
 			#to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
-			to_id=`db.select database="${attribute_database}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+			to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
 			#echo "FROM:TO = $from_id:$to_id"
 			WHERE="${LINKS_FLD_FROM_ID}=$from_id AND ${LINKS_FLD_TO_ID}=$to_id" 
 			#echo "WHERE='$WHERE'"			
 			#costval=`v.db.select map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_COST}" where="${WHERE}" -c --quiet`
-			costval=`db.select database="${attribute_database}" sql="SELECT ${LINKS_FLD_COST} FROM ${TMP_VECT_LINKS_COSTS} WHERE ${WHERE};" -c --quiet`
+			costval=`db.select database="${attribute_database_cost}" sql="SELECT ${LINKS_FLD_COST} FROM ${TMP_VECT_LINKS_COSTS} WHERE ${WHERE};" -c --quiet`			
 			#echo "costval='$costval'"			
 			if [ -z "$costval" ] ; then				
 				#DEBUG
@@ -4637,7 +4672,7 @@ ${DBMS_COMMIT}"
 			fi
 			# Create SQL statement for upload of cost value:
 			SQL=""
-			SQL="${SQL}UPDATE ${attribute_table} SET"
+			SQL="${SQL}UPDATE ${attribute_table_links} SET"
 			SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"			
 			SQL="${SQL} WHERE ${GRASS_PKEY} = ${cat}; "
 			#"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
@@ -4665,7 +4700,7 @@ ${DBMS_COMMIT}"
 				#echo "SQL_CHUNK="
 				#echo "$SQL_CHUNK"
 				# Update all attribute fields of all records in current chunk at once:
-				"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database}" input="-"
+				"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" input="-"
 				check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
 				# Empty chunk contents:
 				SQL_CHUNK="${DBMS_BEGIN}"
@@ -4702,6 +4737,9 @@ ${DBMS_COMMIT}"
 	
 		# Get info for connected database and table:
 		get_tbl_info "${GIS_OPT_LINKS}"
+		attribute_database_driver_links="${attribute_database_driver}"
+		attribute_database_links="${attribute_database}"
+		attribute_table_links="${attribute_table}"
 		
 		g.message -i "Reordering link attributes:"
 		get_primary_keys "${GIS_OPT_INPUT}"
@@ -4713,7 +4751,7 @@ ${DBMS_COMMIT}"
 		for key in $PRIMARY_KEYS ; do
 			WHERE="${LINKS_FLD_FROM_ID}=$key"
 			#RECS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" column="cat" where="${WHERE}" -c`
-			RECS=`db.select database="${attribute_database}" sql="SELECT cat FROM ${GIS_OPT_LINKS} WHERE ${WHERE};" -c --quiet`
+			RECS=`db.select database="${attribute_database_links}" sql="SELECT cat FROM ${GIS_OPT_LINKS} WHERE ${WHERE};" -c --quiet`
 			check_error "Failed to query attribute table of links output map."
 			num_cats=0
 			for line in $RECS ; do
@@ -4751,7 +4789,7 @@ ${DBMS_COMMIT}"
 					# GRASS always starts automatic 'cat' values at '1', so we can use '0' as a safe temporary
 					# and unique value in the swapping process.					
 					SQL=""
-					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL}UPDATE ${attribute_table_links} SET"
 					SQL="${SQL} ${LINKS_FLD_KEY} = 0"
 					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${line}; "
 					#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
@@ -4761,7 +4799,7 @@ ${DBMS_COMMIT}"
 					SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
 					SQL=""
-					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL}UPDATE ${attribute_table_links} SET"
 					SQL="${SQL} ${LINKS_FLD_KEY} = ${line}"
 					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${new_cat}; "
 					#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
@@ -4771,7 +4809,7 @@ ${SQL}"
 					SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
 					SQL=""
-					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL}UPDATE ${attribute_table_links} SET"
 					SQL="${SQL} ${LINKS_FLD_KEY} = ${new_cat}"
 					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = 0; "
 					SQL_CHUNK="${SQL_CHUNK}
@@ -4780,7 +4818,7 @@ ${SQL}"
 					SQL_CHUNK="${SQL_CHUNK}
 ${DBMS_COMMIT}"
 					#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=0" column="cat" value="$new_cat" --quiet
-					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database}" input="-"
+					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" input="-"
 					check_error "Failed to swap GRASS 'cat' value '0' with '$new_cat' in links output map."
 				else
 					# Reached the symmetry element of an odd number of records: Done with this set.
@@ -5386,12 +5424,15 @@ check_input
 
 # Set up paramaters for multi-threaded processing
 #
-# Enable DBMS locking if required (SQLite Backend + threads > 1):
+# Enable DBMS locking if required (e.g. SQLite Backend + threads > 1):
 DBMS_LOCKS_REQUIRED=0
-#if [ ${GIS_OPT_THREADS} -gt 1 ] && [ "${GRASS_DB_driver}" = "sqlite" ] ; then
 if [ ${GIS_OPT_THREADS} -gt 1 ] && [ ${DBMS_THREAD_SAFE} -lt 1 ] ; then
 	DBMS_LOCKS_REQUIRED=1
-	g.message -w "DBMS locks required for multi-threaded operation. Expect reduced performance."
+	# Issue a performance warning for all database backends EXCEPT SQLite.
+	# Reason: We can (and will) switch SQLite into a non-locking mode when it counts!
+	if [ "${DBMS_NAME}" != "SQLite" ] ; then
+		g.message -w "DBMS locks required for multi-threaded operation. Expect reduced performance."
+	fi
 fi
 
 # Perform input data pre-processing:
