@@ -3410,12 +3410,14 @@ preprocess () {
 	grep_is_zero "${GIS_OPT_COSTERR}"
 	if [ -n "${GREP_VALUE}" ] ; then
 		 # Create random surface in range [0;200]:
-		 g.message -i "Creating random error/noise raster..."
-		 r.random.surface output="${TMP_RAST_COST_ERR}" distance="0" high="200" --overwrite
+		 g.message -i "Creating random error/noise raster:"
+		 r.surf.random output="${TMP_RAST_COST_ERR}" min="-${GIS_OPT_COSTERR}" max="+${GIS_OPT_COSTERR}" --overwrite
+		 #r.random.surface output="${TMP_RAST_COST_ERR}" distance="0" high="200" --overwrite
 		 check_error "Failed to create random error/noise raster (option 'costerr=')."
 		 # Add error and compress to normalized range +/-100% with e.g. PERC=0.2 for a +/-20% error margin:
 		 g.message -i "Normalizing random error/noise raster:"
-		 r.mapcalc expression="${TMP_RAST_COST_NRM}=( ${GIS_OPT_COSTMAP} * (1.0 + (100.0-${TMP_RAST_COST_ERR}) / (10000.0/${GIS_OPT_COSTERR})) )" --overwrite
+		 #r.mapcalc expression="${TMP_RAST_COST_NRM}=( ${GIS_OPT_COSTMAP} * (1.0 + (100.0-${TMP_RAST_COST_ERR}) / (10000.0/${GIS_OPT_COSTERR})) )" --overwrite
+		 r.mapcalc expression="${TMP_RAST_COST_NRM}=( ${GIS_OPT_COSTMAP} * ( 1.0 + (${TMP_RAST_COST_ERR} / 100.0 ) ) )" --overwrite
 		 check_error "Failed to create normalized random error/noise raster (option 'costerr=')."
 		 # Assign cost surface with error as new cost surface!
 		 GIS_OPT_COSTMAP="${TMP_RAST_COST_NRM}"
@@ -4491,18 +4493,14 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			val=`db.select database="${in_attr_db}" driver="${in_attr_drv}" sql="SELECT ${GIS_OPT_KEY} FROM ${in_attr_tbl} WHERE ${WHERE};" -c --quiet`
 			check_error "Failed to query attribute table of copy of input points map."
 			if [ -n "${val}" ] ; then # Feature exists! Process it:
-				# Read "FROM" label field value (stays constant during this run through loop).
-				#get_label "${GIS_OPT_INPUT}" "${key}"
+				# Read "FROM" label field value (stays constant during this run through loop):
 				get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}"
 				from_lbl="${LABEL}"
-				#echo "  From ID    = '${key}'"
-				#echo "  From Label = '${LABEL}'"
 				if [ -n $BASH_VERSION ] ; then
 					let target=${cat}+${links}-1
 				else
 					target=`"${EXPR}" ${cat} + ${links} - 1`
-				fi				
-				#echo "  cat range  = ${cat} to ${target}"
+				fi
 				while [ ${cat} -le ${target} ] ; do
 					# Inner loop: We transfer a FROM/TO pair in every pass through this loop.           
 					# The FROM key is constant here,
@@ -4521,14 +4519,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 							if [ ${records_left} -lt ${chunk_remainder} ] ; then
 								chunk_size=1
 							fi
-							#echo "PREV='$previous'"
-							#echo -e "cur='$cur'\n"
-							#get_label "${GIS_OPT_INPUT}" "${cur}"
+							# Get label of "To" node:
 							get_label_fast "${in_attr_tbl}" "${cur}" "${in_attr_drv}" "${in_attr_db}"
 							to_lbl="${LABEL}"
-							#echo "    $cat: FROM ${key} ('$from_lbl') TO ${cur} ('$to_lbl')"
 							# Transfer the actual from/to attributes to the output (links) map's table!
-							# TODO: Make this a DELAYED SQL transaction using chunks of statements!
 							SQL=""
 							SQL="${SQL}UPDATE ${attribute_table} SET"
 							SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
@@ -4582,7 +4576,6 @@ ${DBMS_COMMIT}"
 			else
 				step=`"${EXPR}" ${step} + 1`
 			fi
-			#g.message -p "${step} ${NUM_INPUT_NODES} 1"
 		else # Last point reached: Do not process!
 			step=`"${EXPR}" ${step} + 1`
 		fi
@@ -4645,39 +4638,24 @@ ${DBMS_COMMIT}"
 			if [ ${records_left} -lt ${chunk_remainder} ] ; then
 				chunk_size=1
 			fi
-			#DEBUG
-			#echo "Link $cat"
-			#echo "  From: $from_coor_x/$from_coor_y"
-			#echo "  To:   $to_coor_x/$to_coor_y"
-			#
 			# We now have the cached link costs with associated to/from IDs in the attribute table of $TMP_VECT_LINKS_COSTS!
 			# We need to transfer the cost attribute from that map to the links output map.
-			#v.db.select $TMP_VECT_LINKS_COSTS			
-			#from_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_FROM_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
+			#
+			# Read "From ID" from $GIS_OPT_LINKS:
 			from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
-			#to_id=`v.db.select map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_ID}" where="${GRASS_PKEY}=${cat}" -c --quiet`
+			# Read "To ID" from $GIS_OPT_LINKS:
 			to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
-			#echo "FROM:TO = $from_id:$to_id"
 			WHERE="${LINKS_FLD_FROM_ID}=$from_id AND ${LINKS_FLD_TO_ID}=$to_id" 
-			#echo "WHERE='$WHERE'"			
-			#costval=`v.db.select map="${TMP_VECT_LINKS_COSTS}" layer="1" columns="${LINKS_FLD_COST}" where="${WHERE}" -c --quiet`
+			# Read 'cost' attribute value from $TMP_VECT_LINKS_COST:
 			costval=`db.select database="${attribute_database_cost}" sql="SELECT ${LINKS_FLD_COST} FROM ${TMP_VECT_LINKS_COSTS} WHERE ${WHERE};" -c --quiet`			
-			#echo "costval='$costval'"			
-			if [ -z "$costval" ] ; then				
-				#DEBUG
-				#v.db.select map="${TMP_VECT_LINKS_COSTS}"
-				#echo "COL=$LINKS_FLD_COST"
-				#echo "WHERE=$WHERE"				
+			if [ -z "$costval" ] ; then
 				exit_error "No cost value available for path from '$from_id' to '$to_id'."
 			fi
-			# Create SQL statement for upload of cost value:
+			# Create SQL statement for upload of 'cost' value into $GIS_OPT_LINKS:
 			SQL=""
 			SQL="${SQL}UPDATE ${attribute_table_links} SET"
 			SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"			
 			SQL="${SQL} WHERE ${GRASS_PKEY} = ${cat}; "
-			#"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-			#check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
-			#echo "Cost:   $costval"
 			if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
 				# Keep collecting statements for current chunk.
 				SQL_CHUNK="${SQL_CHUNK}
@@ -4699,7 +4677,7 @@ ${DBMS_COMMIT}"
 				#DEBUG
 				#echo "SQL_CHUNK="
 				#echo "$SQL_CHUNK"
-				# Update all attribute fields of all records in current chunk at once:
+				# Update all 'cost' attribute values in $GIS_OPT_LINKS of all records in current chunk at once:
 				"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" input="-"
 				check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
 				# Empty chunk contents:
@@ -4729,7 +4707,6 @@ ${DBMS_COMMIT}"
 	# NOTE: This will only work if the DBMS used is capable of strictly preserving
 	#       record insertion order!
 	if [ -n "${GIS_OPT_COSTMAP}" ] && [ ${DBMS_PRESERVES_ORDER} -eq 1 ] ; then
-	#if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 	
 		# DEBUG
 		#MARK=`date`
@@ -4750,7 +4727,6 @@ ${DBMS_COMMIT}"
 		IFS="${IFS_NEWLINE}"
 		for key in $PRIMARY_KEYS ; do
 			WHERE="${LINKS_FLD_FROM_ID}=$key"
-			#RECS=`v.db.select map="${GIS_OPT_LINKS}" layer="1" column="cat" where="${WHERE}" -c`
 			RECS=`db.select database="${attribute_database_links}" sql="SELECT cat FROM ${GIS_OPT_LINKS} WHERE ${WHERE};" -c --quiet`
 			check_error "Failed to query attribute table of links output map."
 			num_cats=0
@@ -4773,8 +4749,7 @@ ${DBMS_COMMIT}"
 					let new_cat=${max_cat}-${offset}
 				else
 					new_cat=`"${EXPR}" ${max_cat} - ${offset}`
-				fi				
-				#echo "{$key}: ${line}=$new_cat"
+				fi
 				if [ ${new_cat} -ne ${line} ] ; then
 					if [ ${new_cat} -eq ${line_old} ] && [ ${line} -eq ${new_cat_old} ] ; then
 						# Reached the symmetry element of an even number of records: Done with this set.
@@ -4782,9 +4757,6 @@ ${DBMS_COMMIT}"
 					fi
 					# Initialize contents of first SQL_CHUNK to 'empty':
 					SQL_CHUNK="${DBMS_BEGIN}"
-					#echo "$line = 0" 
-					#echo "$new_cat = $line"
-					#echo "0 = $new_cat"
 					# Swap cats!
 					# GRASS always starts automatic 'cat' values at '1', so we can use '0' as a safe temporary
 					# and unique value in the swapping process.					
@@ -4792,20 +4764,12 @@ ${DBMS_COMMIT}"
 					SQL="${SQL}UPDATE ${attribute_table_links} SET"
 					SQL="${SQL} ${LINKS_FLD_KEY} = 0"
 					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${line}; "
-					#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
-					#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=$line" column="cat" value="0" --quiet
-					#"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-					#check_error "Failed to swap GRASS 'cat' value '$line' with '$0' in links output map."
 					SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
 					SQL=""
 					SQL="${SQL}UPDATE ${attribute_table_links} SET"
 					SQL="${SQL} ${LINKS_FLD_KEY} = ${line}"
 					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${new_cat}; "
-					#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
-					#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=$new_cat" column="cat" value="$line" --quiet
-					#"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-					#check_error "Failed to swap GRASS 'cat' value '$new_cat' with '$line' in links output map."
 					SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
 					SQL=""
@@ -4817,7 +4781,6 @@ ${SQL}"
 					# Commit transaction to DB backend:
 					SQL_CHUNK="${SQL_CHUNK}
 ${DBMS_COMMIT}"
-					#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" where="cat=0" column="cat" value="$new_cat" --quiet
 					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" input="-"
 					check_error "Failed to swap GRASS 'cat' value '0' with '$new_cat' in links output map."
 				else
