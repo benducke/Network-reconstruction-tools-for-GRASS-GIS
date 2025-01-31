@@ -316,9 +316,12 @@ if [ -n "${MSYSPATH}" ] ; then
 	ECHO="${MSYSPATH}/echo.exe"
 	EXPR="${MSYSPATH}/expr.exe"
 	GREP="${MSYSPATH}/grep.exe"
-	SORT="${MSYSPATH}/sort.exe"	
+	SLEEP="${MSYSPATH}/sleep.exe"
+	SORT="${MSYSPATH}/sort.exe"
+	WAIT="wait" # Builtin command of Bash
 	WC="${MSYSPATH}/wc.exe"
-	# Scripted GRASS commands require ".bat" extensions for Windows, or else "sh.exe" won't find them!
+	# These are the GRASS commands that are actually Shell/Python scripts.
+	# On Windows, they must be called with their ".bat" extensions, or the shell won't find them!
 	R_GROW="r.grow.bat"
 	V_DB_ADDCOLUMN="v.db.addcolumn.bat"
 	V_DB_ADDTABLE="v.db.addtable.bat"
@@ -343,7 +346,7 @@ else
 	WAIT="wait"
 	WC="wc"
 	# These are the GRASS commands that are actually Shell/Python scripts.
-	# On Linux/macOS they are executed through the shell, just like binaries.
+	# On Linux/macOS they are called by this script just like binaries.
 	R_GROW="r.grow"
 	V_DB_ADDCOLUMN="v.db.addcolumn"
 	V_DB_ADDTABLE="v.db.addtable"
@@ -1908,7 +1911,7 @@ check_setup () {
 	# Check for multi-threading support.
 	# Pkill, Sleep, Wait: Multi-threading support
 	if [ -z "${PKILL}" ] || [ -z "${WAIT}" ] || [ -z "${SLEEP}" ] ; then
-		# If any of these commands ire missing then we are running on a system (likely Windows)
+		# If any of these commands are missing then we are running on a system (likely Windows)
 		# that does not have what it takes for concurrent execution of shell scripts.
 		MULTI_THREADING_SUPPORT=
 	else
@@ -2747,9 +2750,6 @@ check_input () {
 			if [ -n "${result}" ] ; then
 				exit_error "Point '${key}' (label: '${LABEL}') lies too close to another point (distance: ${result} with threshold=${GIS_OPT_THRESHOLD}) and is considered a duplicate."
 			fi
-			# Clean up to suppress useless overwrite warnings
-			g.remove type="vector" name="${TMP_VECT_EXTRACT}" -f --quiet
-			g.remove type="vector" name="${TMP_VECT_LINKS}" -f --quiet
 			# Show progress			
 			g.message -p "${step} ${NUM_INPUT_NODES} 1"
 			if [ -n $BASH_VERSION ] ; then
