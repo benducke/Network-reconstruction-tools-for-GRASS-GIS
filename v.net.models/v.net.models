@@ -4311,7 +4311,7 @@ ${remainder}
 				tid=`"${EXPR}" ${tid} + 1`
 				job=`"${EXPR}" ${job} + 1`
 				if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
-					${SLEEP} "0.02s" # Add a short delay before launching next thread (synchronisation)
+					${SLEEP} "0.02" # Add a short delay before launching next thread (synchronisation)
 				fi
 			done
 			if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
