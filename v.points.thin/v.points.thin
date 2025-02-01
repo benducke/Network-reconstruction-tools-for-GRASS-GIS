@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/usr/bin/env bash
 ############################################################################
 #
 # MODULE:     	v.points.thin
@@ -47,65 +47,65 @@
 #
 
 
-#%Module
-#% description: Systematically thins a points vector map.
-#% keywords: vector, points, thinning
-#%End
+# %Module
+# % description: Systematically thins a points vector map.
+# % keywords: vector, points, thinning
+# %End
 
 
-#%Flag
-#%  key: i
-#%  description: Invert effect of 'where=' option (if given)
-#%End
+# %Flag
+# %  key: i
+# %  description: Invert effect of 'where=' option (if given)
+# %End
 
 
-#%Option
-#% key: input
-#% type: string
-#% required: yes
-#% multiple: no
-#% key_desc: name
-#% description: Input (points) vector map
-#% gisprompt: old,vector,vector
-#%End
+# %Option
+# % key: input
+# % type: string
+# % required: yes
+# % multiple: no
+# % key_desc: name
+# % description: Input (points) vector map
+# % gisprompt: old,vector,vector
+# %End
 
-#%option G_OPT_V_FIELD
-#% key: layer
-#%end
+# %option G_OPT_V_FIELD
+# % key: layer
+# %end
 
-#%option G_OPT_DB_WHERE
-#% key: where
-#%end
+# %option G_OPT_DB_WHERE
+# % key: where
+# %end
 
-#%Option
-#% key: dist
-#% type: double
-#% required: yes
-#% multiple: no
-#% key_desc: value
-#% description: Absolute thinning distance threshold (in map units; must be >= 0.0)
-#%End
+# %Option
+# % key: dist
+# % type: double
+# % required: yes
+# % multiple: no
+# % key_desc: value
+# % description: Absolute thinning distance threshold (in map units; must be >= 0.0)
+# %End
 
-#%Option
-#% key: order
-#% type: string
-#% required: yes
-#% multiple: no
-#% key_desc: value
-#% options: pkeyasc,pkeydesc,random
-#% description: Order of thinning (default: by primary key, asc.)
-#% answer: pkeyasc
-#%End
+# %Option
+# % key: order
+# % type: string
+# % required: yes
+# % multiple: no
+# % key_desc: value
+# % options: pkeyasc,pkeydesc,random
+# % description: Order of thinning (default: by primary key, asc.)
+# % answer: pkeyasc
+# %End
 
-#%Option
-#% key: output
-#% type: string
-#% required: yes
-#% multiple: no
-#% key_desc: name
-#% description: Thinned output (points) vector map
-#% gisprompt: new,vector,vector
-#%End
+# %Option
+# % key: output
+# % type: string
+# % required: yes
+# % multiple: no
+# % key_desc: name
+# % description: Thinned output (points) vector map
+# % gisprompt: new,vector,vector
+# %End
 
 
 # System setup: Modify if needed.
@@ -149,6 +149,9 @@ else
 	# Set filter for line endings for this system:
 	IFS_NEWLINE=$'\n\b'
 fi
+
+# Minimal Bash version for expected to run this script without errors.
+BASH_VERSION_MIN="3" # Version 3 is the latest one shipped on macOS!
 
 # Keep a copy of IFS, as it was set before running this script!
 IFS_ORIGINAL="$IFS"
@@ -210,7 +213,10 @@ TMP_VECT_COPY="${TMP_PREFIX}_v_copy" 				# Copy of input map
 
 # FUNCTION
 # clean_up: Remove temporary maps, reset region to what it was, etc.
-clean_up () {	
+clean_up () {
+	
+	g.message -i "Cleaning up..."
+	
 	# Feature(s) extracted from input vector map.
 	type="vector"
 	elem="${TMP_VECT_EXTRACT}"
@@ -1086,20 +1092,28 @@ check_environment () {
 	is_bourne=0
 	is_bash=`${ECHO} ${interpreter} |${GREP} "bash" -c`
 	is_bourne=`${ECHO} ${interpreter} |${GREP} "Bourne" -c`
-	if [ $is_bash -eq 0 ] ; then
-		if [ $is_bourne -eq 1 ] ; then
+	if [ $is_bash -eq 0 ] ; then # We are NOT running in Bash!
+		if [ $is_bourne -eq 1 ] ; then # This seems to be the original Bourne shell.
 			g.message -w "Running in slow Bourne shell compatibility mode."
 			g.message -w "For better performance, try running this script in Bash explicitly."
-		else
+		else # This seems to be neither Bash nor Bourne.
 			g.message -w "Could not assert that the current interpreter is Bash or Bourne shell."
 			g.message -w "If this script throws inexplicable errors, try running it in Bash."
-			g.message -w "Running in slow Bourne shell compatibility mode."
+			g.message -w "Assuming compatibility with Bash version $BASH_VERSION_MIN."
+			BASH_VERSION="$BASH_VERSION_MIN"
 		fi
-	else
+	else # We are running in Bash!
 		if [ -z $BASH_VERSION ] ; then
-			# If BASH_VERSION has not been set then we just assume a version!
-			BASH_VERSION="3" # Version 3 is the latest one shipped on macOS
-			g.message -w "BASH_VERSION not set. Assuming version $BASH_VERSION."
+			# If BASH_VERSION has not been set at this point then we just assume a version!
+			g.message -w "BASH_VERSION not set. Assuming at least version $BASH_VERSION_MIN."
+			BASH_VERSION="$BASH_VERSION_MIN"			
+		fi
+		# Get Bash major version as currently set.
+		bash_version_major=`${ECHO} "$BASH_VERSION" | ${CUT} -f1 -d.`
+		g.message -i "Detected Bash version '$bash_version_major'."
+		if [ ${bash_version_major} -lt ${BASH_VERSION_MIN} ] ; then
+			g.message -w "Bash version is lower than assumed minimal version (${BASH_VERSION_MIN})."
+			g.message -w "Expect trouble."
 		fi
 	fi
 	
