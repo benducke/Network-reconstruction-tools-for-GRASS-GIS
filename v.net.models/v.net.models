@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/usr/bin/env bash
 ############################################################################
 #
 # MODULE:     	v.net.models
@@ -41,265 +41,265 @@
 #
 
 
-#%Module
-#% description: Performs model-based reconstruction of network links from input points.
-#% keywords: vector, points, lines, network, reconstruction
-#%End
+# %Module
+# % description: Performs model-based reconstruction of network links from input points.
+# % keywords: vector, points, lines, network, reconstruction
+# %End
 
 # TODO: IMPLEMENTME (FLAG -L)!
-##%Flag
-##%  key: l
-##%  description: Link isolated nodes to network if reachable
-##%End
+## %Flag
+## %  key: l
+## %  description: Link isolated nodes to network if reachable
+## %End
 #DELETEME: This is only defined, so that the shell tests don't freak out
 #if the variable is not defined. Remove once implemented!
 GIS_FLAG_L=0
 
-#%Flag
-#%  key: k
-#%  description: 'Knight's move' for more accurate (but slower) cost computations
-#%End
+# %Flag
+# %  key: k
+# %  description: 'Knight's move' for more accurate (but slower) cost computations
+# %End
 
-#%Flag
-#%  key: m
-#%  description: Measure least-cost paths in meters instead of costs
-#%End
+# %Flag
+# %  key: m
+# %  description: Measure least-cost paths in meters instead of costs
+# %End
 
-#%Flag
-#%  key: r
-#%  description: Reduce input points to those in current region
-#%End
+# %Flag
+# %  key: r
+# %  description: Reduce input points to those in current region
+# %End
 
-#%Flag
-#%  key: s
-#%  description: Skip input data consistency checks
-#%End
+# %Flag
+# %  key: s
+# %  description: Skip input data consistency checks
+# %End
 
-#%Option
-#% key: input
-#% type: string
-#% required: yes
-#% multiple: no
-#% key_desc: name
-#% description: Input vector map with network nodes (points)
-#% gisprompt: old,vector,vector
-#%End
+# %Option
+# % key: input
+# % type: string
+# % required: yes
+# % multiple: no
+# % key_desc: name
+# % description: Input vector map with network nodes (points)
+# % gisprompt: old,vector,vector
+# %End
 
-#%option G_OPT_V_FIELD
-#% key: layer
-#%end
+# %option G_OPT_V_FIELD
+# % key: layer
+# %end
 
-#%option G_OPT_V_CATS
-#% key: cats
-#%end
+# %option G_OPT_V_CATS
+# % key: cats
+# %end
 
-#%option G_OPT_DB_WHERE
-#% key: where
-#%end
+# %option G_OPT_DB_WHERE
+# % key: where
+# %end
 
-#%Option
-#% key: initial
-#% type: string
-#% required: no
-#% multiple: no
-#% key_desc: name
-#% description: Initial links produced by previous run (lines)
-#% gisprompt: old,vector,vector
-#%End
+# %Option
+# % key: initial
+# % type: string
+# % required: no
+# % multiple: no
+# % key_desc: name
+# % description: Initial links produced by previous run (lines)
+# % gisprompt: old,vector,vector
+# %End
 
-#%Option
-#% key: costmap
-#% type: string
-#% required: no
-#% multiple: no
-#% key_desc: name
-#% description: Input raster map representing cost surface
-#% gisprompt: old,cell,raster
-#%End
+# %Option
+# % key: costmap
+# % type: string
+# % required: no
+# % multiple: no
+# % key_desc: name
+# % description: Input raster map representing cost surface
+# % gisprompt: old,cell,raster
+# %End
 
-#%Option
-#% key: links
-#% type: string
-#% required: yes
-#% multiple: no
-#% key_desc: name
-#% description: Output vector map for reconstructed network links (lines)
-#% gisprompt: new,vector,vector
-#%End
+# %Option
+# % key: links
+# % type: string
+# % required: yes
+# % multiple: no
+# % key_desc: name
+# % description: Output vector map for reconstructed network links (lines)
+# % gisprompt: new,vector,vector
+# %End
 
-#%Option
-#% key: nodes
-#% type: string
-#% required: yes
-#% multiple: no
-#% key_desc: name
-#% description: Output vector map for attributed network nodes (points)
-#% gisprompt: new,vector,vector
-#%End
+# %Option
+# % key: nodes
+# % type: string
+# % required: yes
+# % multiple: no
+# % key_desc: name
+# % description: Output vector map for attributed network nodes (points)
+# % gisprompt: new,vector,vector
+# %End
 
-#%Option G_OPT_DB_COLUMN
-#% key: key
-#% required: yes
-#% description: Name of INTEGER key field in input nodes' attribute table
-#% gisprompt: old,dbcolumn,dbcolumn
-#%End
+# %Option G_OPT_DB_COLUMN
+# % key: key
+# % required: yes
+# % description: Name of INTEGER key field in input nodes' attribute table
+# % gisprompt: old,dbcolumn,dbcolumn
+# %End
 
-#%option G_OPT_DB_COLUMN
-#% key: label
-#% required: no
-#% description: Name of label/name field (default: same as 'key')
-#% gisprompt: old,dbcolumn,dbcolumn
-#%end
+# %option G_OPT_DB_COLUMN
+# % key: label
+# % required: no
+# % description: Name of label/name field (default: same as 'key')
+# % gisprompt: old,dbcolumn,dbcolumn
+# %end
 
-#%Option
-#% key: model
-#% type: string
-#% required: yes
-#% multiple: no
-#% key_desc: value
-#% options: attsim,complete,delaunay,nn,xtent
-#% description: Choice of network connectivity model
-#% answer: complete
-#%End
+# %Option
+# % key: model
+# % type: string
+# % required: yes
+# % multiple: no
+# % key_desc: value
+# % options: attsim,complete,delaunay,nn,xtent
+# % description: Choice of network connectivity model
+# % answer: complete
+# %End
 
-#%Option G_OPT_DB_COLUMN
-#% key: attributes
-#% required: no
-#% multiple: yes
-#% description: Attribute field(s) for similarity test(s) (model 'attsim')
-#% gisprompt: old,dbcolumn,dbcolumn
-#%End
+# %Option G_OPT_DB_COLUMN
+# % key: attributes
+# % required: no
+# % multiple: yes
+# % description: Attribute field(s) for similarity test(s) (model 'attsim')
+# % gisprompt: old,dbcolumn,dbcolumn
+# %End
 
-#%Option
-#% key: neighbors
-#% type: integer
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Number of nearest neighbors to connect (model 'nn')
-#%End
+# %Option
+# % key: neighbors
+# % type: integer
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Number of nearest neighbors to connect (model 'nn')
+# %End
 
-#%Option
-#% key: maxdist
-#% type: double
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Absolute cost/distance threshold (several models)
-#%End
+# %Option
+# % key: maxdist
+# % type: double
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Absolute cost/distance threshold (several models)
+# %End
 
-#%Option G_OPT_DB_COLUMN
-#% key: size
-#% required: no
-#% description: Numeric attribute field with node 'size' (models 'xtent', 'nn')
-#% gisprompt: old,dbcolumn,dbcolumn
-#%End
+# %Option G_OPT_DB_COLUMN
+# % key: size
+# % required: no
+# % description: Numeric attribute field with node 'size' (models 'xtent', 'nn')
+# % gisprompt: old,dbcolumn,dbcolumn
+# %End
 
-#%Option
-#% key: a
-#% type: double
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Exponential size weight 'a' (model 'xtent')
-#%End
+# %Option
+# % key: a
+# % type: double
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Exponential size weight 'a' (model 'xtent')
+# %End
 
-#%Option
-#% key: k
-#% type: double
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Linear distance weight 'k' (model 'xtent')
-#%End
+# %Option
+# % key: k
+# % type: double
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Linear distance weight 'k' (model 'xtent')
+# %End
 
-#%Option
-#% key: avg
-#% type: string
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% options: mean,median
-#% description: Distance averaging function (model 'xtent')
-#% answer: mean
-#%End
+# %Option
+# % key: avg
+# % type: string
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % options: mean,median
+# % description: Distance averaging function (model 'xtent')
+# % answer: mean
+# %End
 
-#%Option
-#% key: costsyn
-#% type: double
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Cost synergy effect of re-using network links (requires 'costmap')
-#% options: 0.0-1.0
-#% answer: 0.0
-#%End
+# %Option
+# % key: costsyn
+# % type: double
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Cost synergy effect of re-using network links (requires 'costmap')
+# % options: 0.0-1.0
+# % answer: 0.0
+# %End
 
-#%Option
-#% key: costerr
-#% type: double
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Costmap error margin (+/-) in percent (requires 'costmap')
-#% options: 0.0-100.0
-#% answer: 0.0
-#%End
+# %Option
+# % key: costerr
+# % type: double
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Costmap error margin (+/-) in percent (requires 'costmap')
+# % options: 0.0-100.0
+# % answer: 0.0
+# %End
 
-#%Option
-#% key: costres
-#% type: integer
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Costmap resampling factor (requires 'costmap' and 'costerr')
-#% options: 1-10
-#% answer: 1
-#%End
+# %Option
+# % key: costres
+# % type: integer
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Costmap resampling factor (requires 'costmap' and 'costerr')
+# % options: 1-10
+# % answer: 1
+# %End
 
-#%Option
-#% key: costmem
-#% type: integer
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Max. memory for cost raster ops in MB (passed to 'r.cost')
-#% options: 300-300000
-#% answer: 300
-#%End
+# %Option
+# % key: costmem
+# % type: integer
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Max. memory for cost raster ops in MB (passed to 'r.cost')
+# % options: 300-300000
+# % answer: 300
+# %End
 
-#%Option
-#% key: threshold
-#% type: double
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Threshold distance for topology tests (0=skip)
-#% options: 0.0-100000000
-#% answer: 0.000001
-#%End
+# %Option
+# % key: threshold
+# % type: double
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Threshold distance for topology tests (0=skip)
+# % options: 0.0-100000000
+# % answer: 0.000001
+# %End
 
-#%Option
-#% key: threads
-#% type: integer
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% description: Number of concurrent processing threads (1=no concurrency) 
-#% options: 1-1024
-#% answer: 1
-#%End
+# %Option
+# % key: threads
+# % type: integer
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Number of concurrent processing threads (1=no concurrency) 
+# % options: 1-1024
+# % answer: 1
+# %End
 
-#%Option
-#% key: sqlbuflen
-#% type: integer
-#% required: no
-#% multiple: no
-#% key_desc: value
-#% answer: 20
-#% options: 1-1000
-#% description: Number of SQL statements to buffer (performance)
-#%End
+# %Option
+# % key: sqlbuflen
+# % type: integer
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % answer: 20
+# % options: 1-1000
+# % description: Number of SQL statements to buffer (performance)
+# %End
 
 # System setup: Modify if needed.
 if [ -n "${MSYSPATH}" ] ; then
@@ -358,6 +358,9 @@ else
 	# Set filter for line endings for this system:
 	IFS_NEWLINE=$'\n\b'
 fi
+
+# Minimal Bash version for expected to run this script without errors.
+BASH_VERSION_MIN="3" # Version 3 is the latest one shipped on macOS!
 
 # Keep a copy of IFS, as it was set before running this script!
 IFS_ORIGINAL="$IFS"
@@ -1968,27 +1971,35 @@ check_setup () {
 # check_environment: Query GRASS environment for some important variables.
 check_environment () {
 	
-	# Determine/report shell capabilities
+	# Determine/report shell capabilities	
 	interpreter=`get_interpreter`
 	g.message -i "Running in '$interpreter'."
 	is_bash=0
 	is_bourne=0
 	is_bash=`${ECHO} ${interpreter} |${GREP} "bash" -c`
 	is_bourne=`${ECHO} ${interpreter} |${GREP} "Bourne" -c`
-	if [ $is_bash -eq 0 ] ; then
-		if [ $is_bourne -eq 1 ] ; then
+	if [ $is_bash -eq 0 ] ; then # We are NOT running in Bash!
+		if [ $is_bourne -eq 1 ] ; then # This seems to be the original Bourne shell.
 			g.message -w "Running in slow Bourne shell compatibility mode."
 			g.message -w "For better performance, try running this script in Bash explicitly."
-		else
+		else # This seems to be neither Bash nor Bourne.
 			g.message -w "Could not assert that the current interpreter is Bash or Bourne shell."
 			g.message -w "If this script throws inexplicable errors, try running it in Bash."
-			g.message -w "Running in slow Bourne shell compatibility mode."
+			g.message -w "Assuming compatibility with Bash version $BASH_VERSION_MIN."
+			BASH_VERSION="$BASH_VERSION_MIN"
 		fi
-	else
+	else # We are running in Bash!
 		if [ -z $BASH_VERSION ] ; then
-			# If BASH_VERSION has not been set then we just assume a version!
-			BASH_VERSION="3" # Version 3 is the latest one shipped on macOS
-			g.message -w "BASH_VERSION not set. Assuming version $BASH_VERSION."
+			# If BASH_VERSION has not been set at this point then we just assume a version!
+			g.message -w "BASH_VERSION not set. Assuming at least version $BASH_VERSION_MIN."
+			BASH_VERSION="$BASH_VERSION_MIN"			
+		fi
+		# Get Bash major version as currently set.
+		bash_version_major=`${ECHO} "$BASH_VERSION" | ${CUT} -f1 -d.`
+		g.message -i "Detected Bash version '$bash_version_major'."
+		if [ ${bash_version_major} -lt ${BASH_VERSION_MIN} ] ; then
+			g.message -w "Bash version is lower than assumed minimal version (${BASH_VERSION_MIN})."
+			g.message -w "Expect trouble."
 		fi
 	fi
 	
@@ -5379,7 +5390,7 @@ g.message -i "$MODULE_NAME_EXEC ($MODULE_VERSION) started."
 # Run all pre-flight checks:
 check_setup
 if [ -z "${MULTI_THREADING_SUPPORT}" ] ; then
-	g.message -w "Multi-threaded operation not supported on this operating system. Forcing 'threads=1'."
+	g.message -w "Multi-threaded operation not supported. Forcing 'threads=1'."
 	GIS_OPT_THREADS=1
 fi
 check_params
