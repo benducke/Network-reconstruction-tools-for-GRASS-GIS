@@ -48,8 +48,13 @@
 # %End
 
 # %Flag
+# %  key: a
+# %  description: Append statistical output to existing text file
+# %End
+
+# %Flag
 # %  key: f
-# %  description: Force overwrite of input map's existing field values
+# %  description: Force overwrite of input maps' existing field values
 # %End
 
 # %Flag
@@ -84,12 +89,28 @@
 # % gisprompt: old,vector,vector
 # %End
 
-
 # %Option G_OPT_DB_COLUMN
 # % key: key
 # % required: yes
 # % description: Name of INTEGER key field in input nodes' attribute table
 # % gisprompt: old,dbcolumn,dbcolumn
+# %End
+
+# %Option
+# % key: nstats
+# % type: string
+# % required: no
+# % multiple: no
+# % key_desc: name
+# % description: Output nodes (points) with added statistical attributes
+# % gisprompt: new,vector,vector
+# %End
+
+# %Option G_OPT_F_OUTPUT
+# % key: outfile
+# % required: no
+# % description: Name of text file to store statistical output
+# % gisprompt: new,file,file
 # %End
 
 
@@ -875,6 +896,32 @@ check_input () {
 	fi
 
 	# CHECK INPUT NODES
+	#
+	GIS_OPT_NODES_ORG="$GIS_OPT_NODES" # Keep a copy of original name of nodes input map
+	if [ -n "${GIS_OPT_NSTATS}" ] ; then
+		# GIS_OPT_NSTATS provided!
+		# In that case, instead of adding/updating attribute fields in the nodes
+		# input map, we work with a copy of it and then save the result as a new
+		# vector map. This avoids accidental overwriting of existing data and also
+		# allows external callers, such as QGIS' Processing plugin to create
+		# exportable, permanent output:
+		#
+		# - We make a copy of the nodes input map, implicitly set the -f(orce) flag,
+		#   and then set $GIS_OPT_NODES to be $GIS_OPT_NSTATS
+		#
+		# That way, the stats attribute fields will be added/recreated as needed
+		# using a copy of the original nodes input map, instead of manipulating the
+		# nodes input map itself.
+		#
+		# 1. Copy $GIS_OPT_NODES -> $GIS_OPT_NSTATS
+		g.copy vect="${GIS_OPT_NODES}","${GIS_OPT_NSTATS}" --o --quiet 2>/dev/null
+		check_error "Failed to copy input nodes map to new output nodes map (option 'nstats=')."
+		# 2. Implicitly set "-f"orce flag
+		GIS_FLAG_F=1
+		# 3. Point GIS_OPT_NODES -> $GIS_OPT_NSTATS
+		GIS_OPT_NODES="${GIS_OPT_NSTATS}"
+	fi	
+	
 	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 		g.message -i "Verifying validity of nodes input map (option 'nodes=')..."
 	fi
@@ -951,9 +998,11 @@ check_input () {
 			# Field exists and -f flag given: Drop field and re-create it with correct type (INTEGER) if necessary.
 			fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "INTEGER|${NODES_FLD_LINKS}" -w -c`
 			if [ ${fld_test_result} -ne 1 ] ; then
-				# Field is not of correct type: Drop and re-create it!				
-				g.message -w "Found attribute with reserved field name '${NODES_FLD_LINKS}' but wrong type."
-				g.message -w "Field will be dropped and re-created with correct type (INTEGER)."				
+				# Field is not of correct type: Drop and re-create it!
+				if [ -z "${GIS_OPT_NSTATS}" ] ; then
+					g.message -w "Found attribute with reserved field name '${NODES_FLD_LINKS}' but wrong type."
+					g.message -w "Field will be dropped and re-created with correct type (INTEGER)."				
+				fi
 				${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_LINKS}" --quiet
 				check_error "Failed to remove reserved attribute '${NODES_FLD_LINKS}' from input nodes map '${GIS_OPT_NODES}'."
 				${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LINKS} INTEGER" --quiet
@@ -979,9 +1028,11 @@ check_input () {
 			# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
 			fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_LEN_SUM}" -w -c`
 			if [ ${fld_test_result} -ne 1 ] ; then
-				# Field is not of correct type: Drop and re-create it!				
-				g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' but wrong type."
-				g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+				# Field is not of correct type: Drop and re-create it!			
+				if [ -z "${GIS_OPT_NSTATS}" ] ; then	
+					g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_SUM}' but wrong type."
+					g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+				fi
 				${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_LEN_SUM}" --quiet
 				check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_SUM}' from input nodes map '${GIS_OPT_NODES}'."
 				${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LEN_SUM} DOUBLE PRECISION" --quiet
@@ -1007,9 +1058,11 @@ check_input () {
 			# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
 			fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_LEN_AVG}" -w -c`
 			if [ ${fld_test_result} -ne 1 ] ; then
-				# Field is not of correct type: Drop and re-create it!				
-				g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_AVG}' but wrong type."
-				g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+				# Field is not of correct type: Drop and re-create it!
+				if [ -z "${GIS_OPT_NSTATS}" ] ; then		
+					g.message -w "Found attribute with reserved field name '${NODES_FLD_LEN_AVG}' but wrong type."
+					g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+				fi
 				${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_LEN_AVG}" --quiet
 				check_error "Failed to remove reserved attribute '${NODES_FLD_LEN_AVG}' from input nodes map '${GIS_OPT_NODES}'."
 				${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_LEN_AVG} DOUBLE PRECISION" --quiet
@@ -1037,9 +1090,11 @@ check_input () {
 				# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
 				fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_COST_SUM}" -w -c`
 				if [ ${fld_test_result} -ne 1 ] ; then
-					# Field is not of correct type: Drop and re-create it!				
-					g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_SUM}' but wrong type."
-					g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+					# Field is not of correct type: Drop and re-create it!
+					if [ -z "${GIS_OPT_NSTATS}" ] ; then
+						g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_SUM}' but wrong type."
+						g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."
+					fi
 					${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_COST_SUM}" --quiet
 					check_error "Failed to remove reserved attribute '${NODES_FLD_COST_SUM}' from input nodes map '${GIS_OPT_NODES}'."
 					${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_COST_SUM} DOUBLE PRECISION" --quiet
@@ -1065,9 +1120,11 @@ check_input () {
 				# Field exists and -f flag given: Drop field and re-create it with correct type (DOUBLE PRECISION) if necessary.
 				fld_test_result=`v.info -c --quiet map="${GIS_OPT_NODES}" layer="1" | "${GREP}" "DOUBLE PRECISION|${NODES_FLD_COST_AVG}" -w -c`
 				if [ ${fld_test_result} -ne 1 ] ; then
-					# Field is not of correct type: Drop and re-create it!				
-					g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_AVG}' but wrong type."
-					g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."				
+					# Field is not of correct type: Drop and re-create it!
+					if [ -z "${GIS_OPT_NSTATS}" ] ; then
+						g.message -w "Found attribute with reserved field name '${NODES_FLD_COST_AVG}' but wrong type."
+						g.message -w "Field will be dropped and re-created with correct type (DOUBLE PRECISION)."
+					fi
 					${V_DB_DROPCOLUMN} layer="1" map="${GIS_OPT_NODES}" columns="${NODES_FLD_COST_AVG}" --quiet
 					check_error "Failed to remove reserved attribute '${NODES_FLD_COST_AVG}' from input nodes map '${GIS_OPT_NODES}'."
 					${V_DB_ADDCOLUMN} map="${GIS_OPT_NODES}" layer="1" columns="${NODES_FLD_COST_AVG} DOUBLE PRECISION" --quiet
@@ -1670,6 +1727,19 @@ check_params () {
 		exit_error "At least one of options 'links=' and 'nodes=' must be specified."
 	fi
 
+	# Flag '-a' requires option 'outfile='.
+	if [ ${GIS_FLAG_A} -eq 1 ] ; then
+		if [ -z "${GIS_OPT_OUTFILE}" ] ; then
+			exit_error "Flag '-a' is only valid in combination with option 'outfile='."
+		fi
+	fi
+
+	# Shell script style output contradicts 'outfile=' and '-a'.
+	if [ ${GIS_FLAG_G} -eq 1 ] ; then
+		if [ -n "${GIS_OPT_OUTFILE}" ] ; then
+			exit_error "Flag '-g' cannot be set in combination with option 'outfile='."
+		fi
+	fi
 }
 
 
@@ -1737,7 +1807,6 @@ check_environment () {
 	GRASS_DB_driver="${EVAL_RESULT}"
 	eval_ws_safe "${cmd}" "database"
 	GRASS_DB_database="${EVAL_RESULT}"
-
 	
 	# Ensure that we are running with a supported DBMS!
 	# A supported DBMS must have sufficient SQL capabilities for this script's attribute data
@@ -2147,6 +2216,7 @@ stats_compute_nodes
 
 # Output basic network statistics
 if [ ${GIS_FLAG_G} -eq 1 ] ; then
+	# Terse output to console
 	"${ECHO}" "net_nodes_unreduced=${net_nodes_undreduced}"
 	"${ECHO}" "net_links_unreduced=${net_links_unreduced}"	
 	"${ECHO}" "net_len_unreduced=${net_len_unreduced}"
@@ -2165,23 +2235,64 @@ if [ ${GIS_FLAG_G} -eq 1 ] ; then
 		"${ECHO}" "net_cost_median_unreduced=${net_cost_median_unreduced}"
 	fi
 else
-	g.message -i "Network properties:"
-	g.message -i "Nodes: ${net_nodes_undreduced}"
-	g.message -i "Links: ${net_links_unreduced}"
-	g.message -i "Total network length(m): ${net_len_unreduced}"
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		g.message -i "Total network cost: ${net_cost_unreduced}"
-	fi		
-	g.message -i "Mean connections/node: ${net_cons_mean_unreduced}"
-	g.message -i "Min. link length: ${net_len_min_unreduced}"
-	g.message -i "Max. link length: ${net_len_max_unreduced}"
-	g.message -i "Mean link length: ${net_len_mean_unreduced}"
-	g.message -i "Median link length: ${net_len_median_unreduced}"	
-	if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-		g.message -i "Min. link cost: ${net_cost_min_unreduced}"
-		g.message -i "Max. link cost: ${net_cost_max_unreduced}"
-		g.message -i "Mean link cost: ${net_cost_mean_unreduced}"
-		g.message -i "Median link cost: ${net_cost_median_unreduced}"
+	if [ -n "${GIS_OPT_OUTFILE}" ] ; then
+		# Detailed output to file.
+		#		
+		# HEADER
+		if [ ${GIS_FLAG_A} -eq 1 ] ; then
+			"${ECHO}" "$MODULE_NAME_EXEC $MODULE_VERSION" >> "${GIS_OPT_OUTFILE}"
+		else
+			"${ECHO}" "$MODULE_NAME_EXEC $MODULE_VERSION" > "${GIS_OPT_OUTFILE}"
+		fi
+		"${ECHO}" "Started  : ${START}" >> "${GIS_OPT_OUTFILE}"
+		END=`"${DATE}"`
+		"${ECHO}" "Completed: ${END}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Parameters:" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "    Links = ${GIS_OPT_LINKS}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "    Nodes = ${GIS_OPT_NODES_ORG}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "    key   = ${GIS_OPT_KEY}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "=======================================" >> "${GIS_OPT_OUTFILE}"
+		# STATS			
+		"${ECHO}" "Network properties:" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Nodes: ${net_nodes_undreduced}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Links: ${net_links_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Total network length(m): ${net_len_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+			"${ECHO}" "Total network cost: ${net_cost_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		fi		
+		"${ECHO}" "Mean connections/node: ${net_cons_mean_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Min. link length: ${net_len_min_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Max. link length: ${net_len_max_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Mean link length: ${net_len_mean_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Median link length: ${net_len_median_unreduced}" >> "${GIS_OPT_OUTFILE}"	
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+			"${ECHO}" "Min. link cost: ${net_cost_min_unreduced}" >> "${GIS_OPT_OUTFILE}"
+			"${ECHO}" "Max. link cost: ${net_cost_max_unreduced}" >> "${GIS_OPT_OUTFILE}"
+			"${ECHO}" "Mean link cost: ${net_cost_mean_unreduced}" >> "${GIS_OPT_OUTFILE}"
+			"${ECHO}" "Median link cost: ${net_cost_median_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		fi
+		# FOOTER
+		"${ECHO}" " " >> "${GIS_OPT_OUTFILE}"
+	else
+		# Detailed output to console.
+		g.message -i "Network properties:"
+		g.message -i "Nodes: ${net_nodes_undreduced}"
+		g.message -i "Links: ${net_links_unreduced}"
+		g.message -i "Total network length(m): ${net_len_unreduced}"
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+			g.message -i "Total network cost: ${net_cost_unreduced}"
+		fi		
+		g.message -i "Mean connections/node: ${net_cons_mean_unreduced}"
+		g.message -i "Min. link length: ${net_len_min_unreduced}"
+		g.message -i "Max. link length: ${net_len_max_unreduced}"
+		g.message -i "Mean link length: ${net_len_mean_unreduced}"
+		g.message -i "Median link length: ${net_len_median_unreduced}"	
+		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
+			g.message -i "Min. link cost: ${net_cost_min_unreduced}"
+			g.message -i "Max. link cost: ${net_cost_max_unreduced}"
+			g.message -i "Mean link cost: ${net_cost_mean_unreduced}"
+			g.message -i "Median link cost: ${net_cost_median_unreduced}"
+		fi
 	fi
 fi
 
