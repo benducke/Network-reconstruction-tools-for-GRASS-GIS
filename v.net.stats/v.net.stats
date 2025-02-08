@@ -49,7 +49,7 @@
 
 # %Flag
 # %  key: a
-# %  description: Append statistical output to existing text file
+# %  description: Append statistical report to existing text file
 # %End
 
 # %Flag
@@ -107,12 +107,23 @@
 # %End
 
 # %Option G_OPT_F_OUTPUT
-# % key: outfile
+# % key: report
 # % required: no
-# % description: Name of text file to store statistical output
+# % description: Output text file for statistical report
 # % gisprompt: new,file,file
 # %End
 
+# %option
+# % key: title
+# % type: string
+# % required: no
+# % description: Title string for statistical report
+# %end
+
+# Basic module setup.
+MODULE_NAME="v_net_stats" # for prefixing temporary object names
+MODULE_NAME_EXEC="v.net.stats" # name as run on the command line
+MODULE_VERSION="1.1.0"
 
 # System setup: Modify if needed.
 if [ -n "${MSYSPATH}" ] ; then
@@ -159,11 +170,6 @@ BASH_VERSION_MIN="3" # Version 3 is the latest one shipped on macOS!
 
 # Keep a copy of IFS, as it was set before running this script!
 IFS_ORIGINAL="$IFS"
-
-# Basic module setup.
-MODULE_NAME="v_net_stats" # for prefixing temporary object names
-MODULE_NAME_EXEC="v.net.stats" # name as run on the command line
-MODULE_VERSION="1.1.0b1"
 
 # Exit status variables.
 EXIT_OK=0
@@ -1723,21 +1729,27 @@ check_setup () {
 #					triggering any clean-ups!
 check_params () {
 	
+	# At least one input map must be provided.
 	if [ -z "$GIS_OPT_LINKS" ] && [ -z "$GIS_OPT_NODES" ] ; then
 		exit_error "At least one of options 'links=' and 'nodes=' must be specified."
 	fi
 
-	# Flag '-a' requires option 'outfile='.
+	# Option 'title="' requires option 'report='.
+	if [ -n "$GIS_OPT_TITLE" ] && [ -z "$GIS_OPT_REPORT" ] ; then
+		exit_error "Option 'title=' requires option 'report=' to also be specified."
+	fi
+
+	# Flag '-a' requires option 'report='.
 	if [ ${GIS_FLAG_A} -eq 1 ] ; then
-		if [ -z "${GIS_OPT_OUTFILE}" ] ; then
-			exit_error "Flag '-a' is only valid in combination with option 'outfile='."
+		if [ -z "${GIS_OPT_REPORT}" ] ; then
+			exit_error "Flag '-a' is only valid in combination with option 'report='."
 		fi
 	fi
 
-	# Shell script style output contradicts 'outfile=' and '-a'.
+	# Shell script style output contradicts 'report=' and '-a'.
 	if [ ${GIS_FLAG_G} -eq 1 ] ; then
-		if [ -n "${GIS_OPT_OUTFILE}" ] ; then
-			exit_error "Flag '-g' cannot be set in combination with option 'outfile='."
+		if [ -n "${GIS_OPT_REPORT}" ] ; then
+			exit_error "Flag '-g' cannot be set in combination with option 'report='."
 		fi
 	fi
 }
@@ -2235,44 +2247,50 @@ if [ ${GIS_FLAG_G} -eq 1 ] ; then
 		"${ECHO}" "net_cost_median_unreduced=${net_cost_median_unreduced}"
 	fi
 else
-	if [ -n "${GIS_OPT_OUTFILE}" ] ; then
+	if [ -n "${GIS_OPT_REPORT}" ] ; then
 		# Detailed output to file.
 		#		
-		# HEADER
+		# HEADER (1)
 		if [ ${GIS_FLAG_A} -eq 1 ] ; then
-			"${ECHO}" "$MODULE_NAME_EXEC $MODULE_VERSION" >> "${GIS_OPT_OUTFILE}"
+			"${ECHO}" "$MODULE_NAME_EXEC $MODULE_VERSION" >> "${GIS_OPT_REPORT}"
 		else
-			"${ECHO}" "$MODULE_NAME_EXEC $MODULE_VERSION" > "${GIS_OPT_OUTFILE}"
+			"${ECHO}" "$MODULE_NAME_EXEC $MODULE_VERSION" > "${GIS_OPT_REPORT}"
 		fi
-		"${ECHO}" "Started  : ${START}" >> "${GIS_OPT_OUTFILE}"
+		# ADDITIONAL TITLE STRING (if given)
+		if [ -n "${GIS_OPT_TITLE}" ] ; then
+			"${ECHO}" "=======================================" >> "${GIS_OPT_REPORT}"
+			"${ECHO}" "${GIS_OPT_TITLE}" >> "${GIS_OPT_REPORT}"
+		fi
+		# HEADER (2)
+		"${ECHO}" "Started  : ${START}" >> "${GIS_OPT_REPORT}"
 		END=`"${DATE}"`
-		"${ECHO}" "Completed: ${END}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Parameters:" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "    Links = ${GIS_OPT_LINKS}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "    Nodes = ${GIS_OPT_NODES_ORG}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "    key   = ${GIS_OPT_KEY}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "=======================================" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Completed: ${END}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Parameters:" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "    Links = ${GIS_OPT_LINKS}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "    Nodes = ${GIS_OPT_NODES_ORG}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "    key   = ${GIS_OPT_KEY}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "=======================================" >> "${GIS_OPT_REPORT}"
 		# STATS			
-		"${ECHO}" "Network properties:" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Nodes: ${net_nodes_undreduced}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Links: ${net_links_unreduced}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Total network length(m): ${net_len_unreduced}" >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" "Network properties:" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Nodes: ${net_nodes_undreduced}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Links: ${net_links_unreduced}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Total network length(m): ${net_len_unreduced}" >> "${GIS_OPT_REPORT}"
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			"${ECHO}" "Total network cost: ${net_cost_unreduced}" >> "${GIS_OPT_OUTFILE}"
+			"${ECHO}" "Total network cost: ${net_cost_unreduced}" >> "${GIS_OPT_REPORT}"
 		fi		
-		"${ECHO}" "Mean connections/node: ${net_cons_mean_unreduced}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Min. link length: ${net_len_min_unreduced}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Max. link length: ${net_len_max_unreduced}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Mean link length: ${net_len_mean_unreduced}" >> "${GIS_OPT_OUTFILE}"
-		"${ECHO}" "Median link length: ${net_len_median_unreduced}" >> "${GIS_OPT_OUTFILE}"	
+		"${ECHO}" "Mean connections/node: ${net_cons_mean_unreduced}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Min. link length: ${net_len_min_unreduced}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Max. link length: ${net_len_max_unreduced}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Mean link length: ${net_len_mean_unreduced}" >> "${GIS_OPT_REPORT}"
+		"${ECHO}" "Median link length: ${net_len_median_unreduced}" >> "${GIS_OPT_REPORT}"	
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			"${ECHO}" "Min. link cost: ${net_cost_min_unreduced}" >> "${GIS_OPT_OUTFILE}"
-			"${ECHO}" "Max. link cost: ${net_cost_max_unreduced}" >> "${GIS_OPT_OUTFILE}"
-			"${ECHO}" "Mean link cost: ${net_cost_mean_unreduced}" >> "${GIS_OPT_OUTFILE}"
-			"${ECHO}" "Median link cost: ${net_cost_median_unreduced}" >> "${GIS_OPT_OUTFILE}"
+			"${ECHO}" "Min. link cost: ${net_cost_min_unreduced}" >> "${GIS_OPT_REPORT}"
+			"${ECHO}" "Max. link cost: ${net_cost_max_unreduced}" >> "${GIS_OPT_REPORT}"
+			"${ECHO}" "Mean link cost: ${net_cost_mean_unreduced}" >> "${GIS_OPT_REPORT}"
+			"${ECHO}" "Median link cost: ${net_cost_median_unreduced}" >> "${GIS_OPT_REPORT}"
 		fi
 		# FOOTER
-		"${ECHO}" " " >> "${GIS_OPT_OUTFILE}"
+		"${ECHO}" " " >> "${GIS_OPT_REPORT}"
 	else
 		# Detailed output to console.
 		g.message -i "Network properties:"
