@@ -1171,6 +1171,16 @@ check_input () {
 		if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 			g.message -i "Checking connections of input nodes with input links (1/3):"
 		fi
+		# Get attribute table info:
+		get_tbl_info "${GIS_OPT_LINKS}"
+		attribute_database_driver_links="$attribute_database_driver"
+		attribute_database_links="$attribute_database"
+		attribute_table_links="$attribute_table"
+		get_tbl_info "${GIS_OPT_NODES}"
+		attribute_database_driver_nodes="$attribute_database_driver"
+		attribute_database_nodes="$attribute_database"
+		attribute_table_nodes="$attribute_table"
+		#
 		get_primary_keys "${GIS_OPT_NODES}"
 		OLD_IFS="$IFS"
 		IFS="${IFS_NEWLINE}"
@@ -1186,11 +1196,11 @@ check_input () {
 		i=0
 		for key in ${PRIMARY_KEYS} ; do
 			# Step through all input nodes and count number of connections:
-			num_connections_from=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${LINKS_FLD_FROM_ID}=$key;" -c --quiet | "${GREP}" "${key}" -c`
+			num_connections_from=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=$key;" driver="$attribute_database_driver_links" -c --quiet | "${GREP}" "${key}" -c`
 			if [ -z "${num_connections_from}" ] ; then
 				num_connections_from=0
 			fi
-			num_connections_to=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${LINKS_FLD_TO_ID}=$key;" -c --quiet | "${GREP}" "${key}" -c`
+			num_connections_to=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_TO_ID}=$key;" driver="$attribute_database_driver_links" -c --quiet | "${GREP}" "${key}" -c`
 			if [ -z "${num_connections_to}" ] ; then
 				num_connections_to=0
 			fi
@@ -1231,24 +1241,24 @@ check_input () {
 			else
 				i=`"${EXPR}" ${i} + 1`
 			fi
-		done		
-		max=${i}		
+		done
 		# Check all from_id fields:
+		max=${i}
 		i=0
 		for cat in ${GRASS_CATS} ; do
 			# Get value of 'from_id' for this link:
-			init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+			init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="$attribute_database_driver_links" -c --quiet`
 			check_error "Failed to retrieve value of field ('${LINKS_FLD_FROM_ID}') from links input map ('${GRASS_PKEY}=${cat}')."
 			# Check if 'from_id' occurs as primary key of any input node:
-			num_connections_from=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${GIS_OPT_NODES} WHERE ${GIS_OPT_KEY}=${init_from_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
+			num_connections_from=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${attribute_table_nodes} WHERE ${GIS_OPT_KEY}=${init_from_id};" driver="$attribute_database_driver_nodes" -c --quiet | "${GREP}" "${init_from_id}" -c`
 			if [ -z "${num_connections_from}" ] ; then
 				num_connections_from=0
 			fi
 			# Get value of 'to_id' for this link:		
-			init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+			init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="$attribute_database_driver_links" -c --quiet`
 			check_error "Failed to retrieve value of field ('${LINKS_FLD_TO_ID}') from links input map ('${GRASS_PKEY}=${cat}')."
 			# Check if 'to_id' occurs as primary key of any input node:
-			num_connections_to=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${GIS_OPT_NODES} WHERE ${GIS_OPT_KEY}=${init_to_id};" -c --quiet | "${GREP}" "${init_to_id}" -c`
+			num_connections_to=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${attribute_table_nodes} WHERE ${GIS_OPT_KEY}=${init_to_id};" driver="$attribute_database_driver_nodes" -c --quiet | "${GREP}" "${init_to_id}" -c`
 			if [ -z "${num_connections_to}" ] ; then
 				num_connections_to=0
 			fi
@@ -1290,14 +1300,14 @@ check_input () {
 		max=${i}
 		i=0
 		for cat in ${GRASS_CATS} ; do
-			init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+			init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="$attribute_database_driver_links" -c --quiet`
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_FROM_ID}') from links input map."
-			init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`		
+			init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="$attribute_database_driver_links" -c --quiet`		
 			check_error "Failed to retrieve value for field ('${LINKS_FLD_TO_ID}') from links input map."
 			# Check for occurrences of this from/to pair:
-			num_init_pairs_ft=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
+			num_init_pairs_ft=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id};" driver="$attribute_database_driver_links" -c --quiet | "${GREP}" "${init_from_id}" -c`
 			# Check for occurrences of this to/from pair:
-			num_init_pairs_tf=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
+			num_init_pairs_tf=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id};" driver="$attribute_database_driver_links" -c --quiet | "${GREP}" "${init_from_id}" -c`
 			if [ -n $BASH_VERSION ] ; then
 				let num_init_pairs=${num_init_pairs_ft}+${num_init_pairs_tf}
 			else
@@ -1989,6 +1999,9 @@ get_where_clause () {
 stats_compute_links () {
 	# Get attribute table info for output links map:
 	get_tbl_info "${GIS_OPT_LINKS}"
+	attribute_database_driver_links="$attribute_database_driver"
+	attribute_database_links="$attribute_database"
+	attribute_table_links="$attribute_table"
 	# Get global statistics for unreduced network.
 	# We will output these at the end of the program run!
 	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
@@ -2008,7 +2021,7 @@ stats_compute_links () {
 	OLD_IFS="$IFS"
 	IFS="${IFS_NEWLINE}"
 	for cat in ${GRASS_CATS} ; do
-		len=`db.select sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
+		len=`db.select sql="SELECT ${LINKS_FLD_LEN_M} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database_links" driver="$attribute_database_driver_links" -c --quiet`
 		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GRASS_PKEY}='${cat}')"
 		awk_min "${min_len}" "${len}"
 		min_len="${AWK_VALUE}"
@@ -2017,7 +2030,7 @@ stats_compute_links () {
 		awk_calc "$total_len+$len"
 		total_len="${AWK_VALUE}"
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			cost=`db.select sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
+			cost=`db.select sql="SELECT ${LINKS_FLD_COST} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database_links" driver="$attribute_database_driver_links" -c --quiet`
 			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GRASS_PKEY}='${cat}')"
 			awk_min "${min_cost}" "${cost}"
 			min_cost="${AWK_VALUE}"
@@ -2081,12 +2094,15 @@ stats_compute_links () {
 #
 stats_compute_nodes () {
 	# Get and store attribute table info for output maps:
-	get_tbl_info "${GIS_OPT_LINKS}"
-	attribute_table_links="${attribute_table}"
-	attribute_database_links="${attribute_database}"
-	get_tbl_info "${GIS_OPT_NODES}"
-	attribute_table_nodes="${attribute_table}"
-	attribute_database_nodes="${attribute_database}"
+	# Get attribute table info:
+		get_tbl_info "${GIS_OPT_LINKS}"
+		attribute_database_driver_links="$attribute_database_driver"
+		attribute_database_links="$attribute_database"
+		attribute_table_links="$attribute_table"
+		get_tbl_info "${GIS_OPT_NODES}"
+		attribute_database_driver_nodes="$attribute_database_driver"
+		attribute_database_nodes="$attribute_database"
+		attribute_table_nodes="$attribute_table"
 
 	if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 		g.message -i "Computing statistics for network nodes:"
@@ -2099,11 +2115,11 @@ stats_compute_nodes () {
 	IFS="${IFS_NEWLINE}"
 	for key in ${PRIMARY_KEYS} ; do	
 		# Number of other nodes wo which the current node is connected:
-		num_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key;" -c --quiet | "${GREP}" "${key}" -c`
+		num_links=`db.select database="${attribute_database_links}" sql="SELECT * FROM ${attribute_table_links} WHERE $LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key;" driver="$attribute_database_driver_links" -c --quiet | "${GREP}" "${key}" -c`
 		# Lengths of all from/to links to the current node:
-		len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key;" -c --quiet`
+		len=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_LEN_M} FROM ${attribute_table_links} WHERE $LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key;" driver="$attribute_database_driver_links" -c --quiet`
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE $LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key;" -c --quiet`
+			cost=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_COST} FROM ${attribute_table_links} WHERE $LINKS_FLD_FROM_ID=$key OR $LINKS_FLD_TO_ID=$key;" driver="$attribute_database_driver_links" -c --quiet`
 		fi
 		# Compute total and mean statistics
 		total_len=0
@@ -2177,7 +2193,7 @@ ${SQL}"
 		# Commit transaction of SQL chunk:
 		SQL_CHUNK="${SQL_CHUNK}
 ${DBMS_COMMIT}"
-		"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database}" input="-"
+		"${ECHO}" "${SQL_CHUNK}" | db.execute driver="$attribute_database_driver_nodes" database="${attribute_database_nodes}" input="-"
 		check_error "Failed to write all attribute fields of record #${key} into output nodes maps ('${GIS_OPT_NODES}')."
 
 		g.message -p "${step} ${points} 1"
