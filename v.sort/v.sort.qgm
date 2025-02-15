@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE qgisgrassmodule SYSTEM "http://mrcc.com/qgisgrassmodule.dtd">
+
+<qgisgrassmodule label="Sort features of a vector map on values of a chosen field" module="v.sort">
+	<option key="input"/>
+	<field key="by" layer="input" type="integer,double,string" />
+	<option key="order"/>
+	<option key="output"/>
+</qgisgrassmodule>
