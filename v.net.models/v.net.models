@@ -15,8 +15,7 @@
 # COMPATIBILITY:
 #				This script has been written to run under GRASS 8 (and possibly
 #				any later version that retains the GRASS 8 syntax for the GRASS
-#				commands called by this script). Care has been taken to allow
-#               v.net.models to also run under earlier versions of GRASS.
+#				commands called by this script).
 #
 # COPYRIGHT:    (C) 2020 by Benjamin Ducke
 #
@@ -1015,9 +1014,9 @@ get_label () {
 #            	This function reads the same two arguments as get_label():
 #				$1 -- name of GRASS vector map TABLE from which to read primary key and label
 #				$2 -- value of primary key for which to retrieve label
-#				... PLUS three more which tell db.execute exactly what source to query
-#				$4 -- DB driver name
-#				$5 -- database name
+#				... PLUS two more which tell db.select exactly what source to query
+#				$3 -- DB driver name
+#				$4 -- database name
 #
 #				The label value will be written into the variable LABEL.
 get_label_fast () {
@@ -1031,24 +1030,6 @@ get_label_fast () {
 			fi		
 	fi
 	check_error "Failed to retrieve label for primary key value '${2}' (map='${1}')."
-}
-
-
-# FUNCTION
-# get_label_no_spaces: 	Gets the label for the input site's record with a given primary key.
-#			  				This function is identical to 'get_label', except that it replaces
-#							spaces with '_' (underscore). 
-get_label_no_spaces () {
-	if [ "${GIS_OPT_LABEL}" = "${GIS_OPT_KEY}" ] ; then
-		LABEL="$2" # label field = key field
-	else		 
-		if [ "${LABEL_TYPE}" = "CHARACTER" ] || [ "${LABEL_TYPE}" = "TEXT" ] ; then
-				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="${GIS_OPT_KEY}='$2'" -c --quiet | "${AWK}" '{ gsub (" ", "_", $0); print}'`
-			else
-				LABEL=`v.db.select map="$1" columns="${GIS_OPT_LABEL}" where="${GIS_OPT_KEY}=$2" -c --quiet | "${AWK}" '{ gsub (" ", "_", $0); print}'`
-			fi		
-	fi
-	check_error "Failed to retrieve label for primary key value '${2}' (map='$1')."
 }
 
 
@@ -1083,8 +1064,11 @@ get_where_clause_inv () {
 #				("layer 1") connected to a GRASS vector map. The information is read from
 #				the output of 'v.info'.
 #
-#            	This function reads one argument:
+#            	This function reads two arguments:
 #					$1 -- name of GRASS vector map that has the attibute table of interest
+#					$2 -- layer number of $1
+#
+#				($2 may be skipped, in which case the default layer is "1")
 #
 #            	This function sets three variables:
 #               	attribute_database_driver = GRASS database driver used for the connection
@@ -1095,7 +1079,11 @@ get_where_clause_inv () {
 #				 It will abort the program if there is a problem with the map and/or its table.            
 #
 get_tbl_info () {
-	cmd=`v.info -e map="${1}" layer="1"`
+	if [ -n "${2}" ] ; then
+		cmd=`v.info -e map="${1}" layer="${2}"`
+	else
+		cmd=`v.info -e map="${1}" layer="1"`
+	fi
 	check_error "Failed to query vector map '$1' for extended metadata."
 	
 	# Get DB driver name:
@@ -1127,7 +1115,7 @@ get_tbl_info () {
 #            Only the attribute table connected to layer 1 is supported.
 #
 #            This function reads two arguments:
-#				$1 -- name of GRASS vector map that has the attibute table
+#				$1 -- name of GRASS vector map that has the attribute table
 #				$2 -- name of field for which to add the index
 #
 #            This function returns nothing. It will abort the program if there
@@ -1143,8 +1131,8 @@ add_index () {
 		# Get fresh info for this function:
 		get_tbl_info "$1"
 		# Build index for specified map and field.
-		db.execute sql="CREATE INDEX ${attribute_table}_${2}_idx ON ${attribute_table}($2)" database="${attribute_database}"	
-		# Restore existing connection information:
+		db.execute sql="CREATE INDEX ${attribute_table}_${2}_idx ON ${attribute_table}($2)" database="${attribute_database}" driver="${attribute_database_driver}"
+		# Restore previous connection information:
 		attribute_database_driver="${attribute_database_driver_BAK}"
 		attribute_database="${attribute_database_BAK}"
 		attribute_table="${attribute_table_BAK}"}
@@ -1177,9 +1165,9 @@ del_index () {
 		get_tbl_info "$1"
 		# Delete index for specified map and field: This requires a specific syntax, depending on DBMS!
 		if [ "${attribute_database_driver}" = "mysql" ] || [ "${attribute_database_driver}" = "mesql" ] ; then
-			db.execute sql="DROP INDEX ${attribute_table}_${2}_idx ON ${attribute_table}" database="${attribute_database}"
+			db.execute sql="DROP INDEX ${attribute_table}_${2}_idx ON ${attribute_table}" database="${attribute_database}" driver="${attribute_database_driver}"
 		else
-			db.execute sql="DROP INDEX ${attribute_table}_${2}_idx" database="${attribute_database}"
+			db.execute sql="DROP INDEX ${attribute_table}_${2}_idx" database="${attribute_database}" driver="${attribute_database_driver}"
 		fi
 		# Restore existing connection information:
 		attribute_database_driver="${attribute_database_driver_BAK}"
@@ -1536,7 +1524,11 @@ str_substr () {
 #
 stats_compute_links () {
 	# Get attribute table info for output links map:
+	# Get attribute table info for output links map:
 	get_tbl_info "${GIS_OPT_LINKS}"
+	attribute_database_driver_links="$attribute_database_driver"
+	attribute_database_links="$attribute_database"
+	attribute_table_links="$attribute_table"
 	# Get global statistics for unreduced network and store them in some variables
 	# that will be used later by the "xtent" model or any other model that requires
 	# them.
@@ -1557,7 +1549,7 @@ stats_compute_links () {
 	OLD_IFS="$IFS"
 	IFS="${IFS_NEWLINE}"
 	for cat in ${GRASS_CATS} ; do
-		len=`db.select sql="SELECT ${LINKS_FLD_LEN_M} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
+		len=`db.select sql="SELECT ${LINKS_FLD_LEN_M} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database_links" driver="$attribute_database_driver_links" -c --quiet`
 		check_error "Failed to query field '${LINKS_FLD_LEN_M}' from links output layer (${GRASS_PKEY}='${cat}')"
 		awk_min "${min_len}" "${len}"
 		min_len="${AWK_VALUE}"
@@ -1566,12 +1558,12 @@ stats_compute_links () {
 		awk_calc "$total_len+$len"
 		total_len="${AWK_VALUE}"
 		if [ "${RUNMODE_COST}" == "TRUE" ] ; then
-			cost=`db.select sql="SELECT ${LINKS_FLD_COST} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database" driver="$attribute_database_driver" -c --quiet`
+			cost=`db.select sql="SELECT ${LINKS_FLD_COST} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" database="$attribute_database_links" driver="$attribute_database_driver_links" -c --quiet`
 			check_error "Failed to query field '${LINKS_FLD_COST}' from links output layer (${GRASS_PKEY}='${cat}')"
 			awk_min "${min_cost}" "${cost}"
 			min_cost="${AWK_VALUE}"
 			awk_max "${max_cost}" "${cost}"
-			max_cost="${AWK_VALUE}"			
+			max_cost="${AWK_VALUE}"
 			awk_calc "$total_cost+$cost"
 			total_cost="${AWK_VALUE}"
 		fi
@@ -1971,7 +1963,7 @@ check_setup () {
 # check_environment: Query GRASS environment for some important variables.
 check_environment () {
 	
-	# Determine/report shell capabilities	
+	# Determine/report shell capabilities
 	interpreter=`get_interpreter`
 	g.message -i "Running in '$interpreter'."
 	is_bash=0
@@ -2444,7 +2436,7 @@ check_input () {
 		fi
 		# (Re-)Sort filtered points by primary keys of attribute fields, enforcing a strictly ascending
 		# key order with step size "1". All logics running after this point will rely on that order!
-		v.sort input="${TMP_VECT_SELECT}" output="${TMP_VECT_SORT}" layer=1 order="asc" sqlbuflen="${GIS_OPT_SQLBUFLEN}" --overwrite
+		v.sort input="${TMP_VECT_SELECT}" output="${TMP_VECT_SORT}" layer="1" order="asc" sqlbuflen="${GIS_OPT_SQLBUFLEN}" --overwrite
 		# Success? Then this filtered map is now our nodes input map!
 		GIS_OPT_INPUT="${TMP_VECT_SORT}"
 	fi
@@ -2994,14 +2986,17 @@ check_input () {
 			# one link in $GIS_OPT_INITIAL via the from_id/to_id fields.
 			# If not, then we issue a warning, since the presence of unconnected nodes
 			# is not harmful.
+			#
 			# Get and store attribute table info for links maps:
 			get_tbl_info "${GIS_OPT_INITIAL}"
-			attribute_table_links="${attribute_table}"
+			attribute_database_driver_links="$attribute_database_driver"
 			attribute_database_links="${attribute_database}"
+			attribute_table_links="${attribute_table}"
 			# Get and store attribute table info for nodes maps:
 			get_tbl_info "${GIS_OPT_INPUT}"
-			attribute_table_nodes="${attribute_table}"
+			attribute_database_driver_nodes="$attribute_database_driver"
 			attribute_database_nodes="${attribute_database}"
+			attribute_table_nodes="${attribute_table}"
 			#
 			g.message -i "Checking connections of input nodes with input links (1/3):"
 			get_primary_keys "${GIS_OPT_INPUT}"
@@ -3018,12 +3013,12 @@ check_input () {
 			max=${i}
 			i=0
 			for key in ${PRIMARY_KEYS} ; do
-				# Step through all input nodes and count number of connections:
-				num_connections_from=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_INITIAL} WHERE ${LINKS_FLD_FROM_ID}=$key;" -c --quiet | "${GREP}" "${key}" -c`
+				# Step through all input nodes and count number of connections by referring to supplied links in ${GIS_OPT_INITIAL}:
+				num_connections_from=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=$key;" driver="$attribute_database_driver_links" -c --quiet | "${GREP}" "${key}" -c`
 				if [ -z "${num_connections_from}" ] ; then
 					num_connections_from=0
 				fi
-				num_connections_to=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_INITIAL} WHERE ${LINKS_FLD_TO_ID}=$key;" -c --quiet | "${GREP}" "${key}" -c`
+				num_connections_to=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_TO_ID}=$key;" driver="$attribute_database_driver_links" -c --quiet | "${GREP}" "${key}" -c`
 				if [ -z "${num_connections_to}" ] ; then
 					num_connections_to=0
 				fi
@@ -3064,18 +3059,18 @@ check_input () {
 			i=0
 			for cat in ${GRASS_CATS} ; do
 				# Get value of 'from_id' for this link:
-				init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_INITIAL} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+				init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
 				check_error "Failed to retrieve value of field ('${LINKS_FLD_FROM_ID}') from links input map ('${GRASS_PKEY}=${cat}')."
 				# Check if 'from_id' occurs as primary key of any input node:
-				num_connections_from=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${GIS_OPT_INPUT} WHERE ${GIS_OPT_KEY}=${init_from_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
+				num_connections_from=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${attribute_table_nodes} WHERE ${GIS_OPT_KEY}=${init_from_id};" driver="${attribute_database_driver_nodes}" -c --quiet | "${GREP}" "${init_from_id}" -c`
 				if [ -z "${num_connections_from}" ] ; then
 					num_connections_from=0
 				fi
 				# Get value of 'to_id' for this link:		
-				init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_INITIAL} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+				init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
 				check_error "Failed to retrieve value of field ('${LINKS_FLD_TO_ID}') from links input map ('${GRASS_PKEY}=${cat}')."
 				# Check if 'to_id' occurs as primary key of any input node:
-				num_connections_to=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${GIS_OPT_INPUT} WHERE ${GIS_OPT_KEY}=${init_to_id};" -c --quiet | "${GREP}" "${init_to_id}" -c`
+				num_connections_to=`db.select database="${attribute_database_nodes}" sql="SELECT ${GIS_OPT_KEY} FROM ${attribute_table_nodes} WHERE ${GIS_OPT_KEY}=${init_to_id};" driver="${attribute_database_driver_nodes}" -c --quiet | "${GREP}" "${init_to_id}" -c`
 				if [ -z "${num_connections_to}" ] ; then
 					num_connections_to=0
 				fi
@@ -3113,14 +3108,14 @@ check_input () {
 			max=${i}
 			i=0
 			for cat in ${GRASS_CATS} ; do
-				init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_INITIAL} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+				init_from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
 				check_error "Failed to retrieve value for field ('${LINKS_FLD_FROM_ID}') from links input map."
-				init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_INITIAL} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`		
+				init_to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
 				check_error "Failed to retrieve value for field ('${LINKS_FLD_TO_ID}') from links input map."
 				# Check for occurrences of this from/to pair:
-				num_init_pairs_ft=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_INITIAL} WHERE ${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
+				num_init_pairs_ft=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id};" driver="${attribute_database_driver_links}" -c --quiet | "${GREP}" "${init_from_id}" -c`
 				# Check for occurrences of this to/from pair:
-				num_init_pairs_tf=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_INITIAL} WHERE ${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id};" -c --quiet | "${GREP}" "${init_from_id}" -c`
+				num_init_pairs_tf=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id};" driver="${attribute_database_driver_links}" -c --quiet | "${GREP}" "${init_from_id}" -c`
 				if [ -n $BASH_VERSION ] ; then
 					let num_init_pairs=${num_init_pairs_ft}+${num_init_pairs_tf}
 				else
@@ -3560,7 +3555,7 @@ model_attsim () {
 						SQL="${SQL}UPDATE ${attribute_table_links} SET"
 						SQL="${SQL} ${LINKS_FLD_STRENGTH} = ${strength}"
 						SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-						"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+						"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 						check_error "Failed to update attribute field '${LINKS_FLD_STRENGTH}' to '${strength}' for link with cat='$cat' in output vector map."
 					fi
 				done
@@ -3586,10 +3581,10 @@ model_attsim () {
 	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
-DELETE FROM $attribute_table WHERE ${LINKS_FLD_STRENGTH} < 1;"
+DELETE FROM ${attribute_table_links} WHERE ${LINKS_FLD_STRENGTH} < 1;"
 	SQL="$SQL
 ${DBMS_COMMIT}"
-	echo "${SQL}" | db.execute database="${attribute_database}" input="-"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 	check_error "Failed to delete link attribute rows during NN reduction."
 
 }
@@ -3961,6 +3956,9 @@ model_complete_thread () {
 			check_error "Failed to retrieve primary keys from temporary vector map for storing link costs." ${global_pid}
 			# Get DBMS connection info for temp links map:
 			get_tbl_info "${TMP_VECT_LINKS_COSTS}"
+			attribute_database_driver_cost="${attribute_database_driver}"
+			attribute_database_cost="${attribute_database}"
+			attribute_table_cost="${attribute_table}"
 			# Get all least-cost values for all "to nodes" from current cost surface:
 			COSTVAL=`r.what map="${TMP_RAST_COST_MIN}_${step}" points="${GIS_OPT_INPUT}_${step}" separator="|"`
 			check_error "Failed to query temporary cost raster using map of 'to' nodes." ${global_pid}
@@ -3975,27 +3973,23 @@ model_complete_thread () {
 				SQL_CHUNK="${DBMS_BEGIN}"
 				if [ "$to_id" != "$no_data" ] ; then
 					SQL=""
-					SQL="${SQL}UPDATE ${attribute_table} SET"
+					SQL="${SQL}UPDATE ${attribute_table_cost} SET"
 					SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
 					SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${to_id}"
 					SQL="${SQL} WHERE cat = ${cat_cost}; "
 					SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-					#"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-					#check_error "Failed to update field '${LINKS_FLD_FROM_ID} or ${LINKS_FLD_TO_ID}' in temporary link costs vector map." ${global_pid}
 					# Transfer matching cost value
 					cur=1
 					for cost in $COSTVAL ; do
 						if [ $cur -eq $next_cost ] ; then 
 							costval=`"${ECHO}" $cost | "${AWK}" -F "|" '{ print $4 }'`
 							SQL=""
-							SQL="${SQL}UPDATE ${attribute_table} SET"
+							SQL="${SQL}UPDATE ${attribute_table_cost} SET"
 							SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"
 							SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat_cost}; "
 							SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-							#"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-							#check_error "Failed to update field '${LINKS_FLD_COST}' in temporary link costs vector map." ${global_pid}
 						fi
 						if [ -n $BASH_VERSION ] ; then
 							let cur=${cur}+1
@@ -4006,7 +4000,7 @@ ${SQL}"
 					# Commit transaction of SQL chunk:
 					SQL_CHUNK="${SQL_CHUNK}
 ${DBMS_COMMIT}"
-					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database}" input="-"
+					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_cost}" driver="${attribute_database_driver_cost}" input="-"
 					check_error "Failed to update field '${LINKS_FLD_FROM_ID} or ${LINKS_FLD_TO_ID}' in temporary link costs vector map." ${global_pid}
 					# Empty chunk contents:
 					SQL_CHUNK="${DBMS_BEGIN}"
@@ -4176,9 +4170,6 @@ model_complete () {
 	# of the fully connected network when the loop reaches its index.
 	get_primary_keys "${GIS_OPT_INPUT}"
 
-	# Get info for database and table connected to points input map:
-	get_tbl_info "${GIS_OPT_INPUT}"	
-
 	# Initialize 'no data' representation for primary keys as empty string.
 	no_data=
 	# Make sure that we have a valid 'no data' encoding:
@@ -4206,10 +4197,10 @@ model_complete () {
 	num_features=`"${EXPR}" ${NUM_INPUT_NODES} - 1`
 	
 	# SQLite backend only: Force into per-map table storage mode now!
+	DBMS_LOCKS_REQUIRED_OLD=${DBMS_LOCKS_REQUIRED}
 	if [ "${DBMS_NAME}" = "SQLite" ] && [ ${GIS_OPT_THREADS} -gt 1 ] && [ ${DBMS_LOCKS_REQUIRED} -eq 1 ] ; then		
 		g.message -i "Switching to per-map table storage for backend '${DBMS_NAME}'."
-		db.connect driver=sqlite database='$GISDBASE/$LOCATION_NAME/$MAPSET/vector/$MAP/sqlite.db'
-		DBMS_LOCKS_REQUIRED_OLD=${DBMS_LOCKS_REQUIRED}
+		db.connect driver=sqlite database='$GISDBASE/$LOCATION_NAME/$MAPSET/vector/$MAP/sqlite.db'		
 		DBMS_LOCKS_REQUIRED=0
 	fi		
 	
@@ -4468,30 +4459,20 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# into 'db.execute' in one go!
 	#	
 	# Add all useful indices to speed up operations	
-	add_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"	
-	# Get and store info for table connected to input map:
-	cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
-	check_error "Failed to query vector map '$GIS_OPT_INPUT' for extended metadata."	
-	# Get DB driver name:
-	eval_ws_safe "${cmd}" "attribute_database_driver"
-	if [ -z "${EVAL_RESULT}" ] ; then
-		exit_error "Failed to retrieve driver of database connection for vector map 'GIS_OPT_INPUT´'."
-	fi
-	in_attr_drv="${EVAL_RESULT}"	
-	# Get name of connected database:
-	eval_ws_safe "${cmd}" "attribute_database"
-	if [ -z "${EVAL_RESULT}" ] ; then
-		exit_error "Failed to retrieve name of database connection for vector map '$GIS_OPT_INPUT'."
-	fi
-	in_attr_db="${EVAL_RESULT}"
-	# Get name of linked table in conntected DB:
-	eval_ws_safe "${cmd}" "attribute_table"
-	if [ -z "${EVAL_RESULT}" ] ; then
-		exit_error "Failed to retrieve name of database table for vector map 'GIS_OPT_INPUT'."
-	fi
-	in_attr_tbl="${EVAL_RESULT}"
+	add_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
+	
+	# Get info for database and table connected to points input map:
+	get_tbl_info "${GIS_OPT_INPUT}"	
+	in_attr_drv="$attribute_database_driver"
+	in_attr_db="$attribute_database"
+	in_attr_tbl="$attribute_table"
+	
 	# Get info for connected database and table (output links map):
 	get_tbl_info "${GIS_OPT_LINKS}"
+	links_attr_drv="$attribute_database_driver"
+	links_attr_db="$attribute_database"
+	links_attr_tbl="$attribute_table"
+	
 	# Now transfer attibutes from original input map to links output map!
 	get_primary_keys "${GIS_OPT_INPUT}"
 	IFS_BACKUP="$IFS"
@@ -4535,7 +4516,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 							to_lbl="${LABEL}"
 							# Transfer the actual from/to attributes to the output (links) map's table!
 							SQL=""
-							SQL="${SQL}UPDATE ${attribute_table} SET"
+							SQL="${SQL}UPDATE ${links_attr_tbl} SET"
 							SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
 							SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${cur}"
 							SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${from_lbl}'"
@@ -4561,7 +4542,7 @@ ${SQL}"
 ${SQL}
 ${DBMS_COMMIT}"
 								fi							
-								"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database}" input="-"
+								"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
 								check_error "Failed to upload attributes to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
 								# Empty chunk contents:
 								SQL_CHUNK="${DBMS_BEGIN}"
@@ -4653,12 +4634,12 @@ ${DBMS_COMMIT}"
 			# We need to transfer the cost attribute from that map to the links output map.
 			#
 			# Read "From ID" from $GIS_OPT_LINKS:
-			from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+			from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
 			# Read "To ID" from $GIS_OPT_LINKS:
-			to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${GIS_OPT_LINKS} WHERE ${GRASS_PKEY}=${cat};" -c --quiet`
+			to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
 			WHERE="${LINKS_FLD_FROM_ID}=$from_id AND ${LINKS_FLD_TO_ID}=$to_id" 
 			# Read 'cost' attribute value from $TMP_VECT_LINKS_COST:
-			costval=`db.select database="${attribute_database_cost}" sql="SELECT ${LINKS_FLD_COST} FROM ${TMP_VECT_LINKS_COSTS} WHERE ${WHERE};" -c --quiet`			
+			costval=`db.select database="${attribute_database_cost}" sql="SELECT ${LINKS_FLD_COST} FROM ${attribute_table_cost} WHERE ${WHERE};" driver="${attribute_database_driver_cost}" -c --quiet`			
 			if [ -z "$costval" ] ; then
 				exit_error "No cost value available for path from '$from_id' to '$to_id'."
 			fi
@@ -4689,7 +4670,7 @@ ${DBMS_COMMIT}"
 				#echo "SQL_CHUNK="
 				#echo "$SQL_CHUNK"
 				# Update all 'cost' attribute values in $GIS_OPT_LINKS of all records in current chunk at once:
-				"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" input="-"
+				"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${attribute_database_driver_links}" database="${attribute_database_links}" input="-"
 				check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
 				# Empty chunk contents:
 				SQL_CHUNK="${DBMS_BEGIN}"
@@ -4738,7 +4719,7 @@ ${DBMS_COMMIT}"
 		IFS="${IFS_NEWLINE}"
 		for key in $PRIMARY_KEYS ; do
 			WHERE="${LINKS_FLD_FROM_ID}=$key"
-			RECS=`db.select database="${attribute_database_links}" sql="SELECT cat FROM ${GIS_OPT_LINKS} WHERE ${WHERE};" -c --quiet`
+			RECS=`db.select database="${attribute_database_links}" sql="SELECT cat FROM ${attribute_table_links} WHERE ${WHERE};" driver="${attribute_database_driver_links}" -c --quiet`
 			check_error "Failed to query attribute table of links output map."
 			num_cats=0
 			for line in $RECS ; do
@@ -4792,7 +4773,7 @@ ${SQL}"
 					# Commit transaction to DB backend:
 					SQL_CHUNK="${SQL_CHUNK}
 ${DBMS_COMMIT}"
-					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" input="-"
+					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 					check_error "Failed to swap GRASS 'cat' value '0' with '$new_cat' in links output map."
 				else
 					# Reached the symmetry element of an odd number of records: Done with this set.
@@ -4912,7 +4893,7 @@ model_delaunay () {
 			SQL="${SQL}UPDATE ${attribute_table_links} SET"
 			SQL="${SQL} ${fld_keep} = 1"
 			SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-			"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+			"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 			check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 		fi
 		g.message -p "${step} ${lines} 1"
@@ -4932,10 +4913,10 @@ model_delaunay () {
 	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
-DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
+DELETE FROM ${attribute_table_links} WHERE ${fld_keep} = 0;"
 	SQL="$SQL
 ${DBMS_COMMIT}"
-	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 	check_error "Failed to delete link attribute rows during Delaunay reduction."
 
 	# Drop column "keep" from links output map: we don't need it any longer.
@@ -4984,10 +4965,10 @@ model_linkdist () {
 	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
-DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
+DELETE FROM ${attribute_table_links} WHERE ${fld_keep} = 0;"
 	SQL="$SQL
 ${DBMS_COMMIT}"
-	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 	check_error "Failed to delete link attribute rows during maxdist reduction."
 
 	# Drop column "keep" from links output map: we don't need it any longer.
@@ -5101,7 +5082,7 @@ ${CATS_TO}"
 										SQL="${SQL}UPDATE ${attribute_table_links} SET"
 										SQL="${SQL} ${fld_keep} = 1"
 										SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-										"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+										"${ECHO}" "${SQL}" | db.execute driver="${attribute_database_driver_links}" database="${attribute_database_links}" input="-"
 										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 									fi
 								fi
@@ -5133,10 +5114,10 @@ ${CATS_TO}"
 	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
-DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
+DELETE FROM ${attribute_table_links} WHERE ${fld_keep} = 0;"
 	SQL="$SQL
 ${DBMS_COMMIT}"
-	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 	check_error "Failed to delete link attribute rows during NN reduction."
 
 	# Drop column "keep" from links output map: we don't need it any longer.
@@ -5254,7 +5235,7 @@ model_xtent () {
 			SQL="${SQL}UPDATE ${attribute_table_links} SET"
 			SQL="${SQL} ${fld_keep} = 1"
 			SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-			"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+			"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 			check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 		fi
 		g.message -p "${step} ${lines} 1"
@@ -5274,10 +5255,10 @@ model_xtent () {
 	# Drop associated rows of attribute table from links map:
 	SQL="${DBMS_BEGIN}"
 	SQL="$SQL
-DELETE FROM $attribute_table_links WHERE ${fld_keep} = 0;"
+DELETE FROM ${attribute_table_links} WHERE ${fld_keep} = 0;"
 	SQL="$SQL
 ${DBMS_COMMIT}"
-	echo "${SQL}" | db.execute database="${attribute_database_links}" input="-"
+	echo "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 	check_error "Failed to delete link attribute rows during xtent reduction."
 
 	# Drop column "keep" from links output map: we don't need it any longer.
@@ -5346,15 +5327,16 @@ clean_initial_coords () {
 			clean_coords_att_database="${attribute_database}"
 			clean_coords_att_table="${attribute_table}"
 			# Get info for connected database and table:
-			get_tbl_info "${map_init_links}"			
+			get_tbl_info "${map_init_links}"
+			init_att_database_driver="${attribute_database_driver}"
+			init_att_database="${attribute_database}"
+			init_att_table="${attribute_table}"
 			# Copy node coordinate to link coordinate (field to field):
 			SQL=""
-			SQL="${SQL}UPDATE ${attribute_table} SET"
+			SQL="${SQL}UPDATE ${init_att_table} SET"
 			SQL="${SQL} ${fld_link_coord} = ${val_coord_node}"
 			SQL="${SQL} WHERE ${clean_id_pkey_fld} = ${clean_id_pkey_val}; "
-			"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-			#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
-			#${V_DB_UPDATE} map="${map_init_links}" layer="1" column="${fld_link_coord}" value="${val_coord_node}" --quiet
+			"${ECHO}" "${SQL}" | db.execute database="${init_att_database}" driver="${init_att_database_driver}" input="-"
 			check_error "Failed to update field '${fld_link_coord}' in copy of initial links map."
 			g.message -w "Automatic correction succeeded with 'threshold=${GIS_OPT_THRESHOLD}'."								
 			# Restore DBMS info that the caller might have had!
@@ -5540,6 +5522,9 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 			check_error "Failed to add attribute field '${LINKS_FLD_COST}' (double) to copy of initial links map."
 			# Get info for connected database and table:
 			get_tbl_info "${GIS_OPT_LINKS}"
+			attribute_database_driver_links="${attribute_database_driver}"
+			attribute_database_links="${attribute_database}"
+			attribute_table_links="${attribute_table}"
 			# Process all links.
 			get_grass_cats "${GIS_OPT_LINKS}"
 			IFS_BACKUP="$IFS"
@@ -5586,12 +5571,10 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 				check_error "Failed to compute statistics for link with ID '${GRASS_PKEY}=${cat}' from copy of initial links map."
 				# Upload cost value for current link:
 				SQL=""
-				SQL="${SQL}UPDATE ${attribute_table} SET"
+				SQL="${SQL}UPDATE ${attribute_table_links} SET"
 				SQL="${SQL} ${LINKS_FLD_COST} = ${sum}"
 				SQL="${SQL} WHERE ${GRASS_PKEY} = ${cat}; "
-				"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
-				#TODO: DELETEME: Below call to "v.db.update" has been replaced by an SQL statement piped into 'db.execute'!
-				#${V_DB_UPDATE} map="${GIS_OPT_LINKS}" layer="1" column="${LINKS_FLD_COST}" value="${sum}" where="${GRASS_PKEY}=${cat}" --quiet
+				"${ECHO}" "${SQL}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 				check_error "Failed to update field '${LINKS_FLD_COST}' in copy of initial links map."
 				# Progress update
 				g.message -p "${step} ${points} 1"
