@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE qgisgrassmodule SYSTEM "http://mrcc.com/qgisgrassmodule.dtd">
+
+<qgisgrassmodule label="Systematically thin a points vector map" module="v.points.thin">
+	<option key="input"/>
+	<option key="where"/>
+	<option key="dist"/>
+	<option key="order"/>
+	<option key="output"/>
+</qgisgrassmodule>
