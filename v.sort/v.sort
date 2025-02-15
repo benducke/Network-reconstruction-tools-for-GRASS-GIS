@@ -365,6 +365,56 @@ eval_ws_safe () {
 
 
 # FUNCTION
+# get_tbl_info: Retrieves essential information for first attribute table's DB connection
+#				("layer 1") connected to a GRASS vector map. The information is read from
+#				the output of 'v.info'.
+#
+#            	This function reads two arguments:
+#					$1 -- name of GRASS vector map that has the attibute table of interest
+#					$2 -- layer number of $1
+#
+#				($2 may be skipped, in which case the default layer is "1")
+#
+#            	This function sets three variables:
+#               	attribute_database_driver = GRASS database driver used for the connection
+#												(same as used/listed by 'db.connect')
+#					attribute_database = the name of the actual DB that stores the table
+#					attribute_table = the name of the linked attribute table in the DB
+#
+#				 It will abort the program if there is a problem with the map and/or its table.            
+#
+get_tbl_info () {
+	if [ -n "${2}" ] ; then
+		cmd=`v.info -e map="${1}" layer="${2}"`
+	else
+		cmd=`v.info -e map="${1}" layer="1"`
+	fi
+	check_error "Failed to query vector map '$1' for extended metadata."
+	
+	# Get DB driver name:
+	eval_ws_safe "${cmd}" "attribute_database_driver"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve driver of database connection for vector map '1'."
+	fi
+	attribute_database_driver="${EVAL_RESULT}"
+	
+	# Get name of connected database:
+	eval_ws_safe "${cmd}" "attribute_database"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of database connection for vector map '$1'."
+	fi
+	attribute_database="${EVAL_RESULT}"
+	
+	# Get name of linked table in conntected DB:
+	eval_ws_safe "${cmd}" "attribute_table"
+	if [ -z "${EVAL_RESULT}" ] ; then
+		exit_error "Failed to retrieve name of database table for vector map '1'."
+	fi
+	attribute_table="${EVAL_RESULT}"
+}
+
+
+# FUNCTION
 # check_setup: Check system setup (required external programs available?).
 check_setup () {	
 	
@@ -701,9 +751,16 @@ check_params () {
 # check_environment: Query GRASS environment for some important variables.
 check_environment () {
 
+	# Set GRASS verbosity (no --q or --v given):
+	if [ -z "$GRASS_VERBOSE" ] ; then
+		GRASS_VERBOSE=1
+	fi
+
 	# Determine/report shell capabilities
 	interpreter=`get_interpreter`
-	g.message -i "Running in '$interpreter'."
+	if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+		g.message -i "Running in '$interpreter'."
+	fi
 	is_bash=0
 	is_bourne=0
 	is_bash=`${ECHO} ${interpreter} |${GREP} "bash" -c`
@@ -726,7 +783,9 @@ check_environment () {
 		fi
 		# Get Bash major version as currently set.
 		bash_version_major=`${ECHO} "$BASH_VERSION" | ${CUT} -f1 -d.`
-		g.message -i "Detected Bash version '$bash_version_major'."
+		if [ ${GRASS_VERBOSE} -gt 2 ] ; then
+			g.message -i "Detected Bash version '$bash_version_major'."
+		fi
 		if [ ${bash_version_major} -lt ${BASH_VERSION_MIN} ] ; then
 			g.message -w "Bash version is lower than assumed minimal version (${BASH_VERSION_MIN})."
 			g.message -w "Expect trouble."
@@ -737,11 +796,6 @@ check_environment () {
 	GISDBASE=`g.gisenv get=GISDBASE`
 	LOCATION_NAME=`g.gisenv get=LOCATION_NAME`
 	MAPSET=`g.gisenv get=MAPSET`
-	
-	# Set GRASS verbosity (no --q or --v given):
-	if [ -z "$GRASS_VERBOSE" ] ; then
-		GRASS_VERBOSE=1
-	fi
 	
 	# Get current region settings.
 	eval `g.region -p -g`	
@@ -1054,25 +1108,6 @@ input_map_pkey="${EVAL_RESULT}"
 # Create empty table with with primary key of same name for output map:
 ${V_DB_ADDTABLE} map="${GIS_OPT_OUTPUT}" layer="1" key="${input_map_pkey}" --quiet 2>/dev/null
 
-# Retrieve the DB connection info from the input and output maps:
-if [ ${DBMS_FILE_PATH} -gt 0 ] ; then
-	# Input map:
-	from_db_path=`v.db.connect -g map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" | "${CUT}" -d "|" -f 4`
-	if [ -z "${from_db_path}" ] ; then
-		exit_error "Failed to resolve attribute database path of input map."	
-	fi
-	# Output map:
-	to_db_path=`v.db.connect -g map="${GIS_OPT_OUTPUT}" layer="1" | "${CUT}" -d "|" -f 4`
-	if [ -z "${to_db_path}" ] ; then
-		exit_error "Failed to resolve attribute database path of output map."
-	fi	
-fi
-
-# Check whether both tables are in the same attribute database!
-if [ "${from_db_path}" != "${to_db_path}" ] ; then
-	exit_error "Input and output maps must have their attribute tables in the same database."
-fi
-
 # Copy the attribute table schema of the input map to that of the output map:
 FIELDS=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet`
 num_fields=`v.info -c map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}" --quiet | "${WC}" -l`
@@ -1110,23 +1145,22 @@ fi
 done
 IFS="$OLD_IFS"
 
-# Get name of attribute table attached to the chosen layer of input map:
-cmd=`v.info -e map="${GIS_OPT_INPUT}" layer="${GIS_OPT_LAYER}"`
-check_error "Failed to query input vector map for extended metadata (attribute table name)."
-eval_ws_safe "${cmd}" "attribute_table"
-if [ -z "${EVAL_RESULT}" ] ; then
-	exit_error "Failed to retrieve name of attribute table in layer '${GIS_OPT_LAYER}' of input map."
-fi
-in_table="${EVAL_RESULT}"
+# Get information on attribute table attached to the chosen layer of input map:
+get_tbl_info "${GIS_OPT_INPUT}" ${GIS_OPT_LAYER}
+in_driver="${attribute_database_driver}"
+in_database="${attribute_database}"
+in_table="${attribute_table}"
 
-# Get name of attribute table attached to the chosen layer of output map:
-cmd=`v.info -e map="${GIS_OPT_OUTPUT}" layer="1"`
-check_error "Failed to query output vector map for extended metadata (attribute table name)."
-eval_ws_safe "${cmd}" "attribute_table"
-if [ -z "${EVAL_RESULT}" ] ; then
-	exit_error "Failed to retrieve name of attribute table in layer 1 of output map."
+# Get info on attribute table attached to layer 1 of output map:
+get_tbl_info "${GIS_OPT_OUTPUT}"
+out_driver="${attribute_database_driver}"
+out_database="${attribute_database}"
+out_table="${attribute_table}"
+
+# Currently, we only support tables stored in the same DB and managed by the same driver!
+if [ "$in_driver" != "$out_driver" ] || [ "$in_database" != "$out_database" ] ; then
+	exit_error "This version of $MODULE_NAME_EXEC requires input and output maps to use the same attribute table database."
 fi
-out_table="${EVAL_RESULT}"
 
 # Copy all field values from the input to the output attribute table, and sort them at the same time:
 num_records=`v.db.select -c map="${GIS_OPT_OUTPUT}" layer="1" | "${WC}" -l`
@@ -1210,7 +1244,7 @@ ${DBMS_COMMIT}"
 		fi
 		#
 		# Update all attribute fields of all records in current chunk at once:
-		"${ECHO}" "${SQL_CHUNK}" | db.execute input="-"
+		"${ECHO}" "${SQL_CHUNK}" | db.execute database="${out_database}" driver="${out_driver}" input="-"
 		check_error "Failed to update SQL chunk of size ${chunk_size}."
 		# Empty chunk contents:
 		SQL_CHUNK="${DBMS_BEGIN}"
