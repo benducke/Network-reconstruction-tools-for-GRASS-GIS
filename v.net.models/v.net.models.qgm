@@ -1,12 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE qgisgrassmodule SYSTEM "http://mrcc.com/qgisgrassmodule.dtd">
 
-<qgisgrassmodule label="Model-based reconstruction of network links (simplified)" module="v.net.models">
+<qgisgrassmodule label="Model-based reconstruction of network links" module="v.net.models">
 	<option key="input"/>
 	<field key="key" layer="input" type="integer" label="Integer key field in input nodes' attribute table" />
 	<field key="label" layer="input" type="integer,double,string" label="Label/name field (default: same as 'key')" />
-	<option key="model"/>
+	<option key="initial"/>			
 	<option key="costmap"/>
+	<option key="model"/>
+	<field key="attributes" layer="input" type="integer,double,string" />
+	<option key="neighbors"/>
+	<option key="maxdist"/>
+	<field key="size" layer="input" type="integer,double" />
+	<option key="a"/>
+	<option key="k"/>
+	<option key="avg"/>
+	<option key="costsyn"/>
+	<option key="costerr"/>
+	<option key="costres"/>
+	<option key="threshold"/>
+	<option key="threads"/>
+	<flag key="k"/>
+	<flag key="m"/>
+	<flag key="r"/>
+	<flag key="s"/>
 	<option key="links"/>
 	<option key="nodes"/>
 </qgisgrassmodule>
