@@ -311,13 +311,15 @@ exit_error () {
 
 
 # FUNCTION
-# get_tbl_info: Retrieves essential information attribute table's DB connection
-#			    connected to a GRASS vector map. The information is read from
+# get_tbl_info: Retrieves essential information for first attribute table's DB connection
+#				("layer 1") connected to a GRASS vector map. The information is read from
 #				the output of 'v.info'.
 #
-#            	This function reads one or two arguments:
+#            	This function reads two arguments:
 #					$1 -- name of GRASS vector map that has the attibute table of interest
-#				    $2 -- layer (default="1", if $2 is not provided)
+#					$2 -- layer number of $1
+#
+#				($2 may be skipped, in which case the default layer is "1")
 #
 #            	This function sets three variables:
 #               	attribute_database_driver = GRASS database driver used for the connection
@@ -328,8 +330,7 @@ exit_error () {
 #				 It will abort the program if there is a problem with the map and/or its table.            
 #
 get_tbl_info () {
-	
-	if [ -n "$2" ] ; then
+	if [ -n "${2}" ] ; then
 		cmd=`v.info -e map="${1}" layer="${2}"`
 	else
 		cmd=`v.info -e map="${1}" layer="1"`
@@ -1423,10 +1424,10 @@ while [ ${STOP} -lt 1 ] ; do
 				# (note that $attribute_table and $attribute_database were set previously by 'get_tbl_info'):
 				SQL="${DBMS_BEGIN}"
 				SQL="$SQL
-DELETE FROM $attribute_table WHERE ${primary_key_field} = ${PKEY_VALUE};"
+DELETE FROM ${attribute_table} WHERE ${primary_key_field} = ${PKEY_VALUE};"
 				SQL="$SQL
 ${DBMS_COMMIT}"
-				"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" input="-"
+				"${ECHO}" "${SQL}" | db.execute database="${attribute_database}" driver="${attribute_database_driver}" input="-"
 				check_error "Failed to delete attribute record for primary key value '${PKEY_VALUE}' from temporary copy of input map."
 			fi
 		done
