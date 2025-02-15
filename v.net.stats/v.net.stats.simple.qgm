@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE qgisgrassmodule SYSTEM "http://mrcc.com/qgisgrassmodule.dtd">
+
+<qgisgrassmodule label="Compute statistics for networks (simplified)" module="v.net.stats">
+	<option key="links"/>
+	<option key="nodes"/>
+	<field key="key" layer="nodes" type="integer" label="Integer key field in input nodes' attribute table" />
+	<flag key="f" answer="on" hidden="yes" />
+</qgisgrassmodule>
