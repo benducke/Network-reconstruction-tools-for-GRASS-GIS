@@ -1,13 +1,13 @@
 # Network reconstruction tools for GRASS GIS (and QGIS)
 
-This project delivers a set of additional commands (modules) for [GRASS GIS](https://grass.osgeo.org/) that can be used to compute the links of a network, given  the network's nodes and a choice of connectivity criteria. The bulk of the work is done by v.net.models, which is a flexible, model-based network generator. The remaining modules serve mainly to prepare data for ingestion by v.net.models or to explore and compare its output.
+This project provides a set of additional commands (modules) for [GRASS GIS](https://grass.osgeo.org/) that can be used to compute the links of a network, given  the network's nodes and a choice of connectivity criteria. The bulk of the work is done by v.net.models, which is a flexible, model-based network generator. The remaining modules serve mainly to prepare data for ingestion by v.net.models or to explore and compare its output.
 
 The currently included modules are:
 
-* v.net.modules (main command)
-* v.sort (enforce storage order of input nodes)
-* v.points.thins (systematically reduce number of input nodes)
-* v.net.stats (provide descriptive statistics for output of v.net.modules)
+* v.net.modules (main command: reconstruct network links based on nodes)
+* v.net.stats (analysis: provide descriptive statistics for output of v.net.modules)
+* v.sort (helper: enforce storage order of input nodes)
+* v.points.thin (helper: systematically reduce number of input nodes)
 
 All modules have been designed to run under versions 7 and 8 of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under QGIS.
 
