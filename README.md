@@ -9,7 +9,7 @@ The currently included modules are:
 * v.sort (helper: enforce storage order of input nodes)
 * v.points.thin (helper: systematically reduce number of input nodes)
 
-All modules have been designed to run under versions 7.8 and 8.4.x of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under [QGIS](https://qghis.org) (3.34 LTR).
+All modules have been designed to run under versions 7.8 and 8.4.x of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under [QGIS](https://qgis.org) (3.34 LTR).
 
 For best performance, it is recommended to run this software on a Linux-based operating system. Operation under macOS and Windows is also possible but might be subject to some limitations in performance and/or functionality.
 
@@ -17,7 +17,7 @@ For best performance, it is recommended to run this software on a Linux-based op
 
 *Note:* These instructions are valid for the files in the most current [Release](https://github.com/benducke/v.net.models/releases) package! Files in the code repository are under active development and installing them will likely not result in an installation that works as expected (or at all).
 
-The modules provided here are scripts that have been developed to run in a Bash shell (minimum version 3) or in a traditional Bourne Shell (with severe compromises regarding speed and efficency). Linux-based distributions and macOS should provide all required essentials out-of-the-box. On Windows, installation of the free MSYS2 package is a necessary prerequisite.
+The modules provided here are scripts that have been developed to run in a Bash shell (minimum version 3) or in a traditional Bourne Shell (with severe compromises regarding speed and efficency). Linux-based distributions and macOS should provide all required essentials out-of-the-box. On Windows, installation of the free [MSYS2](https://www.msys2.org/) package is a necessary prerequisite.
 
 Installation details vary depending on operating system (see below).
 
