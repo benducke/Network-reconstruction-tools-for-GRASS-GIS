@@ -9,23 +9,17 @@ The currently included modules are:
 * v.sort (helper: enforce storage order of input nodes)
 * v.points.thin (helper: systematically reduce number of input nodes)
 
-All modules have been designed to run under versions 7 and 8 of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under QGIS.
+All modules have been designed to run under versions 7.8 and 8.4.x of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under QGIS (3.34 LTR).
 
 For best performance, it is recommended to run this software on a Linux-based operating system. Operation under macOS and Windows is also possible but might be subject to some limitations in performance and/or functionality.
 
 # Installation
 
-*Note:* These instructions are only valid for the files in the most current [Release](https://github.com/benducke/v.net.models/releases) package! Files in the code repository are under active development and installing them will most likely not result in an installation that works as expected (or at all).
+*Note:* These instructions are valid for the files in the most current [Release](https://github.com/benducke/v.net.models/releases) package! Files in the code repository are under active development and installing them will likely not result in an installation that works as expected (or at all).
 
-This software is a Bourne Shell script that has been tested and verified to run on Linux, Windows and macOS operating systems.
+The modules provided here are scripts that have been developed to run in a Bash shell (minimum version 3) or in a traditional Bourne Shell (with severe compromises regarding speed and efficency). Linux-based distributions and macOS should provide all required essentials out-of-the-box. On Windows, installation of the free MSYS2 package is a necessary prerequisite.
 
-Tested with:
-
-GRASS 8.4 & QGIS 3.34 (LTR)
-
-At a minimum, running this script requires a working installation of GRASS 7, the Bourne Shell (alternatively: BASH or another sh-compatible Shell) and a set of support tools (GNU awk, expr and grep are strictly required). Linux and macOS users will already have the latter on their systems. Windows users must install an additional software package (MSYS2). For a more user-friendly interface, install QGIS, as well.
-
-Installation details vary depending on operating system.
+Installation details vary depending on operating system (see below).
 
 ## Linux
 
