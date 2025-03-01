@@ -9,7 +9,7 @@ The currently included modules are:
 * v.sort (helper: enforce storage order of input nodes)
 * v.points.thin (helper: systematically reduce number of input nodes)
 
-All modules have been designed to run under versions 7.8 and 8.4.x of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under [QGIS](https://qgis.org) (3.34 LTR).
+All modules have been designed to run under versions 7.8 and 8.4.x of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under [QGIS](https://qgis.org) (tested with 3.34 LTR).
 
 For best performance, it is recommended to run this software on a Linux-based operating system. Operation under macOS and Windows is also possible but might be subject to some limitations in performance and/or functionality.
 
@@ -25,22 +25,22 @@ Installation details vary depending on operating system (see below).
 
 Linux-based operating systems have all required shell scripting tools.
 
-To use v.net.models in GRASS GIS:
-1. Copy the file "v.net.models" into the "scripts" subdirectory of your GRASS installation (use "sudo" if required).
-(Alternatively: copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session: "sh <path_to_script>/v.net.models")
-2. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-3. Copy the manual page "description.html" to the "docs" subdirectory of your GRASS installation, and rename it to "v.net.models.html".
-4. Also copy all ".png" files (they are the illustrations for the manual page) into "docs".
+To use these modules in GRASS GIS:
+1. Determine the directory where GRASS GIS is installed on your Linux-based OS (often this will be "/usr/local/grass" or "/opt/grass").
+2. Copy the "v.net.*" set of script files into the "scripts" subdirectory of your GRASS installation  (use "sudo" if required).
+3. Set the executable bit ("+x") for all of the above files (use "chmod").
+4. Copy the manual page "description.html" for each module to the "docs" subdirectory of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
+5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" folder of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
-1. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled.
-2. Copy the file "v.net.models" to the scripts "subdirectory" of the GRASS installation used by QGIS.
-3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-4. Copy the manual page "description.html" to the "docs" subdirectory of your GRASS installation (the one used by QGIS), and rename it to "v.net.models.html".
-5. Also copy all ".png" files (they are the illustrations for the manual page) into "docs".
-6. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS installation (the exact location of this subdirectory depends on your Linux distribution; on Arch Linux it is "/usr/share/qgis/python/plugins/processing/algs/grass7/description").
-7. Restart QGIS.
-8. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
+1. QGIS will automatically pick up your system's GRASS GIS installation, so you first need to perform the installation steps described above, for the installation of GRASS GIS.
+2. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled in QGIS.
+3. You should now find the additional "v.net.*" available as new "Algorithm" entries in the QGIS Processing Toolbox (you might have to restart QGIS first).
+
+For use via the QGIS GRASS 8 plug-in:
+1. QGIS will automatically pick up your system's GRASS GIS installation, so you first need to perform the installation steps described above, for the installation of GRASS GIS.
+2. In addition, 
+3. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled in QGIS.
 
 ## macOS
 
