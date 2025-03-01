@@ -16,7 +16,7 @@ For best performance, it is recommended to run this software on a Linux-based op
 # Installation
 *Note:* These instructions are valid for the files in the most current [Release](https://github.com/benducke/v.net.models/releases) package! Files in the code repository are under active development and installing them will likely not result in an installation that works as expected (or at all).
 
-These instructions have been written for **GRASS GIS version 7/8 and QGIS 3.34 LTR**.
+These instructions have been written for **GRASS GIS 7/8 and QGIS 3.34 LTR**.
 
 The modules provided here are scripts that have been developed to run in a Bash shell (minimum version 3) or in a traditional Bourne Shell (with severe compromises regarding speed and efficency). Linux-based distributions and macOS should provide all required essentials out-of-the-box. On Windows, installation of the free [MSYS2](https://www.msys2.org/) package is a necessary prerequisite.
 
