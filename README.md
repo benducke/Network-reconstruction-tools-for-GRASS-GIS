@@ -23,7 +23,7 @@ Installation details vary depending on operating system (see below).
 
 ## Linux
 
-Linux-based operating systems have all required shell scripting tools.
+Linux-based operating systems have all required shell scripting tools. You just need to copy the files provided by this project into the correct directories of your file system.
 
 To use these modules in GRASS GIS:
 1. Determine the directory where GRASS GIS is installed on your Linux-based OS (often this will be "/usr/local/grass" or "/opt/grass").
