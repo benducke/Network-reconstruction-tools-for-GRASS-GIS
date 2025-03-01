@@ -46,30 +46,32 @@ For use via the QGIS GRASS 8 plug-in:
 1. Perform installation into GRASS GIS and determiniation of QGIS base installation directory as described above, for the "QGIS Processing plug-in".
 2. Now copy the ".qgm" and ".svg" files for each module into the "grass/modules" subdirectory of the QGIS base installation directory
 3. Open "grass/modules/default.qgc" with a text editor of your choice to insert a new "section" element for the additional modules. If you insert this at the bottom of the existing GRASS modules section, then the final lines of "default.qgc" should look like this:
-```
-<section label="Help">
-  <grass name="g.manual"/>
-</section>
- 
-<section label="Network reconstruction add-on">
-  <section label="Preprocess input nodes">
-    <grass name="v.sort"/>
-    <grass name="v.points.thin"/>
+  ```
+  <section label="Help">
+    <grass name="g.manual"/>
   </section>
-  <section label="Reconstruct network links">
-    <grass name="v.net.models"/>
-    <grass name="v.net.models.simple"/>
-  </section>
-    <section label="Explore reconstruction results">
-      <grass name="v.net.stats"/>
-      <grass name="v.net.stats.simple"/>
+   
+  <section label="Network reconstruction add-on">
+    <section label="Preprocess input nodes">
+      <grass name="v.sort"/>
+      <grass name="v.points.thin"/>
+    </section>
+    <section label="Reconstruct network links">
+      <grass name="v.net.models"/>
+      <grass name="v.net.models.simple"/>
+    </section>
+      <section label="Explore reconstruction results">
+        <grass name="v.net.stats"/>
+        <grass name="v.net.stats.simple"/>
+      </section>
     </section>
   </section>
-</section>
-
-</modules>
-</qgisgrass>
-```
+  
+  </modules>
+  </qgisgrass>
+  ```
+4. Make sure that the GRASS 8 plug-in is enabled in QGIS.
+5. You should now find the additional "v.net.*" available under "Network reconstruction add-on" on the GRASS 8 plug-in pane (you might have to restart QGIS first).
 
 ## macOS
 
