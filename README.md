@@ -26,22 +26,50 @@ Installation details vary depending on operating system (see below).
 
 Linux-based operating systems have all required shell scripting tools. You just need to copy the files provided by this project into the correct directories of your file system.
 
+Note: Use "sudo" or other means of acquiring root user permission to add or modify files in protected directories.
+
 To use these modules in GRASS GIS:
 1. Determine the directory where GRASS GIS is installed on your Linux-based OS (often this will be "/usr/local/grass" or "/opt/grass").
-2. Copy the "v.net.*" set of script files into the "scripts" subdirectory of your GRASS installation  (use "sudo" if required).
+2. Copy the "v.net.*" set of script files into the "scripts" subdirectory of your GRASS installation.
 3. Set the executable bit ("+x") for all of the above files (use "chmod").
 4. Copy the manual page "description.html" for each module to the "docs" subdirectory of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
 5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" folder of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
 1. QGIS will automatically pick up your system's GRASS GIS installation, so you first need to perform the installation steps described above, for the installation of GRASS GIS.
-2. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled in QGIS.
-3. You should now find the additional "v.net.*" available as new "Algorithm" entries in the QGIS Processing Toolbox (you might have to restart QGIS first).
+2. Next, determine the QGIS base installation directory for your Linux-based OS. Frequently, this will be "/usr/share/qgis".
+3. Now copy the "*.txt" files that contain each module's interface description into the corresponding GRASS Processing provider's subdirectory within the QGIS base installation directory. This should be "python/plugins/grassprovider/description/".
+4. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled in QGIS.
+5. You should now find the additional "v.net.*" available as new "Algorithm" entries in the QGIS Processing Toolbox (you might have to restart QGIS first).
 
 For use via the QGIS GRASS 8 plug-in:
-1. QGIS will automatically pick up your system's GRASS GIS installation, so you first need to perform the installation steps described above, for the installation of GRASS GIS.
-2. In addition, 
-3. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled in QGIS.
+1. Perform installation into GRASS GIS and determiniation of QGIS base installation directory as described above, for the "QGIS Processing plug-in".
+2. Now copy the ".qgm" and ".svg" files for each module into the "grass/modules" subdirectory of the QGIS base installation directory
+3. Open "grass/modules/default.qgc" with a text editor of your choice to insert a new "section" element for the additional modules. If you insert this at the bottom of the existing GRASS modules section, then the final lines of "default.qgc" should look like this:
+```
+<section label="Help">
+  <grass name="g.manual"/>
+</section>
+ 
+<section label="Network reconstruction add-on">
+  <section label="Preprocess input nodes">
+    <grass name="v.sort"/>
+    <grass name="v.points.thin"/>
+  </section>
+  <section label="Reconstruct network links">
+    <grass name="v.net.models"/>
+    <grass name="v.net.models.simple"/>
+  </section>
+    <section label="Explore reconstruction results">
+      <grass name="v.net.stats"/>
+      <grass name="v.net.stats.simple"/>
+    </section>
+  </section>
+</section>
+
+</modules>
+</qgisgrass>
+```
 
 ## macOS
 
