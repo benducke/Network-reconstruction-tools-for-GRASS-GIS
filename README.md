@@ -40,7 +40,7 @@ To use these modules in GRASS GIS:
 2. Copy the "v.net.*" set of script files into the "scripts" subdirectory of your GRASS installation.
 3. Set the executable bit ("+x") for all of the above files (use "chmod").
 4. Copy the manual page "description.html" for each module to the "docs" subdirectory of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
-5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" folder of your GRASS installation.
+5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" subdirectory of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
 1. QGIS will automatically pick up your system's GRASS GIS installation, so you first need to perform the installation steps described above, for the installation of GRASS GIS.
@@ -193,12 +193,17 @@ The main difference is that both GRASS and QGIS come as App packages on macOS.
 
 To use these modules in GRASS GIS:
 1. Browse the GRASS App package using Finder ("Show Package Contents").
-(2-5) Open the folder "Contents/Resources" within the GRASS App package and proceed by copying this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
+2. Open the folder "Contents/Resources" within the GRASS App package and proceed by copying this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
+3. Set the executable bit ("+x") for all of the above files (use "chmod" in Terminal: no other way to do this in macOS).
+4. Copy the manual page "description.html" for each module to the "docs" subfolder of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
+5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" folder of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
 1. On macOS, QGIS comes with a bundled version of GRASS 7. Browse the QGIS App package using Finder ("Show Package Contents").
 2. Open the folder "Contents/Resources/grass78" and copy this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
-(3-5) Proceed by locating and editing "algorithms.json", as described in the instructions for Linux (above).
+3. Proceed by locating and editing "algorithms.json", as described in the instructions for Linux (above).
+4. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled in QGIS.
+5. You should now find the additional modules in group "GRASS/Network reconstruction" in the QGIS Processing Toolbox (you might have to restart QGIS first).
 
 For use via the QGIS GRASS 7 plug-in:
 1. Perform installation into bundled GRASS GIS as described above, for the "QGIS Processing plug-in".
