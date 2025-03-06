@@ -1,3 +1,4 @@
+
 # Network reconstruction tools for GRASS GIS (and QGIS)
 
 This project provides a set of additional commands (modules) for [GRASS GIS](https://grass.osgeo.org/) that can be used to compute the links of a network, given  the network's nodes and a choice of connectivity criteria (aka _network reconstruction_). The bulk of the work is done by [v.net.models](https://github.com/benducke/Network-reconstruction-tools-for-GRASS-GIS/tree/master/v.net.models), a flexible, model-based network generator. The remaining modules serve mainly to preprocess input data or to explore and compare reconstruction results.
@@ -13,10 +14,15 @@ All modules have been designed to run under recent versions of GRASS GIS (they a
 
 For best performance, it is recommended to run this software on a Linux-based operating system. Operation under macOS and Windows is also possible but might be subject to some limitations in performance and/or functionality.
 
+Please read the below instructions carefully, including the section on "Notes and caveats".
+
 # Installation
+
 *Note:* These instructions are valid for the files in the most current [Release](https://github.com/benducke/v.net.models/releases) package! Files in the code repository are under active development and installing them will likely not result in an installation that works as expected (or at all).
 
 These instructions have been written for **GRASS GIS 7/8 and QGIS 3.40 LTR**.
+
+It is assumed that you have successfully installed GRASS GIS and optionally QGIS (if you wish to run GRASS commands from within QGIS).
 
 The modules provided here are scripts that have been developed to run in a Bash shell (minimum version 3) or in a traditional Bourne Shell (with severe compromises regarding speed and efficency). Linux-based distributions and macOS should provide all required essentials out-of-the-box. On Windows, installation of the free [MSYS2](https://www.msys2.org/) package is a necessary prerequisite.
 
@@ -24,7 +30,7 @@ Installation details vary depending on operating system (see below).
 
 ## Linux
 
-Linux-based operating systems have all required shell scripting tools.
+Modern Linux-based operating systems ship with all the tools that are required (in addition to a working installation of GRASS GIS) to run the GRASS modules provided here.
 You just need to copy the files provided by this project into the correct directories of your file system.
 
 Note: Use "sudo" or other means of acquiring root user permission to add or modify files in protected directories.
@@ -147,8 +153,8 @@ For use via the QGIS Processing plug-in:
 5. You should now find the additional modules in group "GRASS/Network reconstruction" in the QGIS Processing Toolbox (you might have to restart QGIS first).
 
 For use via the QGIS GRASS 8 plug-in:
-1. Perform installation into GRASS GIS and determiniation of QGIS base installation directory as described above, for the "QGIS Processing plug-in".
-2. Now copy the ".qgm" and ".svg" files for each module into the "grass/modules" subdirectory of the QGIS base installation directory
+1. Perform installation into GRASS GIS and determination of QGIS base installation directory as described above, for the "QGIS Processing plug-in".
+2. Now copy the ".qgm" and ".svg" files for each module into the "grass/modules" subdirectory of the QGIS base installation directory.
 3. Open "grass/modules/default.qgc" with a text editor of your choice to insert a new "section" element for the additional modules. If you insert this at the end of the file, then the final lines of "default.qgc" should look like this:
   ```
   <section label="Help">
@@ -179,28 +185,27 @@ For use via the QGIS GRASS 8 plug-in:
 
 ## macOS
 
-On macOS operating systems, all required shell scripting tools should be in place.
-There is no graphical installer for "v.net.models": You need to use the Terminal and Finder to get it installed.
+Similar to the Linux case, macOS operating systems ship with all the tools that are required (in addition to a working installation of GRASS GIS) to run the GRASS modules provided here.
+There is no graphical installer provided by this project: You need to use the Terminal and Finder to get the GRASS modules installed.
 The steps you have to perform are very similar to those on Linux-based systems.
 
-To use v.net.models in GRASS GIS:
-1. Browse the GRASS App folder using Finder (or "cd" into the "GRASS.Application" folder using the command line) and locate the subfolder "scripts".
-(Alternatively: copy "v.net.models" to wherever you like and call it from within a running GRASS CLI session: "bash <path_to_script>/v.net.models")
-2. Copy the file "v.net.models" into the "Contents/Resources/scripts" subfolder of your GRASS Application bundle (use "sudo" if required).
-3. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-4. Copy the manual page "description.html" to the "Contents/Resources/docs" subfolder of your GRASS Application bundle, and rename it to "v.net.models.html".
-5. Also copy all ".png" files (they are the illustrations for the manual page) into "Contents/Resources/docs".
+The main difference is that both GRASS and QGIS come as App packages on macOS.
+
+To use these modules in GRASS GIS:
+1. Browse the GRASS App package using Finder ("Show Package Contents").
+(2-5) Open the folder "Contents/Resources" within the GRASS App package and proceed by copying this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
 
 For use via the QGIS Processing plug-in:
-1. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled.
-2. Browse the QGIS App folder using Finder (or "cd" into the "QGIS.Application" folder using the command line) and locate the subfolder "apps/grass/scripts".
-3. Copy the file "v.net.models" into the QGIS App subfolder "apps/grass/scripts".
-4. Set the executable bit ("+x") for "v.net.models" so that it can be run (use "chmod").
-5. Copy the manual page "description.html" into the QGIS App subfolder "apps/grass/docs", and rename it to "v.net.models.html".
-6. Also copy all ".png" files (they are the illustrations for the manual page) into "apps/grass/docs".
-7. Copy the parameters description file "v.net.models.txt" into the subdirectory "plugins/processing/algs/grass7/description" of your QGIS App bundle.
-8. Restart QGIS.
-9. You should now find "v.net.models" available as an "Algorithm" in the QGIS Processing Toolbox.
+1. On macOS, QGIS comes with a bundled version of GRASS 7. Browse the QGIS App package using Finder ("Show Package Contents").
+2. Open the folder "Contents/Resources/grass78" and copy this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
+(3-5) Proceed by locating and editing "algorithms.json", as described in the instructions for Linux (above).
+
+For use via the QGIS GRASS 7 plug-in:
+1. Perform installation into bundled GRASS GIS as described above, for the "QGIS Processing plug-in".
+2. Copy the ".qgm" and ".svg" files for each module into the "Contents/Resources/grass/modules" subfolder of the QGIS App package.
+3. Open "Contents/Resources/grass/modules/default.qgc" with a text editor of your choice to insert a new "section" element for the additional modules, as detailed in the instructions for Linux (above).
+4. Make sure that the GRASS 7 plug-in is enabled in QGIS.
+5. You should now find the additional "v.net.*" available under "Network reconstruction add-on" on the GRASS 7 plug-in pane (you might have to restart QGIS first).
 
 ## Windows
 
@@ -259,7 +264,8 @@ Explaining how to use brew.sh and how to change your environment to use updated 
 
 In addition, QGIS on macOS ships with GRASS version 7.8 (whereas GRASS 8.x is the current version).
 The GRASS modules provided here have been designed to work with GRASS 7.8 as well as more recent versions of GRASS GIS.
-However, operation under macOS has not been tested intensively.
+
+Operation under macOS has not been tested intensively.
 Please report any problems to this project by creating an Issue (ticket).
 
 ## Windows OS Notes
