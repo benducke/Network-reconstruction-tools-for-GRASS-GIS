@@ -24,7 +24,8 @@ Installation details vary depending on operating system (see below).
 
 ## Linux
 
-Linux-based operating systems have all required shell scripting tools. You just need to copy the files provided by this project into the correct directories of your file system.
+Linux-based operating systems have all required shell scripting tools.
+You just need to copy the files provided by this project into the correct directories of your file system.
 
 Note: Use "sudo" or other means of acquiring root user permission to add or modify files in protected directories.
 
@@ -178,7 +179,9 @@ For use via the QGIS GRASS 8 plug-in:
 
 ## macOS
 
-On macOS operating systems, all required shell scripting tools should be in place. There is no graphical installer for "v.net.models": You need to use the Terminal and Finder to get it installed. The steps you have to perform are very similar to those on Linux-based systems.
+On macOS operating systems, all required shell scripting tools should be in place.
+There is no graphical installer for "v.net.models": You need to use the Terminal and Finder to get it installed.
+The steps you have to perform are very similar to those on Linux-based systems.
 
 To use v.net.models in GRASS GIS:
 1. Browse the GRASS App folder using Finder (or "cd" into the "GRASS.Application" folder using the command line) and locate the subfolder "scripts".
@@ -245,7 +248,19 @@ This works well in general, with a few quirks:
 * The included HTML manual page applies to use from within GRASS GIS (but most of the information also applies to running v.net.models from within QGIS).
 
 ## macOS Notes
-The latest version of Bash (the default shell used by these scripts) shipped with macOS is version 3. This should still work fine. If you want a newer version of Bash, install one via [the homebrew project](https://brew.sh).
+In general, macOS ships has been shipping with an outdated POSIX environment.
+This means that tools such as 'grep' or 'sort' are more primitive than what you get on a modern Linux-based OS or with MSYS2 for Windows.
+Also, the latest version of Bash (the default shell used by these scripts) shipped with macOS is version 3. 
+THe GRASS modules provided here have been designed with theses limitations in mind and will fall back to a behaviour compatible with macOS where needed.
+In some cases, this can lead to performance degradation.
+Please consult each module's HTML manual page for details.
+If you want newer, more powerful versions of these tools, install them via [the homebrew project](https://brew.sh).
+Explaining how to use brew.sh and how to change your environment to use updated POSIX tools is out of the scope of this README.
+
+In addition, QGIS on macOS ships with GRASS version 7.8 (whereas GRASS 8.x is the current version).
+The GRASS modules provided here have been designed to work with GRASS 7.8 as well as more recent versions of GRASS GIS.
+However, operation under macOS has not been tested intensively.
+Please report any problems to this project by creating an Issue (ticket).
 
 ## Windows OS Notes
 * GRASS modules might only be available in the QGIS Toolbox if QGIS was started via the "QGIS Desktop with GRASS 7" launcher (This seems to be a problem specific to QGIS 3.10.x).
