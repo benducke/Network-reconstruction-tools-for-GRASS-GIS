@@ -191,6 +191,8 @@ The steps you have to perform are very similar to those on Linux-based systems.
 
 The main difference is that both GRASS and QGIS come as App packages on macOS.
 
+Also, note that 
+
 To use these modules in GRASS GIS:
 1. Browse the GRASS App package using Finder ("Show Package Contents").
 2. Open the folder "Contents/Resources" within the GRASS App package and proceed by copying this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
