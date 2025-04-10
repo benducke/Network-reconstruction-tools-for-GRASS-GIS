@@ -191,8 +191,6 @@ The steps you have to perform are very similar to those on Linux-based systems.
 
 The main difference is that both GRASS and QGIS come as App packages on macOS.
 
-Also, note that 
-
 To use these modules in GRASS GIS:
 1. Browse the GRASS App package using Finder ("Show Package Contents").
 2. Open the folder "Contents/Resources" within the GRASS App package and proceed by copying this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
@@ -216,27 +214,28 @@ For use via the QGIS GRASS 7 plug-in:
 
 ## Windows
 
-Make sure to set the Windows file manager to show "Extensions for known file types". Otherwise you might have trouble telling apart the different files that share the base name "v.net.models"!
+Make sure to set the Windows file manager to show "Extensions for known file types". Otherwise you might have trouble telling apart the different files that share the same base name (such as "v.net.models")!
 
-Use under Windows requires installation of a Bourne Shell (or compatible interpreter) and associated GNU command line tools. A great solution for this is to install the MSYS2 distribution which comes with everything you need to run "v.net.models" (and more). Of course, if you already have MSYS2 installed, then you can skip this step (but remember to check and sdjust "v.net.models.bat" if necessary: see point 4, below):
+Use under Windows requires installation of Bash and associated GNU command line tools. A great solution for this is to install the MSYS2 distribution which comes with everything required:
 
 1. Go to go to https://www.msys2.org/ and download the installer package for MSYS2.
 2. Run the installer. Accepting the default installation path (C:\msys64) is highly recommended.
-3. If you went with the default installation settings: Skip straight to the section on "use v.net.models in GRASS GIS" or "use via the QGIS Processing plug-in"!
-4. If (and only if) you have *not* installed into the default "C:\msys64" folder, then you now need to edit edit "v.net.models.bat" and modify its first two lines: 
+3. If you went with the default installation settings then the MSYS2 installation is done.
+4. Otherwise (if you have *not* installed into the default "C:\msys64" folder), you now need to edit edit all ".bat" files and modify each file's first two lines: 
 
 > set GRASS_SH=C:\msys64\usr\bin\sh.exe  
 > set MSYSPATH=/c/msys64/usr/bin
 
-The first line contains the full path to the Bourne Shell executable in your MSYS installation folder. Adjust it as needed to reflect your actual setup.
-The second line contains the path in your MSYS installation where all of the MSYS tools (awk.exe, grep.exe, etc.) are stored. Also adjust as needed, but note that this path must be written in POSIX conformant format! The Windows (or rather: CP/M & MS-DOS) drive letter "C:" is replaced by "/c" (or whatever drive has your MSYS installation). Folders are separated by forward slashes "/", not backslashes. No separator slash must be added after the final "bin" folder.
+The first line contains the full path to the shell executable in your MSYS installation folder. Adjust it as needed to reflect your actual setup.
+The second line contains the path in your MSYS installation where all of the MSYS tools (awk.exe, grep.exe, etc.) are stored. Also adjust as needed, but note that this path must be written in POSIX conformant format! The Windows (or rather: CP/M & MS-DOS) drive letter "C:" is replaced by "/c" (or whatever drive has your MSYS2 installation). Folders are separated by forward slashes "/", not backslashes. No separator slash must be added after the final "bin" folder.
 
-To use v.net.models in GRASS GIS:
-1. Make sure that you have installed MSYS2, as explained above.
-2. Copy the file "v.net.models" into the "scripts" subdirectory of your GRASS installation (you might need an admin password).
-3. Copy the file "v.net.models.bat" into the "bin" subdirectory of your GRASS installation.
-5. Copy the manual page "description.html" into the "docs" subdirectory of your GRASS installation, and rename it to "v.net.models.html".
-6. Also copy all ".png" files (they are the illustrations for the manual page) into "docs".
+To use these modules in GRASS GIS:
+
+1. Determine the directory where GRASS GIS is installed on your system (often this will be "/usr/local/grass" or "/opt/grass").
+2. Copy the "v.net.*" set of script files into the "scripts" subdirectory of your GRASS installation.
+3. Set the executable bit ("+x") for all of the above files (use "chmod").
+4. Copy the manual page "description.html" for each module to the "docs" subdirectory of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
+5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" subdirectory of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
 1. Make sure that you have installed MSYS2, as explained above.
@@ -246,6 +245,8 @@ For use via the QGIS Processing plug-in:
 5. Copy the manual page "description.html" into QGIS subfolder "apps\grass\grass78\docs", and rename it to "v.net.models.html".
 6. Also copy all ".png" files (they are the illustrations for the manual page) into "apps\grass\grass78\docs".
 7. Quit and restart QGIS using the "QGIS Desktop with GRASS 7"(!) launcher.
+
+For use via the QGIS GRASS 8 plug-in:
 
 # Notes and caveats
 
