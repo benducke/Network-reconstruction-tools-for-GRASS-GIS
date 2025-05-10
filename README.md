@@ -39,7 +39,7 @@ To use these modules in GRASS GIS:
 1. Determine the directory where GRASS GIS is installed on your Linux-based OS (often this will be "/usr/local/grass" or "/opt/grass").
 2. Copy the "v.net.*" set of script files into the "scripts" subdirectory of your GRASS installation.
 3. Set the executable bit ("+x") for all of the above files (use "chmod").
-4. Copy the manual page "description.html" for each module to the "docs" subdirectory of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
+4. Copy the manual page "description.html" for each module to the "docs" subdirectory of your GRASS installation, changing "description" to the name of the module (e.g. for v.net.models the correct file name would be "v.net.models.html").
 5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" subdirectory of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
@@ -195,7 +195,7 @@ To use these modules in GRASS GIS:
 1. Browse the GRASS App package using Finder ("Show Package Contents").
 2. Open the folder "Contents/Resources" within the GRASS App package and proceed by copying this project's files to the same GRASS subfolders specified in the instructions for Linux (above).
 3. Set the executable bit ("+x") for all of the above files (use "chmod" in Terminal: no other way to do this in macOS).
-4. Copy the manual page "description.html" for each module to the "docs" subfolder of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
+4. Copy the manual page "description.html" for each module to the "docs" subfolder of your GRASS installation, changing "description" to the name of the module (e.g. for v.net.models the correct file name would be "v.net.models.html").
 5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" folder of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
@@ -221,13 +221,13 @@ Use under Windows requires installation of Bash and associated GNU command line 
 1. Go to go to https://www.msys2.org/ and download the installer package for MSYS2.
 2. Run the installer. Accepting the default installation path (C:\msys64) is highly recommended.
 3. If you went with the default installation settings then the MSYS2 installation is done.
-4. Otherwise (if you have *not* installed into the default "C:\msys64" folder), you now need to edit edit all ".bat" files and modify each file's first two lines: 
+4. Otherwise (if you have *not* installed into the default "C:\msys64" folder), you now need to edit the ".bat" file for each module (e.g. "v.net.models.bat") and modify the first two lines: 
 
 > set GRASS_SH=C:\msys64\usr\bin\sh.exe  
 > set MSYSPATH=/c/msys64/usr/bin
 
 The first line contains the full path to the shell executable in your MSYS installation folder. Adjust it as needed to reflect your actual setup.
-The second line contains the path in your MSYS installation where all of the MSYS tools (awk.exe, grep.exe, etc.) are stored. Also adjust as needed, but note that this path must be written in POSIX conformant format! The Windows (or rather: CP/M & MS-DOS) drive letter "C:" is replaced by "/c" (or whatever drive has your MSYS2 installation). Folders are separated by forward slashes "/", not backslashes. No separator slash must be added after the final "bin" folder.
+The second line contains the path in your MSYS installation where all of the MSYS tools (awk.exe, grep.exe, etc.) are stored. Also adjust as needed, but note that this path must be written in POSIX conformant format! The Windows (or rather: CP/M & MS-DOS) drive letter "C:" is replaced by "/c" (or whatever drive has your MSYS2 installation). Folders are separated by forward slashes "/", not backslashes. Do not add a slash after the final "bin" folder.
 
 To use these modules in GRASS GIS:
 
