@@ -231,14 +231,13 @@ The second line contains the path in your MSYS installation where all of the MSY
 
 To use these modules in GRASS GIS:
 
-1. Determine the directory where GRASS GIS is installed on your system (often this will be "/usr/local/grass" or "/opt/grass").
+1. Determine the directory where GRASS GIS is installed on your system.
 2. Copy the "v.net.*" set of script files into the "scripts" subdirectory of your GRASS installation.
-3. Set the executable bit ("+x") for all of the above files (use "chmod").
-4. Copy the manual page "description.html" for each module to the "docs" subdirectory of your GRASS installation, renaming it to match each module's name with the extension ".html" (e.g. for v.net.models the target name would be "v.net.models.html").
+3. Copy the "*.bat" start-up files for all modules into the "bin" subdirectory of your GRASS installation.
+4. Copy the manual page "description.html" for each module to the "docs" subfolder of your GRASS installation, changing "description" to the name of the module (e.g. for v.net.models the correct file name would be "v.net.models.html").
 5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" subdirectory of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
-1. Make sure that you have installed MSYS2, as explained above.
 2. Copy "v.net.models.txt" into QGIS subfolder "apps\qgis-ltr\python\plugins\processing\algs\grass7\description"
 3. Copy "v.net.models.bat" into QGIS subfolder "apps\grass\grass78\bin"
 4. Copy "v.net.models" (no file extension!) into QGIS subfolder "apps\grass\grass78\scripts"
@@ -247,6 +246,11 @@ For use via the QGIS Processing plug-in:
 7. Quit and restart QGIS using the "QGIS Desktop with GRASS 7"(!) launcher.
 
 For use via the QGIS GRASS 8 plug-in:
+1. Perform installation into bundled GRASS GIS as described above, for the "QGIS Processing plug-in".
+2. Copy the ".qgm" and ".svg" files for each module into the "Contents/Resources/grass/modules" subfolder of the QGIS App package.
+3. Open "Contents/Resources/grass/modules/default.qgc" with a text editor of your choice to insert a new "section" element for the additional modules, as detailed in the instructions for Linux (above).
+4. Make sure that the GRASS 7 plug-in is enabled in QGIS.
+5. You should now find the additional "v.net.*" available under "Network reconstruction add-on" on the GRASS 7 plug-in pane (you might have to restart QGIS first).
 
 # Notes and caveats
 
