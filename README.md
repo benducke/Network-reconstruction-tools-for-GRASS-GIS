@@ -238,19 +238,18 @@ To use these modules in GRASS GIS:
 5. Also copy all ".png" files (they are the illustrations for the manual page) into the "docs" subdirectory of your GRASS installation.
 
 For use via the QGIS Processing plug-in:
-2. Copy "v.net.models.txt" into QGIS subfolder "apps\qgis-ltr\python\plugins\processing\algs\grass7\description"
-3. Copy "v.net.models.bat" into QGIS subfolder "apps\grass\grass78\bin"
-4. Copy "v.net.models" (no file extension!) into QGIS subfolder "apps\grass\grass78\scripts"
-5. Copy the manual page "description.html" into QGIS subfolder "apps\grass\grass78\docs", and rename it to "v.net.models.html".
-6. Also copy all ".png" files (they are the illustrations for the manual page) into "apps\grass\grass78\docs".
-7. Quit and restart QGIS using the "QGIS Desktop with GRASS 7"(!) launcher.
+1. Determine the folder where QGIS is installed on your system.
+2. On Windows, QGIS ships with a bundled copy of GRASS 8.4, which resides in the subfolder "apps\grass\grass84" of your QGIS folder. Open that folder, and then proceed to copy the modules and all of their auxillary files into the correct subfolders of "grass84", exactly as described in the previous paragraph ("To use these modules in GRASS GIS").
+3. Browse to the QGIS subfolder "apps\qgis-ltr\python\plugins\grassprovider\description" and edit the text file "algorithms.json" to insert interface descriptions for the new modules. Refer to the corresponding paragraph for the Linux installation case (above) for details.
+4. Make sure that the QGIS Processing plug-in and its GRASS provider are enabled in QGIS.
+5. You should now find the additional modules in group "GRASS/Network reconstruction" in the QGIS Processing Toolbox (you might have to restart QGIS first).
 
 For use via the QGIS GRASS 8 plug-in:
-1. Perform installation into bundled GRASS GIS as described above, for the "QGIS Processing plug-in".
-2. Copy the ".qgm" and ".svg" files for each module into the "Contents/Resources/grass/modules" subfolder of the QGIS App package.
-3. Open "Contents/Resources/grass/modules/default.qgc" with a text editor of your choice to insert a new "section" element for the additional modules, as detailed in the instructions for Linux (above).
-4. Make sure that the GRASS 7 plug-in is enabled in QGIS.
-5. You should now find the additional "v.net.*" available under "Network reconstruction add-on" on the GRASS 7 plug-in pane (you might have to restart QGIS first).
+1. Perform installation of modules and auxilliary files into bundled GRASS GIS as described above, for the "QGIS Processing plug-in".
+2. Copy the ".qgm" and ".svg" files for each module into the "apps\qgis-ltr\grass\modules" subfolder of your QGIS folder.
+3. Open "apps\qgis-ltr\grass\modules\default.qgc" with a text editor to insert a new "section" element for the additional modules, as detailed in the instructions for Linux (above).
+4. Make sure that the GRASS 8 plug-in is enabled in QGIS.
+5. You should now find the additional "v.net.*" available under "Network reconstruction add-on" on the GRASS 8 plug-in pane (you might have to restart QGIS first).
 
 # Notes and caveats
 
