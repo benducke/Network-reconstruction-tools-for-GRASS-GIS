@@ -4,11 +4,11 @@
 # MODULE:     	v.net.models
 # AUTHOR(S): 	Benjamin Ducke <benducke AT fastmail.fm>
 # PURPOSE:		Model-based reconstruction of a network from points (nodes).
-#				This script takes points as input and reconstructs a networkmodel_complete_thread
+#				This script takes points as input and reconstructs a network
 #             	by adding lines (links) between all or a subset of them. Links 
 #				are added according to the chosen connectivity model.
 #				Connection costs between nodes are computed as Euclidean (default)
-#				For more realism, connection costs and
+#				For more realistic results, connection costs and
 #				actual link shapes can be modeled as least-cost paths (LCP)
 #				between nodes (requires a raster cost surface as additional input).
 #
@@ -74,6 +74,11 @@ GIS_FLAG_L=0
 # %  description: Skip input data consistency checks
 # %End
 
+# %Flag
+# %  key: t
+# %  description: Time-stamp processing steps
+# %End
+
 # %Option
 # % key: input
 # % type: string
@@ -83,6 +88,20 @@ GIS_FLAG_L=0
 # % description: Input vector map with network nodes (points)
 # % gisprompt: old,vector,vector
 # %End
+
+# %Option G_OPT_DB_COLUMN
+# % key: key
+# % required: yes
+# % description: Name of INTEGER UNIQUE key field in input nodes' attribute table
+# % gisprompt: old,dbcolumn,dbcolumn
+# %End
+
+# %option G_OPT_DB_COLUMN
+# % key: label
+# % required: no
+# % description: Name of label/name field (default: same as 'key')
+# % gisprompt: old,dbcolumn,dbcolumn
+# %end
 
 # %option G_OPT_V_FIELD
 # % key: layer
@@ -135,20 +154,6 @@ GIS_FLAG_L=0
 # % description: Output vector map for attributed network nodes (points)
 # % gisprompt: new,vector,vector
 # %End
-
-# %Option G_OPT_DB_COLUMN
-# % key: key
-# % required: yes
-# % description: Name of INTEGER key field in input nodes' attribute table
-# % gisprompt: old,dbcolumn,dbcolumn
-# %End
-
-# %option G_OPT_DB_COLUMN
-# % key: label
-# % required: no
-# % description: Name of label/name field (default: same as 'key')
-# % gisprompt: old,dbcolumn,dbcolumn
-# %end
 
 # %Option
 # % key: model
@@ -388,6 +393,16 @@ DBMS_IDENT_QUOTE='"'	# Quoting character for field/table names that (might) cont
 DBMS_BEGIN="BEGIN;"		# Opening statement for an SQL transction; most DBMS should understand "BEGIN;"
 DBMS_COMMIT="COMMIT;";	# Closing statement for an SQL transction; most DBMS should understand "COMMIT;"
 LABEL_TYPE_OUT="TEXT"   # Default type for creating new label fields that might contain lots of text	
+
+# Process time-stamping (-t flag)
+# Set maximum number of processing steps to time-stamp:
+if [ -n "${GIS_OPT_COSTMAP}" ] ; then
+	TSTAMP_PROC_MAX=4
+else
+	TSTAMP_PROC_MAX=2
+fi
+TSTAMP_PROC_CUR=1 # Number of current processing tstep
+TSTAMP_PROC_LBL=  # User-defined label of current processing step
 
 # Basic sanity checks.
 if [ -z "$GISBASE" ] ; then
@@ -4123,15 +4138,42 @@ ${DBMS_COMMIT}"
 
 
 # FUNCTION
+# tstamp_proc: Outputs a time stamp to makr current processing step
+#
+# This function takes only one argument:
+#
+#	$1: (String) User-defined label/name of current processing step
+#
+# Call this function at the very beginning and at the very end of a code block to be
+# time-stamped. Use the same value of "$1" in both cases:
+# When this function is called with a value for $1, that was not set by the previous call,
+# it will add a 'BGN' (begin) to the message. Otherwise, it will add an 'END'.
+#
+# NOTE 1: Make sure to set global var TSTAMP_PROC_MAX at beginning of script.
+# NOTE 2: This function will only have an effect if the 't'(ime stamping) CLI flag has been set.
+tstamp_proc() {
+	if [ -n "${1}" ] && [ ${GIS_FLAG_T} -eq 1 ] ; then
+		MARK=`date`
+		if [ -n "${TSTAMP_PROC_LBL}" ] && [ "${1}" = "${TSTAMP_PROC_LBL}" ] ; then
+			g.message -i "[$TSTAMP_PROC_CUR/$TSTAMP_PROC_MAX END] ${TSTAMP_PROC_LBL} ($MARK)"
+			TSTAMP_PROC_CUR=`"${EXPR}" ${TSTAMP_PROC_CUR} + 1`
+			TSTAMP_PROC_LBL=
+		else
+			g.message -i "[$TSTAMP_PROC_CUR/$TSTAMP_PROC_MAX BGN] ${1} ($MARK)"
+			TSTAMP_PROC_LBL="$1"
+		fi
+	fi		
+}
+
+
+# FUNCTION
 # model_complete: Create a network where every node is connected to every other node.
 # NOTE that this model is the ONLY one that reads cost raster values from "${GIS_OPT_COSTMAP}" directly!
 # All other models MUST rely on RUNMODE_COST ["TRUE"|"FALSE"] and read link costs from
 # the associated 'cost' attribute field!
 model_complete () {
 	
-	# DEBUG
-	#MARK=`date`
-	#echo "0 MODEL COMPLETE START: '$MARK'"
+	tstamp_proc "Generate all links"
 	
 	# CACHING:
 	# If we are running in cost-based mode, then we need a temporary storage
@@ -4139,7 +4181,7 @@ model_complete () {
 	# support for creating tables without attached features, we just (mis)use v.random
 	# to create a new points vector map, and we use its attribute table to store the
 	# cost data.
-	if [ -n "${GIS_OPT_COSTMAP}" ] ; then	
+	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 		# We use v.random to create as many features with attached attributes as
 		# we need (=number of links in complete network). We use the "column=" option to attach
 		# an attribute table at the same time. Normally, this is used for random
@@ -4311,11 +4353,7 @@ ${remainder}
 			g.message -p "${job} ${num_features} 1"
 		done # Done running all dispatches for concurrent processing.
 		#
-	fi # Main loop ends here (both single and multi threaded operation).
-	
-	# DEBUG
-	#MARK=`date`
-	#echo "0 MODEL COMPLETE DONE: '$MARK'"
+	fi # Main loop ends here (both single and multi threaded operation).	
 	
 	# SQLite backend only: Switch back into mapset's default table storage mode (if required)!
 	if [ "${DBMS_NAME}" = "SQLite" ] && [ ${GIS_OPT_THREADS} -gt 1 ] && [ ${DBMS_LOCKS_REQUIRED} -ne ${DBMS_LOCKS_REQUIRED_OLD} ] ; then		
@@ -4340,6 +4378,8 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			tid=`"${EXPR}" ${tid} + 1`
 		done
 	done
+
+	tstamp_proc "Generate all links"
 
 	# MAIN LOOP DONE.
 	
@@ -4424,9 +4464,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# 1. Number of links(x) in fully connected network: x = n(n - 1) / 2
 	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2), etc.
 	
-	# DEBUG
-	#MARK=`date`
-	#echo "1 TRANSFER ATTS TO LINKS START: '$MARK'"
+	tstamp_proc "Transfer attributes to links"
 	
 	# Initialize chunk-based SQL statement collation
 	if [ ${GIS_OPT_SQLBUFLEN} -gt ${lines} ] ; then
@@ -4474,120 +4512,171 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	links_attr_tbl="$attribute_table"
 	
 	# Now transfer attibutes from original input map to links output map!
-	get_primary_keys "${GIS_OPT_INPUT}"
-	IFS_BACKUP="$IFS"
-	IFS="${IFS_NEWLINE}"
-	for key in $PRIMARY_KEYS ; do
-		if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
-			previous="${previous} $key " # Add current key to list of previous keys.
- 			# Compose SQL WHERE statement for retreiving  next primary key value.
-			get_where_clause "${key}"
-			val=`db.select database="${in_attr_db}" driver="${in_attr_drv}" sql="SELECT ${GIS_OPT_KEY} FROM ${in_attr_tbl} WHERE ${WHERE};" -c --quiet`
-			check_error "Failed to query attribute table of copy of input points map."
-			if [ -n "${val}" ] ; then # Feature exists! Process it:
-				# Read "FROM" label field value (stays constant during this run through loop):
-				get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}"
-				from_lbl="${LABEL}"
-				if [ -n $BASH_VERSION ] ; then
+	if [ -n $BASH_VERSION ] ; then
+		# BASH-optimized branch
+		get_primary_keys "${GIS_OPT_INPUT}"
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
+		for key in $PRIMARY_KEYS ; do
+			if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then			
+				previous="${previous} $key " # Add current key to list of previous keys.				
+				# Compose SQL WHERE statement for retreiving next primary key value.
+				get_where_clause "${key}"
+				val=`db.select database="${in_attr_db}" driver="${in_attr_drv}" sql="SELECT ${GIS_OPT_KEY} FROM ${in_attr_tbl} WHERE ${WHERE};" -c --quiet`
+				check_error "Failed to query attribute table of copy of input points map."
+				if [ -n "${val}" ] ; then # Feature exists! Process it:
+					# Read "FROM" label field value (stays constant during this run through loop):
+					get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}"
+					from_lbl="${LABEL}"
 					let target=${cat}+${links}-1
-				else
-					target=`"${EXPR}" ${cat} + ${links} - 1`
-				fi
-				while [ ${cat} -le ${target} ] ; do
-					# Inner loop: We transfer a FROM/TO pair in every pass through this loop.           
-					# The FROM key is constant here,
-					# while the TO key becomes, in turn, every entry on the list of
-					# primary keys that is _neither_ the current key _nor_ any key that
-					# was used previously as a FROM key!
-					for cur in $PRIMARY_KEYS ; do
-						str_substr "${previous}" " ${cur} "
-						if [ -z "${SUBSTR_EXIST}" ] ; then # Key not found on list of previously transferred keys: Transfer as new TO key in FROM/TO pair.
-							# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
-							if [ -n $BASH_VERSION ] ; then
+					while [ ${cat} -le ${target} ] ; do
+						# Inner loop: We transfer a FROM/TO pair in every pass through this loop.           
+						# The FROM key is constant here,
+						# while the TO key becomes, in turn, every entry on the list of
+						# primary keys that is _neither_ the current key _nor_ any key that
+						# was used previously as a FROM key!
+						for cur in $PRIMARY_KEYS ; do
+							if [[ "${previous}" != *"${cur}"* ]] ; then # Key not found on list of previously transferred keys: Transfer as new TO key in FROM/TO pair.
+								# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
 								let records_left=${lines}-${cat}
-							else
-								records_left=`${EXPR} ${lines} - ${cat}`
-							fi
-							if [ ${records_left} -lt ${chunk_remainder} ] ; then
-								chunk_size=1
-							fi
-							# Get label of "To" node:
-							get_label_fast "${in_attr_tbl}" "${cur}" "${in_attr_drv}" "${in_attr_db}"
-							to_lbl="${LABEL}"
-							# Transfer the actual from/to attributes to the output (links) map's table!
-							SQL=""
-							SQL="${SQL}UPDATE ${links_attr_tbl} SET"
-							SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
-							SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${cur}"
-							SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${from_lbl}'"
-							SQL="${SQL}, ${LINKS_FLD_TO_LBL} = '${to_lbl}'"
-							SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-							#							
-							# Now add attributes to output links.
-							if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
-								# Keep collecting statements for current chunk.
-								SQL_CHUNK="${SQL_CHUNK}
+								if [ ${records_left} -lt ${chunk_remainder} ] ; then
+									chunk_size=1
+								fi
+								# Get label of "To" node:
+								get_label_fast "${in_attr_tbl}" "${cur}" "${in_attr_drv}" "${in_attr_db}"
+								to_lbl="${LABEL}"
+								# Transfer the actual from/to attributes to the output (links) map's table!
+								SQL=""
+								SQL="${SQL}UPDATE ${links_attr_tbl} SET"
+								SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
+								SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${cur}"
+								SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${from_lbl}'"
+								SQL="${SQL}, ${LINKS_FLD_TO_LBL} = '${to_lbl}'"
+								SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
+								#							
+								# Now add attributes to output links.
+								if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
+									# Keep collecting statements for current chunk.
+									SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-								if [ -n $BASH_VERSION ] ; then
 									let chunk_left=${chunk_left}-1
 								else
-									chunk_left=`${EXPR} ${chunk_left}-1`
-								fi
-							else
-								if [ ${chunk_size} -eq 1 ] ; then
-									SQL_CHUNK="$SQL" # Chunk contains only one piece.
-								else
-									# Add final chunk piece:
-									SQL_CHUNK="${SQL_CHUNK}
+									if [ ${chunk_size} -eq 1 ] ; then
+										SQL_CHUNK="$SQL" # Chunk contains only one piece.
+									else
+										# Add final chunk piece:
+										SQL_CHUNK="${SQL_CHUNK}
 ${SQL}
 ${DBMS_COMMIT}"
+									fi							
+									"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
+									check_error "Failed to upload attributes to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
+									# Empty chunk contents:
+									SQL_CHUNK="${DBMS_BEGIN}"
+									chunk_left=${chunk_size}
 								fi							
-								"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
-								check_error "Failed to upload attributes to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
-								# Empty chunk contents:
-								SQL_CHUNK="${DBMS_BEGIN}"
-								chunk_left=${chunk_size}
-							fi							
-							g.message -p "${cat} ${lines} 1"
-							if [ -n $BASH_VERSION ] ; then
+								g.message -p "${cat} ${lines} 1"
 								let cat=${cat}+1
-							else
+							fi
+						done
+					done
+					let links=${links}-1				
+				fi
+				let step=${step}+1
+			else # Last point reached: Do not process!
+				let step=${step}+1
+			fi
+		done # END of BASH-optimized branch
+		IFS="${IFS_BACKUP}"	
+	else
+		# Non-BASH branch
+		get_primary_keys "${GIS_OPT_INPUT}"
+		IFS_BACKUP="$IFS"
+		IFS="${IFS_NEWLINE}"
+		for key in $PRIMARY_KEYS ; do
+			if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
+				previous="${previous} $key " # Add current key to list of previous keys.
+				# Compose SQL WHERE statement for retreiving  next primary key value.
+				get_where_clause "${key}"
+				val=`db.select database="${in_attr_db}" driver="${in_attr_drv}" sql="SELECT ${GIS_OPT_KEY} FROM ${in_attr_tbl} WHERE ${WHERE};" -c --quiet`
+				check_error "Failed to query attribute table of copy of input points map."
+				if [ -n "${val}" ] ; then # Feature exists! Process it:
+					# Read "FROM" label field value (stays constant during this run through loop):
+					get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}"
+					from_lbl="${LABEL}"
+					target=`"${EXPR}" ${cat} + ${links} - 1`
+					while [ ${cat} -le ${target} ] ; do
+						# Inner loop: We transfer a FROM/TO pair in every pass through this loop.           
+						# The FROM key is constant here,
+						# while the TO key becomes, in turn, every entry on the list of
+						# primary keys that is _neither_ the current key _nor_ any key that
+						# was used previously as a FROM key!
+						for cur in $PRIMARY_KEYS ; do
+							str_substr "${previous}" " ${cur} "
+							if [ -z "${SUBSTR_EXIST}" ] ; then # Key not found on list of previously transferred keys: Transfer as new TO key in FROM/TO pair.
+								# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
+								records_left=`${EXPR} ${lines} - ${cat}`
+								if [ ${records_left} -lt ${chunk_remainder} ] ; then
+									chunk_size=1
+								fi
+								# Get label of "To" node:
+								get_label_fast "${in_attr_tbl}" "${cur}" "${in_attr_drv}" "${in_attr_db}"
+								to_lbl="${LABEL}"
+								# Transfer the actual from/to attributes to the output (links) map's table!
+								SQL=""
+								SQL="${SQL}UPDATE ${links_attr_tbl} SET"
+								SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
+								SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${cur}"
+								SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${from_lbl}'"
+								SQL="${SQL}, ${LINKS_FLD_TO_LBL} = '${to_lbl}'"
+								SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
+								#							
+								# Now add attributes to output links.
+								if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
+									# Keep collecting statements for current chunk.
+									SQL_CHUNK="${SQL_CHUNK}
+${SQL}"
+									chunk_left=`${EXPR} ${chunk_left}-1`
+								else
+									if [ ${chunk_size} -eq 1 ] ; then
+										SQL_CHUNK="$SQL" # Chunk contains only one piece.
+									else
+										# Add final chunk piece:
+										SQL_CHUNK="${SQL_CHUNK}
+${SQL}
+${DBMS_COMMIT}"
+									fi							
+									"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
+									check_error "Failed to upload attributes to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
+									# Empty chunk contents:
+									SQL_CHUNK="${DBMS_BEGIN}"
+									chunk_left=${chunk_size}
+								fi							
+								g.message -p "${cat} ${lines} 1"
 								cat=`"${EXPR}" ${cat} + 1`
 							fi
-						fi
+						done
 					done
-				done
-				if [ -n $BASH_VERSION ] ; then
-					let links=${links}-1
-				else
 					links=`"${EXPR}" ${links} - 1`
-				fi				
-			fi
-			if [ -n $BASH_VERSION ] ; then
-				let step=${step}+1
-			else
+				fi
+				step=`"${EXPR}" ${step} + 1`
+			else # Last point reached: Do not process!
 				step=`"${EXPR}" ${step} + 1`
 			fi
-		else # Last point reached: Do not process!
-			step=`"${EXPR}" ${step} + 1`
-		fi
-	done
-	IFS="${IFS_BACKUP}"
+		done
+		IFS="${IFS_BACKUP}"
+		# END of non-BASH branch
+	fi # END of attribute transfer main loop
 	
-	# DEBUG
-	#MARK=`date`
-	#echo "1 TRANSFER ATTS TO LINKS DONE: '$MARK'"
+	tstamp_proc "Transfer attributes to links"
 	
 	# Drop all previously created indices.	
 	del_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
 	
-	# DEBUG
-	#MARK=`date`
-	#echo "2 UPDATE LINK COST START: '$MARK'"
-
 	# Upload link costs (if cost raster given).
 	if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 		#
+		tstamp_proc "Update link costs"
 		# Get info for connected database and table (output links map):
 		get_tbl_info "${GIS_OPT_LINKS}"
 		attribute_database_driver_links="${attribute_database_driver}"
@@ -4684,11 +4773,9 @@ ${DBMS_COMMIT}"
 			fi			
 		done
 		IFS="${IFS_BACKUP}"
-	fi
-	
-	# DEBUG
-	#MARK=`date`
-	#echo "2 UPDATE LINK COST DONE: '$MARK'"
+		
+		tstamp_proc "Update link costs"
+	fi	
 	
 	# If we have least-cost paths as links, then we need to REVERSE the order
 	# of attributes for every m:n from:to set of links. The reason for this
@@ -4700,9 +4787,7 @@ ${DBMS_COMMIT}"
 	#       record insertion order!
 	if [ -n "${GIS_OPT_COSTMAP}" ] && [ ${DBMS_PRESERVES_ORDER} -eq 1 ] ; then
 	
-		# DEBUG
-		#MARK=`date`
-		#echo "3 REORDER LINK ATTS START: '$MARK'"
+		tstamp_proc "Reorder link attributes"
 	
 		# Get info for connected database and table:
 		get_tbl_info "${GIS_OPT_LINKS}"
@@ -4796,9 +4881,7 @@ ${DBMS_COMMIT}"
 		done
 		IFS="${IFS_BACKUP}"
 		
-		# DEBUG
-		#MARK=`date`
-		#echo "3 REORDER LINK ATTS DONE: '$MARK'"
+		tstamp_proc "Reorder link attributes"
 		
 	fi
 
