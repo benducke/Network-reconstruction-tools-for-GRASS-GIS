@@ -833,6 +833,8 @@ check_environment () {
 		if [ ${result} -gt 0 ] ; then
 			DBMS_THREAD_SAFE=1
 			g.message -w "SQLite backend appears to be in per-map mode. Expect errors."
+			g.message -w "This might be the result of a failed/aborted computation."
+			g.message -w "In such case, use 'db.connect -d' to restore SQLite defaults."
 		else
 			if [ ${GRASS_VERBOSE} -gt 2 ] ; then
 				g.message -i "SQLite backend appears to be in default mode (single database)."
