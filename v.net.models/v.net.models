@@ -38,6 +38,8 @@
 # - sleep
 # - wc
 #
+# REQUIRED BUILT-IN FUNCTIONS:
+# - read
 
 
 # %Module
@@ -295,6 +297,17 @@ GIS_FLAG_L=0
 # %End
 
 # %Option
+# % key: synct
+# % type: integer
+# % required: no
+# % multiple: no
+# % key_desc: value
+# % description: Thread synchronisation interval in secs (stability)
+# % options: 0.1-60.0
+# % answer: 0.25
+# %End
+
+# %Option
 # % key: sqlbuflen
 # % type: integer
 # % required: no
@@ -362,6 +375,9 @@ else
 	# Set filter for line endings for this system:
 	IFS_NEWLINE=$'\n\b'
 fi
+
+# These are built-in functions common to all POSIX shells:
+READ="read"
 
 # Minimal Bash version for expected to run this script without errors.
 BASH_VERSION_MIN="3" # Version 3 is the latest one shipped on macOS!
@@ -1843,6 +1859,38 @@ _XPG=1;test "`typeset -Z2 x=0; echo $x`" = '00' && {
 echo 'UNKNOWN'
 ]
 
+}
+
+
+# FUNCTION
+# mthread_advice: Give advice on potential multi-threading issues.
+#
+# This is a very simple function. Its only purpose is to display a unified text
+# advising the user in case of a potential multi-threading issue.
+# This function should be called blindly whenever an error is caught that might
+# indicate an issue in a multi-threaded run. It will take care by itself to
+# only display informative text if the program is actually running with more
+# than one thread.
+#
+mthread_advice () {
+	# Advice for multi-thread mode:
+	if [ ${GIS_OPT_THREADS} -gt 1 ] ; then		
+		g.message -i "This might indicate a problem with thread synchronisation."
+		if [ ${GIS_OPT_THREADS} -lt 3 ] ; then
+			# Specific advice when running with minimal number of threads
+			g.message -i "Try running in single thread mode (set option 'threads=1')."
+		else
+			# Specific advice when running with more than minimal number of threads
+			g.message -i "Try reducing the number of concurrent threads (option 'threads='),"
+			g.message -i "and/or increasing the synchronisation time window (option 'synct=')."
+		fi
+		g.message -i "If this program aborts repeatedly and inexplicably, then failed"
+		g.message -i "thread synchronisation might have left the GRASS processing"
+		g.message -i "in an unstable state, and a system restart is advisable."
+	fi
+	# General advice, independent of number of threads:
+	g.message -i "Always make sure that no other process is attempting to run in the same"
+	g.message -i "GRASS mapset conncurrently."
 }
 
 
@@ -4344,12 +4392,15 @@ ${remainder}
 				tid=`"${EXPR}" ${tid} + 1`
 				job=`"${EXPR}" ${job} + 1`
 				if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
-					${SLEEP} "0.02" # Add a short delay before launching next thread (synchronisation)
+					${SLEEP} ${GIS_OPT_SYNCT} # Add a short delay before launching next thread (synchronisation)
 				fi
 			done
 			if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
 				${WAIT} # Wait for all dispatched jobs to complete.
+				${SLEEP} ${GIS_OPT_SYNCT} # Add a short delay before starting next dispatch (synchronisation)
+				${SLEEP} ${GIS_OPT_SYNCT} # dito.
 			fi
+			
 			g.message -p "${job} ${num_features} 1"
 		done # Done running all dispatches for concurrent processing.
 		#
@@ -4378,6 +4429,11 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			tid=`"${EXPR}" ${tid} + 1`
 		done
 	done
+	
+	# DEBUG
+	# 
+	#v.edit map=links_med tool=delete ids=124751
+
 
 	tstamp_proc "Generate all links"
 
@@ -4429,17 +4485,29 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	
 	# After v.patch, categories are a mess. We rebuild them now, so that every link has its own category ID!
 	# Delete old category IDs:
-	g.message -i "Rebuilding primary key sequence of links output map (1/2):"
+	g.message -i "Rebuilding primary key sequence of links output map (1/2)..."
 	v.category input="${GIS_OPT_LINKS}" output="${TMP_VECT_LINKS_CAT}" layer="1" option="del" cat="-1" --overwrite --quiet
 	check_error "Failed to remove defective category IDs from links output vector map."
 	clean_links # Just to suppress useless overwrite warning
-	g.message -i "Rebuilding primary key sequence of links output map (2/2):"
+	g.message -i "Rebuilding primary key sequence of links output map (2/2)..."
 	v.category output="${GIS_OPT_LINKS}" input="${TMP_VECT_LINKS_CAT}" layer="1" option="add" cat="1" step="1" --overwrite --quiet
 	check_error "Failed to add proper category IDs to links output vector map."
 	
-	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
-	g.message -i "Fully connected network has ${lines} links."
+	# Compute expected number of links
+	awk_calc "($NUM_INPUT_NODES-1)*($NUM_INPUT_NODES/2)"	
 	
+	# Now get actual number of links.
+	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
+	g.message -i "Fully connected network has ${lines} links."	
+	
+	# Sanity check:
+	# Compare expected against actual number of links!
+	if [ $lines -ne $AWK_VALUE ] ; then
+		g.message -e "Actual number of links does not match expected number (${AWK_VALUE})."
+		mthread_advice
+		exit_error "Invalid result. Aborting."
+	fi
+		
 	# ATTACH OUTPUT ATTRIBUTES
 	# Attach an (empty except for 'cat') attribute table.	
 	${V_DB_ADDTABLE} map="${GIS_OPT_LINKS}" layer="1" key="${LINKS_FLD_KEY}" --quiet 2>/dev/null
@@ -4453,6 +4521,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	${V_DB_ADDCOLUMN} map="${GIS_OPT_LINKS}" layer="1" columns="${LINKS_FLD_TO_LBL} ${LABEL_TYPE_OUT}" --quiet
 	check_error "Failed to add attribute field '${LINKS_FLD_TO_LBL}' (type '${LABEL_TYPE_OUT}') to links output vector map."
 	
+	# ATTRIBUTE TRANSFER: INPUT NODES --> GENERATED LINKS
 	# THIS ONE IS TRICKY.
 	# We now have:
 	# (A) The set of original attribute points, with user-specified primary keys (and labels).
@@ -4464,7 +4533,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# 1. Number of links(x) in fully connected network: x = n(n - 1) / 2
 	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2), etc.
 	
-	tstamp_proc "Transfer attributes to links"
+	tstamp_proc "Transfer node attributes to links"
 	
 	# Initialize chunk-based SQL statement collation
 	if [ ${GIS_OPT_SQLBUFLEN} -gt ${lines} ] ; then
@@ -4512,163 +4581,187 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	links_attr_tbl="$attribute_table"
 	
 	# Now transfer attibutes from original input map to links output map!
-	if [ -n $BASH_VERSION ] ; then
-		# BASH-optimized branch
-		get_primary_keys "${GIS_OPT_INPUT}"
-		IFS_BACKUP="$IFS"
-		IFS="${IFS_NEWLINE}"
-		for key in $PRIMARY_KEYS ; do
-			if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then			
-				previous="${previous} $key " # Add current key to list of previous keys.				
-				# Compose SQL WHERE statement for retreiving next primary key value.
-				get_where_clause "${key}"
-				val=`db.select database="${in_attr_db}" driver="${in_attr_drv}" sql="SELECT ${GIS_OPT_KEY} FROM ${in_attr_tbl} WHERE ${WHERE};" -c --quiet`
-				check_error "Failed to query attribute table of copy of input points map."
-				if [ -n "${val}" ] ; then # Feature exists! Process it:
-					# Read "FROM" label field value (stays constant during this run through loop):
-					get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}"
-					from_lbl="${LABEL}"
-					let target=${cat}+${links}-1
-					while [ ${cat} -le ${target} ] ; do
-						# Inner loop: We transfer a FROM/TO pair in every pass through this loop.           
-						# The FROM key is constant here,
-						# while the TO key becomes, in turn, every entry on the list of
-						# primary keys that is _neither_ the current key _nor_ any key that
-						# was used previously as a FROM key!
-						for cur in $PRIMARY_KEYS ; do
-							if [[ "${previous}" != *"${cur}"* ]] ; then # Key not found on list of previously transferred keys: Transfer as new TO key in FROM/TO pair.
-								# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
-								let records_left=${lines}-${cat}
-								if [ ${records_left} -lt ${chunk_remainder} ] ; then
-									chunk_size=1
-								fi
-								# Get label of "To" node:
-								get_label_fast "${in_attr_tbl}" "${cur}" "${in_attr_drv}" "${in_attr_db}"
-								to_lbl="${LABEL}"
-								# Transfer the actual from/to attributes to the output (links) map's table!
-								SQL=""
-								SQL="${SQL}UPDATE ${links_attr_tbl} SET"
-								SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
-								SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${cur}"
-								SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${from_lbl}'"
-								SQL="${SQL}, ${LINKS_FLD_TO_LBL} = '${to_lbl}'"
-								SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-								#							
-								# Now add attributes to output links.
-								if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
-									# Keep collecting statements for current chunk.
-									SQL_CHUNK="${SQL_CHUNK}
-${SQL}"
-									let chunk_left=${chunk_left}-1
-								else
-									if [ ${chunk_size} -eq 1 ] ; then
-										SQL_CHUNK="$SQL" # Chunk contains only one piece.
-									else
-										# Add final chunk piece:
-										SQL_CHUNK="${SQL_CHUNK}
-${SQL}
-${DBMS_COMMIT}"
-									fi							
-									"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
-									check_error "Failed to upload attributes to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
-									# Empty chunk contents:
-									SQL_CHUNK="${DBMS_BEGIN}"
-									chunk_left=${chunk_size}
-								fi							
-								g.message -p "${cat} ${lines} 1"
-								let cat=${cat}+1
-							fi
-						done
-					done
-					let links=${links}-1				
-				fi
-				let step=${step}+1
-			else # Last point reached: Do not process!
-				let step=${step}+1
-			fi
-		done # END of BASH-optimized branch
-		IFS="${IFS_BACKUP}"	
-	else
-		# Non-BASH branch
-		get_primary_keys "${GIS_OPT_INPUT}"
-		IFS_BACKUP="$IFS"
-		IFS="${IFS_NEWLINE}"
-		for key in $PRIMARY_KEYS ; do
-			if [ ${step} -lt ${NUM_INPUT_NODES} ] ; then
-				previous="${previous} $key " # Add current key to list of previous keys.
-				# Compose SQL WHERE statement for retreiving  next primary key value.
-				get_where_clause "${key}"
-				val=`db.select database="${in_attr_db}" driver="${in_attr_drv}" sql="SELECT ${GIS_OPT_KEY} FROM ${in_attr_tbl} WHERE ${WHERE};" -c --quiet`
-				check_error "Failed to query attribute table of copy of input points map."
-				if [ -n "${val}" ] ; then # Feature exists! Process it:
-					# Read "FROM" label field value (stays constant during this run through loop):
-					get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}"
-					from_lbl="${LABEL}"
-					target=`"${EXPR}" ${cat} + ${links} - 1`
-					while [ ${cat} -le ${target} ] ; do
-						# Inner loop: We transfer a FROM/TO pair in every pass through this loop.           
-						# The FROM key is constant here,
-						# while the TO key becomes, in turn, every entry on the list of
-						# primary keys that is _neither_ the current key _nor_ any key that
-						# was used previously as a FROM key!
-						for cur in $PRIMARY_KEYS ; do
-							str_substr "${previous}" " ${cur} "
-							if [ -z "${SUBSTR_EXIST}" ] ; then # Key not found on list of previously transferred keys: Transfer as new TO key in FROM/TO pair.
-								# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
-								records_left=`${EXPR} ${lines} - ${cat}`
-								if [ ${records_left} -lt ${chunk_remainder} ] ; then
-									chunk_size=1
-								fi
-								# Get label of "To" node:
-								get_label_fast "${in_attr_tbl}" "${cur}" "${in_attr_drv}" "${in_attr_db}"
-								to_lbl="${LABEL}"
-								# Transfer the actual from/to attributes to the output (links) map's table!
-								SQL=""
-								SQL="${SQL}UPDATE ${links_attr_tbl} SET"
-								SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
-								SQL="${SQL}, ${LINKS_FLD_TO_ID} = ${cur}"
-								SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${from_lbl}'"
-								SQL="${SQL}, ${LINKS_FLD_TO_LBL} = '${to_lbl}'"
-								SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${cat}; "
-								#							
-								# Now add attributes to output links.
-								if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
-									# Keep collecting statements for current chunk.
-									SQL_CHUNK="${SQL_CHUNK}
-${SQL}"
-									chunk_left=`${EXPR} ${chunk_left}-1`
-								else
-									if [ ${chunk_size} -eq 1 ] ; then
-										SQL_CHUNK="$SQL" # Chunk contains only one piece.
-									else
-										# Add final chunk piece:
-										SQL_CHUNK="${SQL_CHUNK}
-${SQL}
-${DBMS_COMMIT}"
-									fi							
-									"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
-									check_error "Failed to upload attributes to links output vector map (value='${to_lbl}'; ${LINKS_FLD_KEY}=${cat})."
-									# Empty chunk contents:
-									SQL_CHUNK="${DBMS_BEGIN}"
-									chunk_left=${chunk_size}
-								fi							
-								g.message -p "${cat} ${lines} 1"
-								cat=`"${EXPR}" ${cat} + 1`
-							fi
-						done
-					done
-					links=`"${EXPR}" ${links} - 1`
-				fi
-				step=`"${EXPR}" ${step} + 1`
-			else # Last point reached: Do not process!
-				step=`"${EXPR}" ${step} + 1`
-			fi
-		done
-		IFS="${IFS_BACKUP}"
-		# END of non-BASH branch
-	fi # END of attribute transfer main loop
 	
-	tstamp_proc "Transfer attributes to links"
+	# TODO: PERFORMANCE OPTIMIZATION:
+	# Currently, we run an individual SQL UPDATE statement (incl. running 'db.execute' ) for
+	# every unique combination of primary key, from and to values.
+	# However, with the debugging statements below enabled, it becomes clear that there is a pattern
+	# and a structure to these statements which should allow combining SQL UPDATE calls by using
+	# ranges in the WHERE clause.
+	#
+	# Essentially, it should be possible to update the FROM and TO fields in separate statements, but
+	# with multiple primary key values at once!
+	#
+	#
+	# The observable pattern for FROM is (shortened statement):
+	#	UPDATE <table> SET
+	#	<from> = $key
+	#	WHERE PKEY > $cat and 'PKEY < current set length'
+	#   (with 'current set length' starting at 'num input nodes-1' and
+	#   decreasing by '1' for every run of the loop
+	#
+	# The observable pattern for TO is:
+	#	UPDATE <table> SET
+	#	<to> = $cur
+	#	WHERE PKEY = 'base + offset' OR PKEY = 'base + offset' OR PKEY = 'base + offset' [...]
+	#
+	# DETAILS OF THIS AND NEW LOOP LOGIG STILL NEED TO BE DETERMINED!
+	#
+	# ATTENTION: SQL QUERY SIZE LIMITS:
+	#
+	# SQLite: 1 mio chars (default)
+	# MySQL: 16 mio chars (default)	
+	# PostgreSQL: 2 billion (fixed)
+	# https://stackoverflow.com/questions/24510707/is-there-any-limit-on-sqlite-query-size
+	# https://stackoverflow.com/questions/16335011/what-is-maximum-query-size-for-mysql
+	# https://stackoverflow.com/questions/4936731/maximum-length-of-an-sql-query
+	#
+	# HOWEVER: It is questionable whether such long strings can be parsed effectively, anyhow!
+	#
+
+	# TODO:
+	#   - Document this speed improvement!
+	#	- Add progress counters [DONE]
+	#	- add backward-compatible integer arithmetics
+	#	- Clean up debug statements
+	#	- Revise variable names
+	#	- Complete comments
+	#   - Throw an error if the expected number of links differs from the actual one at the end of processing! ("Fully connected network has 12475x links.")
+	#	  --> This can happen in multi-threaded mode, if running in constant cost mode (no cost raster supplied)
+	#		  --> this is a sporadic occurence. The chance that it happens increases with number of input points and number of threads (often observable with 500 points and 8 threads)
+	#		  --> It is currently unclear whether this is due to at least one thread producing too many links, or with too many points being extracted from the main input map for some thread to ingest, or with patching the link sets into the complete network after all threads have finished
+	#         --> since multi-threading does not achieve much in this mode, we could turn it off automatically
+	#		  --> could be related to this: ERROR: No cost value available for path from '544' to '545'
+	#		  --> Multi-threading must be considered experimental at the moment. A warning should be issued if it is turned on. [use mthread_advice]
+	#		  --> 500 points and 4 threads seem (mostly) stable in cost-based mode and take about 
+	#		  --> perhaps also try if GRASS 8.5 improves things! [NO]
+	#		  --> could run v.clean to eliminate: duplicate geometries, zero-length geometries [NO]
+	#		  --> with the new, additional SLEEP commands and default wait time set to 0.25, things seem to be stable (enough)
+	#	  Advice: This might also happen if another sessions is using the same GRASS mapset (data corruption)!
+	#	  Advice: This might also happen if an aborted previous multi-threaded run left the system in an unstable state.
+	#	- Advice if number of input points exceeds 50k: "SQL statements might fail!"
+	
+	# v.net.models input=helladic_info_input_med key=sid label=cid links=links_med nodes=nodes_med model=complete threshold=0 -s -t --o threads=4 costmap=cost
+	#	[1/4 BGN] Generate all links (Thu 14 May 20:28:15 CEST 2026)
+	#	Switching to per-map table storage for backend 'SQLite'.
+	#	Creating network using connectivity model 'COMPLETE':
+	#	100%
+	#	Switching back to per-mapset table storage for backend 'SQLite'.
+	#	[1/4 END] Generate all links (Thu 14 May 20:58:18 CEST 2026)
+	#	Merging 499 network link subsets:
+	#	100%
+	#	Building topology for vector map <links_med@benni>...
+	#	Registering primitives...
+	#	Checking for topological errors...
+	#	Rebuilding primary key sequence of links output map (1/2):
+	#	Rebuilding primary key sequence of links output map (2/2):
+	#	Fully connected network has 124750 links.
+	#	[2/4 BGN] Transfer node attributes to links (Thu 14 May 20:59:18 CEST 2026)
+	#	Transferring input point attributes to output lines (links):
+	#	100%
+	#	[2/4 END] Transfer node attributes to links (Thu 14 May 20:59:48 CEST 2026)
+	#	[3/4 BGN] Update link costs (Thu 14 May 20:59:48 CEST 2026)
+	#	Updating link costs and uploading to links output attribute table:
+	#	100%
+	#	[3/4 END] Update link costs (Thu 14 May 21:47:58 CEST 2026)
+	#	[4/4 BGN] Reorder link attributes (Thu 14 May 21:47:58 CEST 2026)
+	#	Reordering link attributes:
+	#	100%
+	#	[4/4 END] Reorder link attributes (Thu 14 May 22:06:05 CEST 2026)
+	
+	# --> the last remaining bottlenecks are now 3/4 and 4/4.
+	#	--> look into options for bulk uploading/update with multiple rows as targets: https://stackoverflow.com/questions/11563869/update-multiple-rows-with-different-values-in-a-single-sql-query
+
+	
+	step=1 # Progress counter
+	let steps_to_complete=${NUM_INPUT_NODES}*2
+	#
+	# PHASE 1: Transfer "FROM" attributes: origin node IDs and labels.
+	num_cats=`"${EXPR}" ${NUM_INPUT_NODES} - 1` # This is the number of categories for which the attributes
+												# need to be transferred in each iteration of the main loop.
+												# This number will be REDUCED by "1" after each iteration.
+	for key in $PRIMARY_KEYS ; do
+		if [ ${num_cats} -gt 0 ] ; then
+			# Retrieve node label:
+			get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}" # Node label is now in $LABEL.
+			# Build SQL statement:
+			SQL=""
+			SQL="${SQL}UPDATE ${links_attr_tbl} SET"
+			SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
+			SQL="${SQL}, ${LINKS_FLD_FROM_LBL} = '${LABEL}'"
+			# Build and append WHERE clause with all affected "cat" values:			
+			cur_cat=1
+			while [ ${cur_cat} -le ${num_cats} ] ; do
+				cat_value=${cat} # Actual category value to write into WHERE clause.
+				if [ ${cur_cat} -eq 1 ] ; then
+					WHERE="${LINKS_FLD_KEY} = ${cat_value}"
+				else
+					WHERE="${WHERE} OR ${LINKS_FLD_KEY} = ${cat_value}"
+				fi
+				let cur_cat=${cur_cat}+1 # increase inner loop counter
+				let cat=${cat}+1 # Increase category value continuously.
+			done
+			# Finalise SQL statement:
+			SQL="${SQL} WHERE ${WHERE};"
+			# DEBUG
+			#echo "$SQL"
+			# Run SQL statement on DBMS:
+			"${ECHO}" "${SQL}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
+			check_error "Failed to upload attributes to links output vector map (pass 1: 'from' attributes)."			
+			let num_cats=${num_cats}-1 # In the next iteration, we'll include one LESS "cat" in the WHERE clause.			
+		fi
+		g.message -p "${step} ${steps_to_complete} 1"
+		let step=${step}+1 # Keep track of progress
+	done
+	#	
+	# DEBUG
+	# echo -e "\n"
+	#	
+	# PHASE 2: Transfer "TO" attributes: target node IDs and labels.
+	cat=1		# Reset feature index.
+	num_cats=0 	# This is the number of categories for which the attributes need
+				# need to be transferred in each iteration of the main loop.
+				# This number will be INCREASED by "1" after each iteration.	
+	for key in $PRIMARY_KEYS ; do		
+		if [ ${num_cats} -gt 0 ] ; then
+			# Retrieve node label:
+			get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}" # Node label is now in $LABEL.			
+			# Build SQL statement:
+			SQL=""
+			SQL="${SQL}UPDATE ${links_attr_tbl} SET"
+			SQL="${SQL} ${LINKS_FLD_TO_ID} = ${key}"
+			SQL="${SQL}, ${LINKS_FLD_TO_LBL} = '${LABEL}'"
+			# Build and append WHERE clause with all affected "cat" values:
+			cur_cat=1
+			cat_offset=0
+			let cat_offset=${NUM_INPUT_NODES}-2
+			while [ ${cur_cat} -le ${num_cats} ] ; do				
+				if [ ${cur_cat} -eq 1 ] ; then
+					cat_value=${cat} # Actual category value to write into WHERE clause.
+					WHERE="${LINKS_FLD_KEY} = ${cat_value}"
+				else
+					let cat_value=${cat_offset}+${cat_value} # Actual category value to write into WHERE clause.					
+					WHERE="${WHERE} OR ${LINKS_FLD_KEY} = ${cat_value}"
+					let cat_offset=${cat_offset}-1					
+				fi				
+				let cur_cat=${cur_cat}+1 # increase inner loop counter				
+			done			
+			# Finalise SQL statement:
+			SQL="${SQL} WHERE ${WHERE};"
+			# DEBUG
+			#echo "$SQL"
+			# Run SQL statement on DBMS:
+			"${ECHO}" "${SQL}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
+			check_error "Failed to upload attributes to links output vector map (pass 2: 'to' attributes)."									
+			let cat=${cat}+1 # Increase category value continuously.
+		fi
+		let num_cats=${num_cats}+1 # In the next iteration, we'll include one MORE "cat" in the WHERE clause.
+		g.message -p "${step} ${steps_to_complete} 1"
+		let step=${step}+1 # Keep track of progress
+	done
+
+	
+	tstamp_proc "Transfer node attributes to links"
 	
 	# Drop all previously created indices.	
 	del_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
@@ -4707,10 +4800,66 @@ ${DBMS_COMMIT}"
 		SQL_CHUNK="${DBMS_BEGIN}"
 		g.message -i "Updating link costs and uploading to links output attribute table:"		
 		step=1 # This one is just for progress reporting.
-		IFS_BACKUP="$IFS"
-		IFS="${IFS_NEWLINE}"
-		for cat in ${GRASS_CATS} ; do
-			# Check if chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
+		
+		# PERFORMANCE NOTE:
+		#
+		# The loop below serves the purpose to transfer the "cost" attribute value
+		# from the temporary map of LCPs to the permanent links output map.
+		#
+		# The "while" loop below used to be a "for" loop which naively looped through
+		# all links of the output map and performed 4 SQL operations in every loop
+		# iterations, like this (OLD algorithm):
+		#
+		# FOR num_links DO:
+		#   SQL SELECT fromID (output links) using CAT of current link as key
+		#   SQL SELECT toID (output links) using CAT of current link as key
+		#	SQL SELECT cost value (cached links) using fromID and toID as compound key
+		#   SQL UPDATE cost value (output links) using CAT of current link as key
+		# DONE
+		#
+		# number of SQL ops for OLD algorithm:
+		# SELECT: num_links * 3
+		# UPDATE: num_links * 1
+		#
+		# However, the data storage order of the output links map and that of the temporary
+		# map with the LCPs (and associated cost value), generated in the preceding processing step,
+		# are in fact identical.
+		# This allows us to reduce the SQL ops to just one UPDATE command per iteration (NEW algorithm):
+		#		
+		# SQL SELECT all records from temporary LCP map
+		# WHILE LCP map has records:
+		#   get next CAT,fromID,toID,cost from LCP map's records
+		#   SQL UPDATE cost value (output links) using CAT as key
+		# DONE
+		
+		# TODO:
+		# There is even more potential for optimization here:
+		# The single UPDATE statement in each loop iteration is inefficient.
+		# One option would be to use SQLite's import command: https://stackoverflow.com/questions/697004/bulk-load-data-into-sqlite
+		# ... but this requires the sqlite3 CLI binary to be available.
+		# The other option is to use multiple inserts in one statement: https://avi.im/blag/2021/fast-sqlite-inserts/		
+				
+		# We read one attribute table record after another from the temporary links map and process the data in each iteration of the row.
+		# Fortunately, the data in both the temporary links map (with the least cost paths and their assoaciated costs)
+		# and the links output map are in exactly the same storage order at this point.
+		# This means we do not need to retrieve all field contents using expensive SQL ops in each iteration of the loop.
+		# Instead, we can "pipe in" all required field values at once, using v.db.select, then work on the in-memory data!
+		while ${READ} -r line; do
+		
+			# Retrieve next triplet of "cat", "from_id" and "to_id" fields from temporary cost links map:
+			OLF_IFS="$IFS"
+			IFS="|"
+			${READ} cat from_id to_id costval < <(${ECHO} "$line")
+			IFS="$OLD_IFS"
+
+			# We have the cached link costs with associated to/from IDs in memory.
+			# We now only need to transfer the cost attribute to the links output map's attribute table.
+			if [ -z "$costval" ] ; then
+				mthread_advice
+				exit_error "No cost value available for path from '$from_id' to '$to_id'."				
+			fi
+			#
+			# Check if SQL chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
 			if [ -n $BASH_VERSION ] ; then
 				let records_left=${lines}-${step}
 			else
@@ -4718,20 +4867,7 @@ ${DBMS_COMMIT}"
 			fi
 			if [ ${records_left} -lt ${chunk_remainder} ] ; then
 				chunk_size=1
-			fi
-			# We now have the cached link costs with associated to/from IDs in the attribute table of $TMP_VECT_LINKS_COSTS!
-			# We need to transfer the cost attribute from that map to the links output map.
-			#
-			# Read "From ID" from $GIS_OPT_LINKS:
-			from_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
-			# Read "To ID" from $GIS_OPT_LINKS:
-			to_id=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_TO_ID} FROM ${attribute_table_links} WHERE ${GRASS_PKEY}=${cat};" driver="${attribute_database_driver_links}" -c --quiet`
-			WHERE="${LINKS_FLD_FROM_ID}=$from_id AND ${LINKS_FLD_TO_ID}=$to_id" 
-			# Read 'cost' attribute value from $TMP_VECT_LINKS_COST:
-			costval=`db.select database="${attribute_database_cost}" sql="SELECT ${LINKS_FLD_COST} FROM ${attribute_table_cost} WHERE ${WHERE};" driver="${attribute_database_driver_cost}" -c --quiet`			
-			if [ -z "$costval" ] ; then
-				exit_error "No cost value available for path from '$from_id' to '$to_id'."
-			fi
+			fi			
 			# Create SQL statement for upload of 'cost' value into $GIS_OPT_LINKS:
 			SQL=""
 			SQL="${SQL}UPDATE ${attribute_table_links} SET"
@@ -4755,9 +4891,7 @@ ${SQL}"
 ${SQL}
 ${DBMS_COMMIT}"
 				fi
-				#DEBUG
-				#echo "SQL_CHUNK="
-				#echo "$SQL_CHUNK"
+
 				# Update all 'cost' attribute values in $GIS_OPT_LINKS of all records in current chunk at once:
 				"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${attribute_database_driver_links}" database="${attribute_database_links}" input="-"
 				check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
@@ -4771,7 +4905,13 @@ ${DBMS_COMMIT}"
 			else
 				step=`"${EXPR}" ${step} + 1`
 			fi			
-		done
+
+		# We read one line of output from "v.db.select" in each iteration of the loop.
+		# However, the right side of a pipe "|" in Bash runs in a subshell. In our case,
+		# this would mean that "while" loop never ends.
+		# Instead, we use process substitution, which terminates correctly:
+		done < <(v.db.select -c separator='|' columns="${GRASS_PKEY},${LINKS_FLD_FROM_ID},${LINKS_FLD_TO_ID},${LINKS_FLD_COST}" map=${attribute_table_cost})
+		# 
 		IFS="${IFS_BACKUP}"
 		
 		tstamp_proc "Update link costs"
