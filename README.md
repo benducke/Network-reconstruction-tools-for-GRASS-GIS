@@ -6,8 +6,8 @@ This project provides a set of additional commands (modules) for [GRASS GIS](htt
 The currently included modules are:
 
 * v.net.models (main command: reconstruct network links based on nodes)
-* v.net.stats (analysis: provide descriptive statistics for output of v.net.modules)
-* v.sort (helper: enforce storage order of input nodes)
+* v.sort (required helper: enforce storage order of input nodes)
+* v.net.stats (analysis: provide descriptive statistics for output of v.net.models)
 * v.points.thin (helper: systematically reduce number of input nodes)
 
 All modules have been designed to run under recent versions of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under [QGIS](https://qgis.org).
