@@ -447,6 +447,9 @@ fi
 # Create prefix for all temporary maps
 TMP_PREFIX="tmp_${MODULE_NAME}_`"${ECHO}" $$`_d"
 
+# Temporary database table names
+TMP_DB_SWAPCATS="${TMP_PREFIX}_db_swapcats"
+
 # Names of temporary maps (VECTOR)
 TMP_VECT_NODES="${TMP_PREFIX}_v_nodes" 					# Input nodes (after WHERE and layer= options applied)
 TMP_VECT_REGION="${TMP_PREFIX}_v_region" 				# Polygon that represents bbox of current GRASS region
@@ -4434,7 +4437,6 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# 
 	#v.edit map=links_med tool=delete ids=124751
 
-
 	tstamp_proc "Generate all links"
 
 	# MAIN LOOP DONE.
@@ -4535,18 +4537,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	
 	tstamp_proc "Transfer node attributes to links"
 	
-	# Initialize chunk-based SQL statement collation
-	if [ ${GIS_OPT_SQLBUFLEN} -gt ${lines} ] ; then
-		chunk_size=${lines}
-	else
-		chunk_size=${GIS_OPT_SQLBUFLEN} # Number of SQL statements to collate before executing them (initialize to default)
-	fi
-	chunk_left=${chunk_size} # Number SQL statements left to collate in current chunk
 	# Set Threshold variable for determining when to execute leftover statements in single mode:
-	chunk_remainder=`"${EXPR}" ${lines} % ${chunk_size}`
-	# Initialize contents of first SQL_CHUNK to 'empty':
-	SQL_CHUNK="${DBMS_BEGIN}"
-	#
 	g.message -i "Transferring input point attributes to output lines (links):"	
 	# Step through all points of input map and connect them with each other.
 	previous="" # List of previous primary keys that have already been connected as "TO" nodes.
@@ -4672,6 +4663,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# --> the last remaining bottlenecks are now 3/4 and 4/4.
 	#	--> look into options for bulk uploading/update with multiple rows as targets: https://stackoverflow.com/questions/11563869/update-multiple-rows-with-different-values-in-a-single-sql-query
 
+
+	#DEBUG
+	#sql_ops_select=0
+	#sql_ops_update=0
 	
 	step=1 # Progress counter
 	let steps_to_complete=${NUM_INPUT_NODES}*2
@@ -4685,6 +4680,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			# Retrieve node label:
 			get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}" # Node label is now in $LABEL.
 			# Build SQL statement:
+			
+			# DEBUG
+			let sql_ops_update=${sql_ops_update}+1
+			
 			SQL=""
 			SQL="${SQL}UPDATE ${links_attr_tbl} SET"
 			SQL="${SQL} ${LINKS_FLD_FROM_ID} = ${key}"
@@ -4727,6 +4726,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			# Retrieve node label:
 			get_label_fast "${in_attr_tbl}" "${key}" "${in_attr_drv}" "${in_attr_db}" # Node label is now in $LABEL.			
 			# Build SQL statement:
+			
+			# DEBUG
+			#let sql_ops_update=${sql_ops_update}+1
+			
 			SQL=""
 			SQL="${SQL}UPDATE ${links_attr_tbl} SET"
 			SQL="${SQL} ${LINKS_FLD_TO_ID} = ${key}"
@@ -4762,6 +4765,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 
 	
 	tstamp_proc "Transfer node attributes to links"
+	
+	#DEBUG
+	#echo "SQL SELECT = $sql_ops_select"
+	#echo "SQL UPDATE = $sql_ops_update"
 	
 	# Drop all previously created indices.	
 	del_index "${GIS_OPT_INPUT}" "${LINKS_FLD_KEY}"
@@ -4832,18 +4839,22 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 		#   SQL UPDATE cost value (output links) using CAT as key
 		# DONE
 		
-		# TODO:
-		# There is even more potential for optimization here:
 		# The single UPDATE statement in each loop iteration is inefficient.
-		# One option would be to use SQLite's import command: https://stackoverflow.com/questions/697004/bulk-load-data-into-sqlite
-		# ... but this requires the sqlite3 CLI binary to be available.
-		# The other option is to use multiple inserts in one statement: https://avi.im/blag/2021/fast-sqlite-inserts/		
+		# Therefore, we  use multiple inserts in one statement:
+		#
+		# WITH tmptable(oldcat,newcat) AS (VALUES(189,-1),(188,-2),(190,-3)) UPDATE tmp SET cat = (SELECT newcat FROM tmptable WHERE tmp.cat=tmptable.oldcat) WHERE cat IN (SELECT oldcat FROM tmptable);
 				
 		# We read one attribute table record after another from the temporary links map and process the data in each iteration of the row.
 		# Fortunately, the data in both the temporary links map (with the least cost paths and their assoaciated costs)
 		# and the links output map are in exactly the same storage order at this point.
 		# This means we do not need to retrieve all field contents using expensive SQL ops in each iteration of the loop.
-		# Instead, we can "pipe in" all required field values at once, using v.db.select, then work on the in-memory data!
+		# Instead, we can "pipe in" all required field values at once, using v.db.select, then work on the in-memory data!				
+		
+		#DEBUG
+		#sql_ops_select=0
+		#sql_ops_update=0		
+		
+		VALUES=
 		while ${READ} -r line; do
 		
 			# Retrieve next triplet of "cat", "from_id" and "to_id" fields from temporary cost links map:
@@ -4851,6 +4862,9 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			IFS="|"
 			${READ} cat from_id to_id costval < <(${ECHO} "$line")
 			IFS="$OLD_IFS"
+
+			#debug
+			#echo "[$cat,$from_id,$to_id,$costval]"
 
 			# We have the cached link costs with associated to/from IDs in memory.
 			# We now only need to transfer the cost attribute to the links output map's attribute table.
@@ -4868,35 +4882,43 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			if [ ${records_left} -lt ${chunk_remainder} ] ; then
 				chunk_size=1
 			fi			
-			# Create SQL statement for upload of 'cost' value into $GIS_OPT_LINKS:
-			SQL=""
-			SQL="${SQL}UPDATE ${attribute_table_links} SET"
-			SQL="${SQL} ${LINKS_FLD_COST} = ${costval}"			
-			SQL="${SQL} WHERE ${GRASS_PKEY} = ${cat}; "
+
 			if [ ${chunk_size} -gt 1 ] && [ ${chunk_left} -gt 1 ] ; then
-				# Keep collecting statements for current chunk.
-				SQL_CHUNK="${SQL_CHUNK}
-${SQL}"
+				# Keep collecting statements for current chunk.								
+				if [ -z "${VALUES}" ] ; then
+					VALUES="(${cat},${costval})"
+				else
+					VALUES="${VALUES},(${cat},${costval})"
+				fi
+				
 				if [ -n $BASH_VERSION ] ; then
 					let chunk_left=${chunk_left}-1
 				else
 					chunk_left=`${EXPR} ${chunk_left}-1`
 				fi
 			else
-				if [ ${chunk_size} -eq 1 ] ; then
-					SQL_CHUNK="$SQL" # Chunk contains only one piece.
+				if [ ${chunk_size} -eq 1 ] ; then				
+					VALUES="(${cat},${costval})"
 				else
 					# Add final chunk piece:
-					SQL_CHUNK="${SQL_CHUNK}
-${SQL}
-${DBMS_COMMIT}"
+					VALUES="${VALUES},(${cat},${costval})"
 				fi
 
-				# Update all 'cost' attribute values in $GIS_OPT_LINKS of all records in current chunk at once:
-				"${ECHO}" "${SQL_CHUNK}" | db.execute driver="${attribute_database_driver_links}" database="${attribute_database_links}" input="-"
+				# Create complete SQL UPDATE statement to transfer all values in chunk at once:
+				SQL=""
+				SQL="${SQL}WITH ${TMP_DB_SWAPCATS}(cat,costval) AS (VALUES${VALUES})"
+				SQL="${SQL} UPDATE ${attribute_table_links} SET ${LINKS_FLD_COST} ="
+				SQL="${SQL} (SELECT costval FROM ${TMP_DB_SWAPCATS} WHERE ${attribute_table_links}.${GRASS_PKEY}=${TMP_DB_SWAPCATS}.cat)"
+				SQL="${SQL} WHERE ${GRASS_PKEY} IN (SELECT cat FROM ${TMP_DB_SWAPCATS});"
+
+				#DEBUG
+				#echo "$SQL"
+
+				# Run SQL UPDATE:
+				"${ECHO}" "${SQL}" | db.execute driver="${attribute_database_driver_links}" database="${attribute_database_links}" input="-"
 				check_error "Failed to upload attribute '${LINKS_FLD_COST}' to links output vector map (value='${costval}'; ${GRASS_PKEY}=${cat})."
 				# Empty chunk contents:
-				SQL_CHUNK="${DBMS_BEGIN}"
+				VALUES=				
 				chunk_left=${chunk_size}
 			fi
 			g.message -p "${step} ${lines} 1"
@@ -4912,9 +4934,18 @@ ${DBMS_COMMIT}"
 		# Instead, we use process substitution, which terminates correctly:
 		done < <(v.db.select -c separator='|' columns="${GRASS_PKEY},${LINKS_FLD_FROM_ID},${LINKS_FLD_TO_ID},${LINKS_FLD_COST}" map=${attribute_table_cost})
 		# 
+		
+		# DEBUG
+		#let sql_ops_select=${sql_ops_select}+1
+		
 		IFS="${IFS_BACKUP}"
 		
 		tstamp_proc "Update link costs"
+		
+		#DEBUG
+		#echo "SQL SELECT = $sql_ops_select"
+		#echo "SQL UPDATE = $sql_ops_update"
+		
 	fi	
 	
 	# If we have least-cost paths as links, then we need to REVERSE the order
@@ -4923,8 +4954,35 @@ ${DBMS_COMMIT}"
 	# Instead of swapping the actual attribute values field-by-field (slow and error prone),
 	# we just swap the GRASS primary key values "cat" for all records that have the same
 	# user-defined primary key.	
+	# 
+	# ALGORITHM:
+	#
+	# Get keys (option key=) of all input nodes (node keys)
+	# FOR set of node keys DO:	
+	#	SQL SELECT GRASS CAT keys for all links output map that match the current node key
+	#	FOR set of selected output map links
+	#		Reverse sequence of CAT keys in current selection (3 SQL update ops per record)
+	#	DONE
+	# DONE
+	
 	# NOTE: This will only work if the DBMS used is capable of strictly preserving
 	#       record insertion order!
+			
+	# TODO: This leaves the output links map with features stored in non-linear order.
+	#		This is not harmful but unusual/untidy, and it should be documented!
+	#		Theoretically, the user can run v.sort on the output to fix this afterwards.
+	#		(For large output maps this would be too slow to do automatically.)
+	#		BUT:
+	# TODO: The output links map is currently stored with a local attribute table(!).
+	#		This makes it unnecessarily hard to run v.sort on the links output map.
+	#		This could easily be rectified by making another copy of the links output
+	#		map at the very end of the program run, when the mapset storage mode
+	#		has been switched back to default.
+	
+	# 100 nodes (4950 links):
+	# SQL SELECT = 100
+	# SQL UPDATE = 7350
+	
 	if [ -n "${GIS_OPT_COSTMAP}" ] && [ ${DBMS_PRESERVES_ORDER} -eq 1 ] ; then
 	
 		tstamp_proc "Reorder link attributes"
@@ -4937,95 +4995,84 @@ ${DBMS_COMMIT}"
 		
 		g.message -i "Reordering link attributes:"
 		get_primary_keys "${GIS_OPT_INPUT}"
-		line_old=-1
-		new_cat_old=-1
-		step=1 # This one is just for progress reporting.
-		IFS_BACKUP="$IFS"
-		IFS="${IFS_NEWLINE}"
+		
+		#DEBUG
+		#sql_ops_select=0
+		#sql_ops_update=0
+		
+		step=0 # This one is just for progress reporting.		
 		for key in $PRIMARY_KEYS ; do
 			WHERE="${LINKS_FLD_FROM_ID}=$key"
 			RECS=`db.select database="${attribute_database_links}" sql="SELECT cat FROM ${attribute_table_links} WHERE ${WHERE};" driver="${attribute_database_driver_links}" -c --quiet`
-			check_error "Failed to query attribute table of links output map."
-			num_cats=0
-			for line in $RECS ; do
-				if [ -n $BASH_VERSION ] ; then
-					let num_cats=${num_cats}+1
-				else
-					num_cats=`"${EXPR}" ${num_cats} + 1`
-				fi
-				max_cat="${line}"
-			done
-			if [ -n $BASH_VERSION ] ; then
-				let max_cat=${max_cat}+1
-			else
-				max_cat=`"${EXPR}" ${max_cat} + 1`
-			fi
-			offset=1
-			for line in $RECS ; do
-				if [ -n $BASH_VERSION ] ; then
-					let new_cat=${max_cat}-${offset}
-				else
-					new_cat=`"${EXPR}" ${max_cat} - ${offset}`
-				fi
-				if [ ${new_cat} -ne ${line} ] ; then
-					if [ ${new_cat} -eq ${line_old} ] && [ ${line} -eq ${new_cat_old} ] ; then
-						# Reached the symmetry element of an even number of records: Done with this set.
-						break
+			check_error "Failed to query attribute table of links output map."			
+			
+			if [ -n "${RECS}" ] ; then
+				SQL_CHUNK="${DBMS_BEGIN}"
+				SQL=""
+				SQL="${SQL}WITH ${TMP_DB_SWAPCATS}(oldcat,newcat) AS (VALUES"	
+				first_rec=1
+				for rec in $RECS ; do
+					if [ ${first_rec=1} -eq 1 ] ; then
+						first_rec=0
+						SQL="${SQL}(${rec},-${rec})"
+					else
+						SQL="${SQL},(${rec},-${rec})"
 					fi
-					# Initialize contents of first SQL_CHUNK to 'empty':
-					SQL_CHUNK="${DBMS_BEGIN}"
-					# Swap cats!
-					# GRASS always starts automatic 'cat' values at '1', so we can use '0' as a safe temporary
-					# and unique value in the swapping process.					
-					SQL=""
-					SQL="${SQL}UPDATE ${attribute_table_links} SET"
-					SQL="${SQL} ${LINKS_FLD_KEY} = 0"
-					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${line}; "
-					SQL_CHUNK="${SQL_CHUNK}
+					maxval=$rec # We use the opportunity to track the highest 'cat' value in the current subset.
+								# We will need this in the next update step, when we reverse the subset's 'cat' sequence.
+				done			
+				SQL="${SQL}) UPDATE ${attribute_table_links} SET ${LINKS_FLD_KEY} ="
+				SQL="${SQL} (SELECT newcat FROM ${TMP_DB_SWAPCATS} WHERE ${attribute_table_links}.${LINKS_FLD_KEY}=${TMP_DB_SWAPCATS}.oldcat)"
+				SQL="${SQL} WHERE ${LINKS_FLD_KEY} IN (SELECT oldcat FROM ${TMP_DB_SWAPCATS});"
+				SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
-					SQL=""
-					SQL="${SQL}UPDATE ${attribute_table_links} SET"
-					SQL="${SQL} ${LINKS_FLD_KEY} = ${line}"
-					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = ${new_cat}; "
-					SQL_CHUNK="${SQL_CHUNK}
-${SQL}"
-					SQL=""
-					SQL="${SQL}UPDATE ${attribute_table_links} SET"
-					SQL="${SQL} ${LINKS_FLD_KEY} = ${new_cat}"
-					SQL="${SQL} WHERE ${LINKS_FLD_KEY} = 0; "
-					SQL_CHUNK="${SQL_CHUNK}
-${SQL}"
-					# Commit transaction to DB backend:
-					SQL_CHUNK="${SQL_CHUNK}
+				# Commit transaction to DB backend:
+				SQL_CHUNK="${SQL_CHUNK}
 ${DBMS_COMMIT}"
-					"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
-					check_error "Failed to swap GRASS 'cat' value '0' with '$new_cat' in links output map."
-				else
-					# Reached the symmetry element of an odd number of records: Done with this set.
-					break
-				fi
-				line_old=$line
-				new_cat_old=$new_cat
-				if [ -n $BASH_VERSION ] ; then
-					let offset=${offset}+1
-				else
-					offset=`"${EXPR}" ${offset} + 1`
-				fi				
-			done
-			g.message -p "${step} ${NUM_INPUT_NODES} 1"
-			if [ -n $BASH_VERSION ] ; then
-				let step=${step}+1
-			else
-				step=`"${EXPR}" ${step} + 1`
+				"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
+				check_error "Failed to swap GRASS 'cat' values in links output map (pass 1)."
+				
+				let swapval=$maxval
+				SQL_CHUNK="${DBMS_BEGIN}"
+				SQL=""
+				SQL="${SQL}WITH ${TMP_DB_SWAPCATS}(oldcat,newcat) AS (VALUES"
+				first_rec=1
+				for rec in $RECS ; do
+					if [ ${first_rec=1} -eq 1 ] ; then
+						first_rec=0
+						SQL="${SQL}(-${rec},${swapval})"
+					else
+						SQL="${SQL},(-${rec},${swapval})"
+					fi
+					let swapval=$swapval-1
+				done			
+				SQL="${SQL}) UPDATE ${attribute_table_links} SET ${LINKS_FLD_KEY} ="
+				SQL="${SQL} (SELECT newcat FROM ${TMP_DB_SWAPCATS} WHERE ${attribute_table_links}.${LINKS_FLD_KEY}=${TMP_DB_SWAPCATS}.oldcat)"
+				SQL="${SQL} WHERE ${LINKS_FLD_KEY} IN (SELECT oldcat FROM ${TMP_DB_SWAPCATS});"
+				SQL_CHUNK="${SQL_CHUNK}
+${SQL}"
+				# Commit transaction to DB backend:
+				SQL_CHUNK="${SQL_CHUNK}
+${DBMS_COMMIT}"
+				"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
+				check_error "Failed to swap GRASS 'cat' values in links output map (pass 2)."
+				
 			fi
+			# Report progress
+			let step=$step+1
+			g.message -p "${step} ${NUM_INPUT_NODES} 1"		
 		done
-		IFS="${IFS_BACKUP}"
 		
 		tstamp_proc "Reorder link attributes"
-		
+
+		#DEBUG
+		#echo "SQL SELECT = $sql_ops_select"
+		#echo "SQL UPDATE = $sql_ops_update"
+
 	fi
 
 	# We add the path length metrics at the very end (not earlier!), because the links are now properly ordered!
+	g.message -i "Adding path length metrics to output links map..."		
 	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="end" columns="${LINKS_FLD_FROM_X},${LINKS_FLD_FROM_Y}" --quiet
 	check_error "Failed to add attribute fields '${LINKS_FLD_FROM_X}' & '${LINKS_FLD_FROM_Y}' to links output vector map."
 	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="start" columns="${LINKS_FLD_TO_X},${LINKS_FLD_TO_Y}" --quiet
@@ -5035,7 +5082,6 @@ ${DBMS_COMMIT}"
 	v.to.db map="${GIS_OPT_LINKS}" layer="1" type="line" option="length" columns="${LINKS_FLD_LEN_KM}" units="kilometers" --quiet
 	check_error "Failed to add attribute field '${LINKS_FLD_LEN_KM}' to links output vector map."
 }
-
 
 # FUNCTION
 # model_delaunay: Create a network where nodes are connected using delaunay minimal triangulation.
