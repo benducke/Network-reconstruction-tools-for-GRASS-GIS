@@ -350,7 +350,7 @@ if [ -n "${MSYSPATH}" ] ; then
 	# Set filter for line endings for this system:
 	IFS_NEWLINE=$'\r\n\b'
 else
-	# Linux and macOS: Use default built-in commands
+	# Linux and macOS: Use default built-in/system commands
 	AWK="awk"
 	CUT="cut"
 	DATE="date"
@@ -388,7 +388,7 @@ IFS_ORIGINAL="$IFS"
 # Basic module setup.
 MODULE_NAME="v_net_models" # for prefixing temporary object names
 MODULE_NAME_EXEC="v.net.models" # name as run on the command line
-MODULE_VERSION="1.1.0b1"
+MODULE_VERSION="1.1.0"
 
 # Exit status variables.
 EXIT_OK=0
@@ -410,6 +410,10 @@ DBMS_BEGIN="BEGIN;"		# Opening statement for an SQL transction; most DBMS should
 DBMS_COMMIT="COMMIT;";	# Closing statement for an SQL transction; most DBMS should understand "COMMIT;"
 LABEL_TYPE_OUT="TEXT"   # Default type for creating new label fields that might contain lots of text	
 
+# Warning thresholds
+WARN_NUM_INPUT_NODES="10000" # Warn about untested conditions if number of input nodes is very large
+
+
 # Process time-stamping (-t flag)
 # Set maximum number of processing steps to time-stamp:
 if [ -n "${GIS_OPT_COSTMAP}" ] ; then
@@ -430,13 +434,13 @@ if [ "$1" != "@ARGS_PARSED@" ] ; then
     exec g.parser "$0" "$@"
 fi
 
-# Check if we are running under old GRASS 6
+# Check if we are running under GRASS 6
 GRASS_V6=`g.version -e | "${GREP}" "GRASS 6"`
 
-# Check if we are running under old GRASS 7
+# Check if we are running under GRASS 7
 GRASS_V7=`g.version -e | "${GREP}" "GRASS 7"`
 
-# Check if we are running under old GRASS 8
+# Check if we are running under GRASS 8
 GRASS_V8=`g.version -e | "${GREP}" "GRASS 8"`
 
 if [ -n "$GRASS_V6" ] ; then
@@ -575,7 +579,7 @@ grass_db_connect_local () {
 
 # FUNCTION
 # clean_up: Remove temporary maps, reset region to what it was, etc.
-clean_up () {	
+clean_up () {
 	
 	g.message -i "Cleaning up..."
 	
@@ -1231,11 +1235,7 @@ list_len () {
 	
 	LIST_LEN=0
 	for item in $1 ; do
-		if [ -n $BASH_VERSION ] ; then
-			let LIST_LEN=${LIST_LEN}+1
-		else
-			LIST_LEN=`"${EXPR}" ${LIST_LEN} + 1`
-		fi
+		LIST_LEN=`"${CALC}" "${LIST_LEN} + 1"`
 	done
 	
 	# IMPORTANT: Reset IFS!
@@ -1287,11 +1287,7 @@ list_get () {
 			break
 		else
 			# Get next item.
-			if [ -n $BASH_VERSION ] ; then
-				let cur_list_item=${cur_list_item}+1
-			else
-				cur_list_item=`"${EXPR}" ${cur_list_item} + 1`
-			fi
+			cur_list_item=`"${CALC}" "${cur_list_item} + 1"`
 		fi
 	done
 	
@@ -1603,11 +1599,7 @@ stats_compute_links () {
 		fi
 		if [ ${GRASS_VERBOSE} -gt 0 ] ; then
 			g.message -p "${step} ${lines} 1"
-		fi
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
+			step=`"${CALC}" "${step} + 1"`
 		fi		
 	done
 	IFS="${OLD_IFS}"
@@ -2024,6 +2016,48 @@ check_setup () {
 	
 }
 
+# FUNCTIONS
+# calc_expr, calc_let: Perform basic integer arithmetics in a portable way.
+#
+# The purpose of these two function is to mask the difference between the
+# shell's built in integer calculator (in the case of Bash: 'let') and the
+# system-wide/fallback tool for the same purpose ('expr').
+# The two have slightly different syntax, which requires wrapping them in
+# two function interfaces that behave identical from the caller's perspective.
+# The global variable CALC is set to determine which one of the two will
+# be used.
+# 
+# Integer calculations can then be done in a unified manner:
+#
+# result=`${CALC} "8 - 2"`
+# 
+# IMPORTANT:
+# - White space must be used and the arithmatic expression must be quoted,
+#   as shown in the example above. The whitespace is a requirement of 'expr",
+#   but 'let' won't mind its presence.
+# - The "expr" command's insistence on whitespace has the very unfortunate
+#   consequence that shell substitution will happen for some characters,
+#   such as '*', '(', and ')'. The following are SAFE to use:
+#     + - / %
+#   Any other expressions require manual use of 'let' or ${EXPR} (and
+#	any branching that entails).
+#
+# The purpose of these functions is two simplify code that does simple stuff,
+# such as counting up progress counters, keeping track of indices, etc.
+# It is best used in loop constructs, where using ${CALC} avoids the overhead 
+# of if/then statements to decide between using 'let' and ${EXPR} (i.e.
+# built-in Bash or external tool).
+#
+calc_expr () {
+	calc_expr_result=`"${EXPR}" $1`
+	echo "$calc_expr_result"
+}
+#
+calc_let () {
+	let calc_let_result="$1"
+	echo "$calc_let_result"
+}
+
 
 # FUNCTION
 # check_environment: Query GRASS environment for some important variables.
@@ -2032,6 +2066,7 @@ check_environment () {
 	# Determine/report shell capabilities
 	interpreter=`get_interpreter`
 	g.message -i "Running in '$interpreter'."
+	CALC="calc_expr" # Default is to use external $EXPR for integer calculations	
 	is_bash=0
 	is_bourne=0
 	is_bash=`${ECHO} ${interpreter} |${GREP} "bash" -c`
@@ -2050,7 +2085,7 @@ check_environment () {
 		if [ -z $BASH_VERSION ] ; then
 			# If BASH_VERSION has not been set at this point then we just assume a version!
 			g.message -w "BASH_VERSION not set. Assuming at least version $BASH_VERSION_MIN."
-			BASH_VERSION="$BASH_VERSION_MIN"			
+			BASH_VERSION="$BASH_VERSION_MIN"	
 		fi
 		# Get Bash major version as currently set.
 		bash_version_major=`${ECHO} "$BASH_VERSION" | ${CUT} -f1 -d.`
@@ -2059,6 +2094,8 @@ check_environment () {
 			g.message -w "Bash version is lower than assumed minimal version (${BASH_VERSION_MIN})."
 			g.message -w "Expect trouble."
 		fi
+		# Enable use of internal integer arithmetics via 'let':
+		CALC="calc_let"
 	fi
 	
 	# Get essential GRASS environment settings
@@ -2380,11 +2417,7 @@ check_input () {
 		if [ $i -ne $cur_key ] ; then
 			exit_error "Primary key sequence of input map broken (column: $GRASS_PKEY, expected: $i, got: $cur_key)"
 		fi
-		if [ -n $BASH_VERSION ] ; then
-			let i=${i}+1
-		else		
-			i=`${EXPR} $i + 1`
-		fi
+		i=`"${CALC}" "${i} + 1"`
 	done
 	IFS="${IFS_BACKUP}"
 	#
@@ -2623,11 +2656,7 @@ check_input () {
 				check_error "Failed to add input node #$i to ordered map of adjusted input nodes."
 			fi
 			g.message -p "${i} ${max} 1"
-			if [ -n $BASH_VERSION ] ; then
-				let i=${i}+1
-			else
-				i=`${EXPR} $i + 1`
-			fi
+			i=`"${CALC}" "${i} + 1"`
 		done		
 		# Now attach attribute table!		
 		get_tbl_info "${GIS_OPT_INPUT}"
@@ -2796,7 +2825,7 @@ check_input () {
 		IFS_BACKUP="$IFS"
 		IFS="${IFS_NEWLINE}"
 		for key in $PRIMARY_KEYS ; do
-			# TODO: One of the modules in this loop pollutes the console with
+			# TODO: One of the modules in this loop polutes the console with
 			#       'WARNING: Values in column <cat> will be overwritten' messages.
 			get_label "${GIS_OPT_INPUT}" "$key"
 			# Retrieve the one feature with the current primary key value and extract it to a
@@ -2821,11 +2850,7 @@ check_input () {
 			fi
 			# Show progress			
 			g.message -p "${step} ${NUM_INPUT_NODES} 1"
-			if [ -n $BASH_VERSION ] ; then
-				let step=${step}+1
-			else
-				step=`"${EXPR}" ${step} + 1`
-			fi
+			step=`"${CALC}" "${step} + 1"`
 		done
 		IFS="${IFS_BACKUP}"
 	fi
@@ -3070,11 +3095,7 @@ check_input () {
 			IFS="${IFS_NEWLINE}"
 			i=0
 			for key in ${PRIMARY_KEYS} ; do
-				if [ -n $BASH_VERSION ] ; then
-					let i=${i}+1
-				else
-					i=`"${EXPR}" ${i} + 1`
-				fi
+				i=`"${CALC}" "${i} + 1"`
 			done
 			max=${i}
 			i=0
@@ -3088,19 +3109,11 @@ check_input () {
 				if [ -z "${num_connections_to}" ] ; then
 					num_connections_to=0
 				fi
-				if [ -n $BASH_VERSION ] ; then
-					let num_connections_total=${num_connections_from}+${num_connections_to}
-				else
-					num_connections_total=`"${EXPR}" ${num_connections_from} + ${num_connections_to}`
-				fi
+				num_connections_total=`"${CALC}" "${num_connections_from} + ${num_connections_to}"`
 				if [ ${num_connections_total} -lt 1 ] ; then
 					g.message -w "Node with primary key '${GIS_OPT_KEY}=${key}' is unconnected in links map."
 				fi
-				if [ -n $BASH_VERSION ] ; then
-					let i=${i}+1
-				else
-					i=`"${EXPR}" ${i} + 1`
-				fi
+				i=`"${CALC}" "${i} + 1"`
 				g.message -p "${i} ${max} 1"
 			done
 			IFS="${OLD_IFS}"
@@ -3114,12 +3127,8 @@ check_input () {
 			IFS="${IFS_NEWLINE}"
 			i=0
 			for cat in ${GRASS_CATS} ; do
-				if [ -n $BASH_VERSION ] ; then
-					let i=${i}+1
-				else
-					i=`"${EXPR}" ${i} + 1`
-				fi
-			done		
+				i=`"${CALC}" "${i} + 1"`
+			done	
 			max=${i}		
 			# Check all from_id fields:
 			i=0
@@ -3140,19 +3149,11 @@ check_input () {
 				if [ -z "${num_connections_to}" ] ; then
 					num_connections_to=0
 				fi
-				if [ -n $BASH_VERSION ] ; then
-					let num_connections_total=${num_connections_from}+${num_connections_to}
-				else
-					num_connections_total=`"${EXPR}" ${num_connections_from} + ${num_connections_to}`
-				fi
+				num_connections_total=`"${CALC}" "${num_connections_from} + ${num_connections_to}"`
 				if [ ${num_connections_total} -lt 2 ] ; then				
 					exit_error "Initial link with primary key '${GRASS_PKEY}=${cat}' is not connected to two nodes in input map. Hint: Check extents of GRASS region (must completely contain links)."				
 				fi
-				if [ -n $BASH_VERSION ] ; then
-					let i=${i}+1
-				else
-					i=`"${EXPR}" ${i} + 1`
-				fi
+				i=`"${CALC}" "${i} + 1"`
 				g.message -p "${i} ${max} 1"
 			done
 			IFS="${OLD_IFS}"	
@@ -3165,11 +3166,7 @@ check_input () {
 			OLD_IFS="$IFS"
 			IFS="${IFS_NEWLINE}"
 			for cat in ${GRASS_CATS} ; do
-				if [ -n $BASH_VERSION ] ; then
-					let i=${i}+1
-				else
-					i=`"${EXPR}" ${i} + 1`
-				fi
+				i=`"${CALC}" "${i} + 1"`
 			done
 			max=${i}
 			i=0
@@ -3182,20 +3179,12 @@ check_input () {
 				num_init_pairs_ft=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${init_from_id} AND ${LINKS_FLD_TO_ID}=${init_to_id};" driver="${attribute_database_driver_links}" -c --quiet | "${GREP}" "${init_from_id}" -c`
 				# Check for occurrences of this to/from pair:
 				num_init_pairs_tf=`db.select database="${attribute_database_links}" sql="SELECT ${LINKS_FLD_FROM_ID} FROM ${attribute_table_links} WHERE ${LINKS_FLD_FROM_ID}=${init_to_id} AND ${LINKS_FLD_TO_ID}=${init_from_id};" driver="${attribute_database_driver_links}" -c --quiet | "${GREP}" "${init_from_id}" -c`
-				if [ -n $BASH_VERSION ] ; then
-					let num_init_pairs=${num_init_pairs_ft}+${num_init_pairs_tf}
-				else
-					num_init_pairs=`"${EXPR}" ${num_init_pairs_ft} + ${num_init_pairs_tf}`
-				fi
+				num_init_pairs=`"${CALC}" "${num_init_pairs_ft} + ${num_init_pairs_tf}"`
 				if [ $num_init_pairs -gt 1 ] ; then
 					exit_error "At least one pair of nodes connected by more than one link in links map."
 				fi
 				g.message -p "${i} ${max} 1"
-				if [ -n $BASH_VERSION ] ; then
-					let i=${i}+1
-				else
-					i=`"${EXPR}" ${i} + 1`
-				fi
+				i=`"${CALC}" "${i} + 1"`
 			done # Checking map passed as "links="
 			IFS="${OLD_IFS}"
 		fi # Finished links:nodes consistency checks		
@@ -3612,11 +3601,7 @@ model_attsim () {
 						# Read strength of current link, increase by '1', update field:
 						strength=`db.select sql="SELECT ${LINKS_FLD_STRENGTH} FROM ${attribute_table_links} WHERE cat = ${cat};" driver="${attribute_database_driver_links}" database="${attribute_database_links}" -c --quiet`
 						check_error "Failed to read from attribute field '${LINKS_FLD_STRENGTH}' of link with cat='$cat' in output vector map."
-						if [ -n $BASH_VERSION ] ; then
-							let strength=${strength}+1
-						else
-							strength=`"${EXPR}" ${strength} + 1`
-						fi						
+						strength=`"${CALC}" "${strength} + 1"`
 						SQL=""
 						SQL="${SQL}UPDATE ${attribute_table_links} SET"
 						SQL="${SQL} ${LINKS_FLD_STRENGTH} = ${strength}"
@@ -3630,11 +3615,7 @@ model_attsim () {
 		done
 		IFS="$OLD_IFS"
 		g.message -p "${step} ${NUM_INPUT_NODES} 1"
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
-		fi
+		step=`"${CALC}" "${step} + 1"`
 	done
 	IFS="${IFS_BACKUP}"
 	
@@ -4057,11 +4038,7 @@ ${SQL}"
 							SQL_CHUNK="${SQL_CHUNK}
 ${SQL}"
 						fi
-						if [ -n $BASH_VERSION ] ; then
-							let cur=${cur}+1
-						else
-							cur=`"${EXPR}" ${cur} + 1`
-						fi
+						cur=`"${CALC}" "${cur} + 1"`
 					done
 					# Commit transaction of SQL chunk:
 					SQL_CHUNK="${SQL_CHUNK}
@@ -4070,17 +4047,9 @@ ${DBMS_COMMIT}"
 					check_error "Failed to update field '${LINKS_FLD_FROM_ID} or ${LINKS_FLD_TO_ID}' in temporary link costs vector map." ${global_pid}
 					# Empty chunk contents:
 					SQL_CHUNK="${DBMS_BEGIN}"
-					if [ -n $BASH_VERSION ] ; then
-						let next_cost=${next_cost}+1
-					else
-						next_cost=`"${EXPR}" ${next_cost} + 1`
-					fi
-					# Set next primary key value for subsequent upload of cost value					
-					if [ -n $BASH_VERSION ] ; then
-						let cat_cost=${cat_cost}+1
-					else
-						cat_cost=`"${EXPR}" ${cat_cost} + 1`
-					fi
+					next_cost=`"${CALC}" "${next_cost} + 1"`
+					# Set next primary key value for subsequent upload of cost value
+					cat_cost=`"${CALC}" "${cat_cost} + 1"`
 				fi
 			done			
 			IFS="${IFS_BACKUP}"
@@ -4378,11 +4347,7 @@ ${remainder}
 						#echo "PK=${cur}"					
 						break;
 					fi
-					if [ -n $BASH_VERSION ] ; then
-						let i=${i}+1
-					else					
-						i=`"${EXPR}" ${i} + 1`
-					fi
+					i=`"${CALC}" "${i} + 1"`
 				done
 				if [ ${GIS_OPT_THREADS} -gt 1 ] ; then
 					# Launch a new processing thread in the background, passing it the primary key:
@@ -4467,11 +4432,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			v.patch input="${map}" output="${GIS_OPT_LINKS}" -a -b --overwrite --quiet
 			check_error "Failed to merge patch #${step} of complete links map."
 		fi
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
-		fi
+		step=`"${CALC}" "${step} + 1"`
 		g.message -p "${step} ${num_patches} 1"
 	done	
 	
@@ -4501,6 +4462,9 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# Now get actual number of links.
 	eval `v.info -t map="${GIS_OPT_LINKS}" layer="1"`
 	g.message -i "Fully connected network has ${lines} links."	
+	
+	# Reset to default DBMS storage before we create an attribute table for the output links map:
+	grass_db_connect_default
 	
 	# Sanity check:
 	# Compare expected against actual number of links!
@@ -4533,7 +4497,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	# same as we have just done, and to 'reconstruct' the 'rythm'.
 	# To do this, we can rely on two simple properties of the links map:
 	# 1. Number of links(x) in fully connected network: x = n(n - 1) / 2
-	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2), etc.
+	# 2. First node has (num_nodes-1) links, 2nd has (num_nodes-2) links, etc.
 	
 	tstamp_proc "Transfer node attributes to links"
 	
@@ -4628,48 +4592,17 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 	#		  --> perhaps also try if GRASS 8.5 improves things! [NO]
 	#		  --> could run v.clean to eliminate: duplicate geometries, zero-length geometries [NO]
 	#		  --> with the new, additional SLEEP commands and default wait time set to 0.25, things seem to be stable (enough)
-	#	  Advice: This might also happen if another sessions is using the same GRASS mapset (data corruption)!
-	#	  Advice: This might also happen if an aborted previous multi-threaded run left the system in an unstable state.
-	#	- Advice if number of input points exceeds 50k: "SQL statements might fail!"
-	
-	# v.net.models input=helladic_info_input_med key=sid label=cid links=links_med nodes=nodes_med model=complete threshold=0 -s -t --o threads=4 costmap=cost
-	#	[1/4 BGN] Generate all links (Thu 14 May 20:28:15 CEST 2026)
-	#	Switching to per-map table storage for backend 'SQLite'.
-	#	Creating network using connectivity model 'COMPLETE':
-	#	100%
-	#	Switching back to per-mapset table storage for backend 'SQLite'.
-	#	[1/4 END] Generate all links (Thu 14 May 20:58:18 CEST 2026)
-	#	Merging 499 network link subsets:
-	#	100%
-	#	Building topology for vector map <links_med@benni>...
-	#	Registering primitives...
-	#	Checking for topological errors...
-	#	Rebuilding primary key sequence of links output map (1/2):
-	#	Rebuilding primary key sequence of links output map (2/2):
-	#	Fully connected network has 124750 links.
-	#	[2/4 BGN] Transfer node attributes to links (Thu 14 May 20:59:18 CEST 2026)
-	#	Transferring input point attributes to output lines (links):
-	#	100%
-	#	[2/4 END] Transfer node attributes to links (Thu 14 May 20:59:48 CEST 2026)
-	#	[3/4 BGN] Update link costs (Thu 14 May 20:59:48 CEST 2026)
-	#	Updating link costs and uploading to links output attribute table:
-	#	100%
-	#	[3/4 END] Update link costs (Thu 14 May 21:47:58 CEST 2026)
-	#	[4/4 BGN] Reorder link attributes (Thu 14 May 21:47:58 CEST 2026)
-	#	Reordering link attributes:
-	#	100%
-	#	[4/4 END] Reorder link attributes (Thu 14 May 22:06:05 CEST 2026)
-	
-	# --> the last remaining bottlenecks are now 3/4 and 4/4.
-	#	--> look into options for bulk uploading/update with multiple rows as targets: https://stackoverflow.com/questions/11563869/update-multiple-rows-with-different-values-in-a-single-sql-query
-
+	#	  Advice: This might also happen if another sessions is using the same GRASS mapset (data corruption)! [DONE]
+	#	  Advice: This might also happen if an aborted previous multi-threaded run left the system in an unstable state. [DONE]
+	#	- Advice if number of input points exceeds 10k: "SQL statements might fail!" [DONE]
 
 	#DEBUG
 	#sql_ops_select=0
 	#sql_ops_update=0
 	
 	step=1 # Progress counter
-	let steps_to_complete=${NUM_INPUT_NODES}*2
+	steps_to_complete=`"${CALC}" "${NUM_INPUT_NODES} + ${NUM_INPUT_NODES}"`
+	
 	#
 	# PHASE 1: Transfer "FROM" attributes: origin node IDs and labels.
 	num_cats=`"${EXPR}" ${NUM_INPUT_NODES} - 1` # This is the number of categories for which the attributes
@@ -4682,7 +4615,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			# Build SQL statement:
 			
 			# DEBUG
-			let sql_ops_update=${sql_ops_update}+1
+			#let sql_ops_update=${sql_ops_update}+1
 			
 			SQL=""
 			SQL="${SQL}UPDATE ${links_attr_tbl} SET"
@@ -4697,8 +4630,8 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 				else
 					WHERE="${WHERE} OR ${LINKS_FLD_KEY} = ${cat_value}"
 				fi
-				let cur_cat=${cur_cat}+1 # increase inner loop counter
-				let cat=${cat}+1 # Increase category value continuously.
+				cur_cat=`"${CALC}" "${cur_cat} + 1"` # increase inner loop counter
+				cat=`"${CALC}" "${cat} + 1"` # Increase category value continuously.
 			done
 			# Finalise SQL statement:
 			SQL="${SQL} WHERE ${WHERE};"
@@ -4707,10 +4640,10 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			# Run SQL statement on DBMS:
 			"${ECHO}" "${SQL}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
 			check_error "Failed to upload attributes to links output vector map (pass 1: 'from' attributes)."			
-			let num_cats=${num_cats}-1 # In the next iteration, we'll include one LESS "cat" in the WHERE clause.			
+			num_cats=`"${CALC}" "${num_cats} - 1"` # In the next iteration, we'll include one LESS "cat" in the WHERE clause.
 		fi
 		g.message -p "${step} ${steps_to_complete} 1"
-		let step=${step}+1 # Keep track of progress
+		step=`"${CALC}" "${step} + 1"` # Keep track of progress
 	done
 	#	
 	# DEBUG
@@ -4737,17 +4670,19 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			# Build and append WHERE clause with all affected "cat" values:
 			cur_cat=1
 			cat_offset=0
-			let cat_offset=${NUM_INPUT_NODES}-2
+			cat_offset=`"${CALC}" "${NUM_INPUT_NODES} - 2"`
 			while [ ${cur_cat} -le ${num_cats} ] ; do				
 				if [ ${cur_cat} -eq 1 ] ; then
 					cat_value=${cat} # Actual category value to write into WHERE clause.
 					WHERE="${LINKS_FLD_KEY} = ${cat_value}"
 				else
-					let cat_value=${cat_offset}+${cat_value} # Actual category value to write into WHERE clause.					
+					# let cat_value=${cat_offset}+${cat_value}
+					cat_value=`"${CALC}" "${cat_offset} + ${cat_value}"` # Actual category value to write into WHERE clause.	
 					WHERE="${WHERE} OR ${LINKS_FLD_KEY} = ${cat_value}"
-					let cat_offset=${cat_offset}-1					
+					# let cat_offset=${cat_offset}-1
+					cat_offset=`"${CALC}" "${cat_offset} - 1"`
 				fi				
-				let cur_cat=${cur_cat}+1 # increase inner loop counter				
+				cur_cat=`"${CALC}" "${cur_cat} + 1"` # increase inner loop counter
 			done			
 			# Finalise SQL statement:
 			SQL="${SQL} WHERE ${WHERE};"
@@ -4756,11 +4691,11 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			# Run SQL statement on DBMS:
 			"${ECHO}" "${SQL}" | db.execute driver="${links_attr_drv}" database="${links_attr_db}" input="-"
 			check_error "Failed to upload attributes to links output vector map (pass 2: 'to' attributes)."									
-			let cat=${cat}+1 # Increase category value continuously.
+			cat=`"${CALC}" "${cat} + 1"` # Increase category value continuously.
 		fi
 		let num_cats=${num_cats}+1 # In the next iteration, we'll include one MORE "cat" in the WHERE clause.
 		g.message -p "${step} ${steps_to_complete} 1"
-		let step=${step}+1 # Keep track of progress
+		step=`"${CALC}" "${step} + 1"` # Keep track of progress
 	done
 
 	
@@ -4874,11 +4809,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 			fi
 			#
 			# Check if SQL chunk size needs to be set to "1" (=single SQL transactions for remainder dataset)
-			if [ -n $BASH_VERSION ] ; then
-				let records_left=${lines}-${step}
-			else
-				records_left=`${EXPR} ${lines} - ${step}`
-			fi
+			records_left=`"${CALC}" "${lines} - ${step}"` # Increase category value continuously.
 			if [ ${records_left} -lt ${chunk_remainder} ] ; then
 				chunk_size=1
 			fi			
@@ -4890,12 +4821,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 				else
 					VALUES="${VALUES},(${cat},${costval})"
 				fi
-				
-				if [ -n $BASH_VERSION ] ; then
-					let chunk_left=${chunk_left}-1
-				else
-					chunk_left=`${EXPR} ${chunk_left}-1`
-				fi
+				chunk_left=`"${CALC}" "${chunk_left} + 1"` # Increase category value continuously.
 			else
 				if [ ${chunk_size} -eq 1 ] ; then				
 					VALUES="(${cat},${costval})"
@@ -4922,11 +4848,7 @@ ${TMP_VECT_LINKS_PATCH}_${job}
 				chunk_left=${chunk_size}
 			fi
 			g.message -p "${step} ${lines} 1"
-			if [ -n $BASH_VERSION ] ; then
-				let step=${step}+1
-			else
-				step=`"${EXPR}" ${step} + 1`
-			fi			
+			step=`"${CALC}" "${step} + 1"` # Increase category value continuously.
 
 		# We read one line of output from "v.db.select" in each iteration of the loop.
 		# However, the right side of a pipe "|" in Bash runs in a subshell. In our case,
@@ -5032,7 +4954,7 @@ ${DBMS_COMMIT}"
 				"${ECHO}" "${SQL_CHUNK}" | db.execute database="${attribute_database_links}" driver="${attribute_database_driver_links}" input="-"
 				check_error "Failed to swap GRASS 'cat' values in links output map (pass 1)."
 				
-				let swapval=$maxval
+				swapval=$maxval
 				SQL_CHUNK="${DBMS_BEGIN}"
 				SQL=""
 				SQL="${SQL}WITH ${TMP_DB_SWAPCATS}(oldcat,newcat) AS (VALUES"
@@ -5059,7 +4981,7 @@ ${DBMS_COMMIT}"
 				
 			fi
 			# Report progress
-			let step=$step+1
+			step=`"${CALC}" "${step} + 1"` # Keep track of progress
 			g.message -p "${step} ${NUM_INPUT_NODES} 1"		
 		done
 		
@@ -5166,11 +5088,7 @@ model_delaunay () {
 			check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 		fi
 		g.message -p "${step} ${lines} 1"
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
-		fi
+		step=`"${CALC}" "${step} + 1"`
 	done
 	IFS="${IFS_BACKUP}"
 	
@@ -5341,11 +5259,7 @@ ${CATS_TO}"
 							for cur in $LIST ; do
 								if [ "$cur" = "$len" ] ; then
 									if [ $neighbor -lt ${GIS_OPT_NEIGHBORS} ] ; then
-										if [ -n $BASH_VERSION ] ; then
-											let connected=${connected}+1
-										else
-											connected=`"${EXPR}" ${connected} + 1`
-										fi
+										connected=`"${CALC}" "${connected} + 1"`
 										# Mark this link as "keep":
 										SQL=""
 										SQL="${SQL}UPDATE ${attribute_table_links} SET"
@@ -5355,22 +5269,14 @@ ${CATS_TO}"
 										check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 									fi
 								fi
-								if [ -n $BASH_VERSION ] ; then
-									let neighbor=${neighbor}+1
-								else
-									neighbor=`"${EXPR}" ${neighbor} + 1` # Advance to next neighbor.
-								fi
-							done							
+								neighbor=`"${CALC}" "${neighbor} + 1"` # Advance to next neighbor.
+							done					
 						fi						
 					done
 				fi
 			fi
 			g.message -p "${step} ${NUM_INPUT_NODES} 1"
-			if [ -n $BASH_VERSION ] ; then
-				let step=${step}+1
-			else
-				step=`"${EXPR}" ${step} + 1`
-			fi
+			step=`"${CALC}" "${step} + 1"`
 		fi
 	done
 	IFS="${IFS_BACKUP}"
@@ -5508,11 +5414,7 @@ model_xtent () {
 			check_error "Failed to update field '${fld_keep}' to '1' in links output map ('${GIS_OPT_LINKS}') for 'cat=${cat}'."
 		fi
 		g.message -p "${step} ${lines} 1"
-		if [ -n $BASH_VERSION ] ; then
-			let step=${step}+1
-		else
-			step=`"${EXPR}" ${step} + 1`
-		fi
+		step=`"${CALC}" "${step} + 1"`
 	done
 	IFS="${IFS_BACKUP}"
 	
@@ -5667,6 +5569,12 @@ preprocess
 #GIS_OPT_INPUT is the input points map: Its handle has been set by check_input()!
 g.message -i "Input network has ${NUM_INPUT_NODES} nodes."
 
+# Warn if number of input nodes exceeds 'safe' amount:
+if [ ${NUM_INPUT_NODES} -gt ${WARN_NUM_INPUT_NODES} ] ; then
+	g.message -w "Such a high number of input nodes might exceed this program's tested capabilities."
+	g.message -w "Expect trouble, especially with SQL operations."
+fi
+
 # Report spatial accuracy of cost calculations.
 if [ -n "${GIS_OPT_COSTMAP}" ] ; then
 	# Compute least cost surface from current node to all other nodes:
@@ -5767,11 +5675,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 				done
 				# Progress update
 				g.message -p "${step} ${NUM_INPUT_NODES} 1"
-				if [ -n $BASH_VERSION ] ; then
-					let step=${step}+1
-				else
-					step=`"${EXPR}" ${step} + 1`
-				fi
+				step=`"${CALC}" "${step} + 1"`
 			done
 			IFS="${IFS_BACKUP}"
 		fi
@@ -5847,11 +5751,7 @@ if [ -n "${GIS_OPT_INITIAL}" ] ; then
 				check_error "Failed to update field '${LINKS_FLD_COST}' in copy of initial links map."
 				# Progress update
 				g.message -p "${step} ${points} 1"
-				if [ -n $BASH_VERSION ] ; then
-					let step=${step}+1
-				else
-					step=`"${EXPR}" ${step} + 1`
-				fi
+				step=`"${CALC}" "${step} + 1"`
 			done
 			IFS="${IFS_BACKUP}"
 			RUNMODE_COST="TRUE" # cost attribute exists now
