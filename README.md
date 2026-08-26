@@ -1,7 +1,9 @@
 
 # Network reconstruction tools for GRASS GIS (and QGIS)
 
-This project provides a set of additional commands (modules) for [GRASS GIS](https://grass.osgeo.org/) that can be used to compute the links of a network, given  the network's nodes and a choice of connectivity criteria (aka _network reconstruction_). The bulk of the work is done by [v.net.models](https://github.com/benducke/Network-reconstruction-tools-for-GRASS-GIS/tree/master/v.net.models), a flexible, model-based network generator. The remaining modules serve mainly to preprocess input data or to explore and compare reconstruction results.
+This project provides GIS-integrated tools that compute solutions to the **Archaeological Network Reconstruction Problem (ANRP)**. The tools have been written for the Bash shell script interpreter. Bash is available for all major operating systems and, in this case, simply provides the kit for connecting existing analytical modules delivered by the great open source [GRASS GIS](https://grass.osgeo.org/) project.
+
+At the **core** of this project is **_v.net.models_**, a versatile Bash script/GRASS GIS module that implements high-performance, model-based network reconstruction based on (1) a set of input sites (points), and (optionally) (2) a cost raster. This is accompanied by some auxilliary tools.
 
 The currently included modules are:
 
@@ -12,15 +14,43 @@ The currently included modules are:
 
 All modules have been designed to run under recent versions of GRASS GIS (they are basically convenient wrappers around numerous low-level standard GRASS GIS commands). In addition, interface description files are provided for use under [QGIS](https://qgis.org).
 
+Great care has been taken to optimize the computational performance of these tools. Most importantly, time-consuming least-cost-path computations in _v.net.models_ have been implemented to run concurrently for better scalability. GRASS GIS provides low-level data management modules, and these, along with a lot of SQL (data backend query) optimizations, constitute the second tier of performance optimization. The overall result is a set of tools that perform well enough to handle archaeological network reconstruction at regional anaylsis scale, involving hundreds of sites.
+
+This is **research-grade software**. While this project attempts to release software that is useful in research practice, its priamry purpose remains the provision of a digital "laboratory of methods". Advancing analytical concepts and methods, supporting insights and experimentation is more important here than providing easy or convenient "solutions". Consequently, the source code and accompanying information provided here **are** the end-product. We neither guarantee that this software will run in a given computing environment nor that it will produce reliable/useful results for any given purpose. Users of this software are largely on their own when it comes to installing these tools on their machines. A working knowledge of GRASS GIS is required to make proficient use of these tools.
+
 For best performance, it is recommended to run this software on a Linux-based operating system. Operation under macOS and Windows is also possible but might be subject to some limitations in performance and/or functionality.
 
-Please read the below instructions carefully, including the section on "Notes and caveats".
+Please read the **"Installation"** instructions carefully, including the section on "Notes and caveats".
+
+If you encounter technical errors (bugs), please report them to the "Issues" tracker of this project. The same applies for suggestions and ideas on how to improve this software. If you have programming skills yourself, then you are also welcome to send patches using this repositories code versioning tools.
+
+This project is about studying and learning. As a consequence, it is **100% AI-free**. No AI-generated contributions will be accepted and no AI-generated messages will be answered by this project.
+
+# Background
+
+The ANRP is defined as follows:
+
+"Given only the nodes of a past network, compute a set of links that connect the nodes in a plausible way."
+
+With:
+
+_nodes_ = archaeological sites/places;
+
+_links_ = spatial/physical connections (roads, paths, shipping lanes, etc.);
+
+_plausible_ = according to some explicit assumptions about the degree of connectivity, maximum network cost, etc.
+
+While superficially simple, the ANRP is an exceptionally hard-to-solve problem. Its computational complexity increasess exponentially with the number of nodes to consider. Furthermore, its broad definition and the incompleteness/unreliability/inconsistency of the archaeological record require experimentation (with different **connectivity models**), further aggravating the problem of computational complexity.
+
+The original research behind _v.net.models_ is published in [Ducke & Suchowska 2021 ](https://doi.org/10.1007/s10816-021-09529-3) (open access). Since then, the online-availability of rich regional datasets and feedback from user uptake have prompted a significant overhaul of the software, with a focus on analytical robustness and computational performance.
+
+We believe that this is currently the only projects to deliver a comprehensive and fully open toolset for archaeological network reconstruction. Future extensions might include analytical and functional refinements, a larger choice of network generators and support for testing the validity/robustness of network reconstructions. 
 
 # Installation
 
 *Note:* These instructions are valid for the files in the most current [Release](https://github.com/benducke/v.net.models/releases) package! Files in the code repository are under active development and installing them will likely not result in an installation that works as expected (or at all).
 
-These instructions have been written for **GRASS GIS 7/8 and QGIS 3.40 LTR**.
+These instructions have been written for **GRASS GIS 7/8 and QGIS 3.4x LTR**.
 
 It is assumed that you have successfully installed GRASS GIS and optionally QGIS (if you wish to run GRASS commands from within QGIS).
 
