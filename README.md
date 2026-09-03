@@ -297,7 +297,7 @@ This works well in general, with a few quirks:
 For some time now, macOS has been shipping with an outdated POSIX tools environment.
 This means that tools such as 'grep' or 'sort' are more primitive than what you get on a modern Linux-based OS or with MSYS2 for Windows.
 Also, the version of Bash (the default shell used by these scripts) shipped with macOS is still stuck at version 3. 
-THe GRASS modules provided here have been designed with theses limitations in mind and will fall back to a behaviour compatible with macOS where needed.
+The GRASS modules provided here have been designed with theses limitations in mind and will fall back to a behaviour compatible with macOS where needed.
 In some cases, this can lead to performance degradation.
 Please consult each module's HTML manual page for details.
 If you want newer, more powerful versions of these tools, install them via [the homebrew project](https://brew.sh).
