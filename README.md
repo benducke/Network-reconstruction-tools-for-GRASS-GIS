@@ -44,7 +44,7 @@ While superficially simple, the ANRP is an exceptionally hard-to-solve problem. 
 
 The original research behind _v.net.models_ is published in [Ducke & Suchowska 2021 ](https://doi.org/10.1007/s10816-021-09529-3) (open access). Since then, the online-availability of rich regional datasets and feedback from user uptake have prompted a significant overhaul of the software, with a focus on analytical robustness and computational performance.
 
-We believe that this is currently the only projects to deliver a comprehensive and fully open toolset for archaeological network reconstruction. Future extensions might include analytical and functional refinements, a larger choice of network generators and support for testing the validity/robustness of network reconstructions. 
+We believe that this is currently the only project to deliver a comprehensive and fully open toolset for archaeological network reconstruction. Future extensions might include analytical and functional refinements, a larger choice of network generators and support for testing the validity/robustness of network reconstructions. 
 
 # Installation
 
