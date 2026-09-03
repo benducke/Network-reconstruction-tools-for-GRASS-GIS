@@ -284,7 +284,7 @@ For use via the QGIS GRASS 8 plug-in:
 # Notes and caveats
 
 ## Changing the shell interpreter
-This software has been developed for Bash. If you want to run it in a different shell (for whatever reason), then you need to change "bash" in the very first line to the name of your preferred shell. A warning will be issued and a slower compatibility mode used for shells other than Bash.
+This software has been developed for Bash. If you want to run it in a different shell (for whatever reason), then you need to change "bash" in the very first line to the name of your preferred shell. This assumes that your preferred shell interpreter can correctly run scripts with Bash syntax! By default, a warning will be issued and a slower compatibility mode used for shells other than Bash. Comment out/remove the corresponding command lines if you know what you are doing.
 
 ## Running v.net.models via QGIS Processing
 This works well in general, with a few quirks:
