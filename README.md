@@ -294,9 +294,9 @@ This works well in general, with a few quirks:
 * The included HTML manual page applies to use from within GRASS GIS (but most of the information also applies to running v.net.models from within QGIS).
 
 ## macOS Notes
-In general, macOS ships has been shipping with an outdated POSIX environment.
+For some time now, macOS has been shipping with an outdated POSIX tools environment.
 This means that tools such as 'grep' or 'sort' are more primitive than what you get on a modern Linux-based OS or with MSYS2 for Windows.
-Also, the latest version of Bash (the default shell used by these scripts) shipped with macOS is version 3. 
+Also, the version of Bash (the default shell used by these scripts) shipped with macOS is still stuck at version 3. 
 THe GRASS modules provided here have been designed with theses limitations in mind and will fall back to a behaviour compatible with macOS where needed.
 In some cases, this can lead to performance degradation.
 Please consult each module's HTML manual page for details.
